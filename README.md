@@ -72,8 +72,7 @@ $ hermes account anthropic usage
 ## Requirements
 
 - Hermes Agent ≥ 0.21 on Linux, with systemd for the timer.
-- Two or more accounts of one provider. After installing, add them from the **default** profile with
-  `hermes account anthropic add you@example.com`. For OAuth, use a private/incognito browser window for each account.
+- Two or more accounts of one provider, added after installing (see [Adding and removing accounts](#adding-and-removing-accounts)).
 - Optional: `notify-send` for desktop alerts, and a configured Telegram bot with `TELEGRAM_ALLOWED_USERS` for Telegram alerts.
 
 ## Install
@@ -100,6 +99,56 @@ Options:
 Running sessions pick up the tracker after `/reset`, or after a gateway or desktop restart.
 
 To remove everything, run `./uninstall.sh`. It leaves the accounts in your credential pool untouched.
+
+## Adding and removing accounts
+
+Run these from the **default** profile (no `-p`). Accounts added there are shared by every profile.
+
+### Add an account
+
+```bash
+hermes account anthropic list                 # make sure the email is not in the pool yet
+hermes account anthropic add you@example.com
+```
+
+1. Answer `y`. Hermes prints a sign-in link.
+2. Open the link in a **private / incognito** window and sign in as that account. A normal window usually signs in as whichever account the browser already uses, and that one is often in the pool already.
+3. Approve, copy the code, paste it into the terminal and press Enter.
+4. Look for `Verified: you@example.com` and `Added ...`. The account is balanced right away.
+5. Check it: `hermes account anthropic check` (real email) and `hermes account anthropic usage`.
+
+What `add` can answer:
+
+| Situation | Message | Pool |
+|---|---|---|
+| Correct sign-in | `Verified ... Added ...` | account added and ordered |
+| Browser signed in as another account | `Signed in as X, not you@example.com. The sign-in was discarded.` | unchanged |
+| Browser signed in as an account already in the pool | `X is already in the pool as '...' (id=...). The duplicate sign-in was discarded.` | unchanged |
+| Email already in rotation | `... is already in rotation. To sign it in again: ... relogin ...` | unchanged, refused before sign-in |
+| Email is parked | `... is parked. Return it with: ... unpark ...` | unchanged, refused before sign-in |
+| Sign-in cancelled or failed | `Sign-in did not complete. Nothing was added.` | unchanged |
+
+After a `discarded` message, close the private window, open a new one and run `add` again. Running bot sessions keep their current account; the new account is used from the next session (or after `/reset`).
+
+Options: `--yes` skips the confirmation, `--key` adds an API-key account (the key is asked for without echo).
+
+### Remove an account
+
+```bash
+hermes account anthropic remove you@example.com   # email or id; asks for confirmation
+```
+
+`remove` refuses the last working account and also deletes parked accounts. To take an account out only for a while, use `park` instead. To use a removed account again, `add` it again.
+
+### Avoid
+
+- `hermes -p <profile> auth add`: that profile gets its own separate pool (`doctor` reports it).
+- Plain `hermes auth add`: there is no email check, so labels can be wrong and duplicates can slip in.
+- Sharing Hermes' tokens with other apps or devices: refresh tokens are single use, so one side gets signed out.
+
+### Codex
+
+The same commands work for `openai-codex`: `hermes account openai-codex add you@example.com` with a ChatGPT sign-in. This only puts the account in the pool. Making a profile use Codex (main model or fallback) is a normal Hermes setting.
 
 ## How it works
 

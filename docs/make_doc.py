@@ -36,6 +36,7 @@ def C(t): return f"<font name='Mono'>{t}</font>"
 def P(t): st.append(Paragraph(t, s_p))
 def H1(t): st.extend([CondPageBreak(45 * mm), Paragraph(t, s_h1)])
 def H2(t): st.extend([CondPageBreak(38 * mm), Paragraph(t, s_h2)])
+def OL(items): st.extend(Paragraph(t, s_li, bulletText=f"{i}.") for i, t in enumerate(items, 1))
 def LI(items): st.extend(Paragraph(i, s_li, bulletText="•") for i in items)
 
 
@@ -69,7 +70,7 @@ def footer(c, doc):
     c.saveState()
     c.setFont("Sans", 7.5)
     c.setFillColor(MUTED)
-    c.drawString(18 * mm, 10 * mm, "Hermes plugin account-pool 3.3.0 · github.com/roqianjas/hermes-account-pool")
+    c.drawString(18 * mm, 10 * mm, "Hermes plugin account-pool 3.3.1 · github.com/roqianjas/hermes-account-pool")
     c.drawRightString(A4[0] - 18 * mm, 10 * mm, f"Halaman {doc.page}")
     c.setStrokeColor(LINE)
     c.line(18 * mm, 14 * mm, A4[0] - 18 * mm, 14 * mm)
@@ -78,7 +79,7 @@ def footer(c, doc):
 
 # ── content ──────────────────────────────────────────────────────────────────
 st += [Paragraph("Plugin account-pool: perintah <font name='Mono'>hermes account</font>", s_title),
-       Paragraph("Dokumentasi lengkap versi 3.3.0: kelola akun di credential pool Hermes, bagi pemakaian akun "
+       Paragraph("Dokumentasi lengkap versi 3.3.1: kelola akun di credential pool Hermes, bagi pemakaian akun "
                  "Claude secara merata, pantau sesi, pulihkan masalah otomatis, dan terima peringatan.", s_sub)]
 
 H1("1. Ringkasan")
@@ -144,7 +145,7 @@ P("Dengan " + C("fill_first") + ", setiap sesi baru mengambil akun teratas, yait
 H1("3. Lokasi file")
 table([
     ["File", "Isi"],
-    [C("~/.hermes/plugins/account-pool/"), "Plugin utama (perintah " + C("hermes account") + "), versi 3.3.0; adapter di " + C("providers.py")],
+    [C("~/.hermes/plugins/account-pool/"), "Plugin utama (perintah " + C("hermes account") + "), versi 3.3.1; adapter di " + C("providers.py")],
     [C("~/.hermes/plugins/account-pool-tracker/"), "Pelacak sesi; di-symlink ke " + C("profiles/*/plugins/")],
     [C("~/.hermes/auth.json"), "Credential pool bersama semua profil"],
     [C("~/.hermes/account-pool-parked.json"), "Akun yang diparkir (berisi token)"],
@@ -195,7 +196,7 @@ $ hermes account anthropic check
 """)
 table([
     ["Status", "Arti", "Tindakan"],
-    ["DEAD", "Login ditolak Anthropic (refresh token tidak berlaku)", C("relogin") + " (bagian 5.8)"],
+    ["DEAD", "Login ditolak Anthropic (refresh token tidak berlaku)", C("relogin") + " (bagian 5.10)"],
     ["RATE LIMITED", "Anthropic membalas 429/402", "Tunggu reset; Hermes memakai akun lain"],
     ["BENCHED by balance", "Diistirahatkan karena ≥ 90%", "Otomatis aktif lagi saat reset"],
     ["COOLING DOWN", "Refresh token gagal, biasanya jaringan putus", "Dipulihkan otomatis oleh penjadwal"],
@@ -250,7 +251,45 @@ LI([C("used") + ": total kenaikan pemakaian. 100 berarti setara satu jendela 5 j
     C("time ≥ 90%") + ": berapa lama akun hampir habis.",
     "Jika <b>semua akun ≥ 90%</b> pernah terjadi, laporan menyarankan menambah akun.",
     "Saran baru muncul setelah ada data minimal 2 jam dengan pemakaian nyata."])
-H2("5.6 park / unpark")
+H2("5.6 add")
+code("""
+$ hermes account anthropic add name@example.com
+Add name@example.com to anthropic
+  1. A browser sign-in link opens. Use a PRIVATE / INCOGNITO window,
+     otherwise the browser may sign in as an account that is already in the pool.
+  2. Sign in as: name@example.com
+  3. Paste the code back here.
+  The account is kept only if the sign-in really is that account and not a duplicate.
+Continue? [y/N] y
+   (login Hermes: buka link, login, salin kode, tempel)
+Verified: name@example.com
+Added name@example.com (id=4f1c2a) to anthropic.
+Balanced now: ...
+""")
+P("Kemungkinan hasil " + C("add") + ":")
+table([["Kondisi", "Pesan", "Pool"],
+   ["Login benar", C("Verified ... Added ..."), "Akun masuk dan langsung diurutkan"],
+   ["Browser login ke akun lain", C("Signed in as X, not name@example.com. The sign-in was discarded."), "Tidak berubah"],
+   ["Browser login ke akun yang sudah ada", C("X is already in the pool as '...' (id=...). The duplicate sign-in was discarded."), "Tidak berubah"],
+   ["Email sudah di rotasi", C("... is already in rotation. To sign it in again: ... relogin ..."), "Tidak berubah (ditolak sebelum login)"],
+   ["Email sedang diparkir", C("... is parked. Return it with: ... unpark ..."), "Tidak berubah (ditolak sebelum login)"],
+   ["Login dibatalkan atau gagal", C("Sign-in did not complete. Nothing was added."), "Tidak berubah"]],
+  [0.24, 0.50, 0.26])
+LI(["Opsi: " + C("--yes") + " melewati konfirmasi, " + C("--key") + " menambah akun API key (key diminta tanpa ditampilkan).",
+    "Langkah lengkap dan tips ada di bagian 9."])
+H2("5.7 remove")
+code("""
+$ hermes account anthropic remove bob@example.com
+Remove bob@example.com (id=9f2a02) from anthropic.
+Its login is deleted; to use it again you must sign in again (add).
+To take it out of rotation for a while instead: hermes account anthropic park bob@example.com
+Delete it? [y/N] y
+Removed bob@example.com.
+""")
+LI(["Target boleh email atau id. Akun yang sedang diparkir juga bisa dihapus langsung.",
+    "Ditolak jika itu akun aktif terakhir: " + C("Refused: ... is the last working anthropic account."),
+    "Untuk keluar sementara (cuti, limit mingguan), pakai " + C("park") + ", bukan " + C("remove") + "."])
+H2("5.8 park / unpark")
 code("""
 $ hermes account anthropic park frank@example.com                     # sampai di-unpark
 $ hermes account anthropic park frank@example.com --until 17:00
@@ -261,7 +300,7 @@ LI([C("park") + " menerima email, nomor urut, atau id. Akun aktif terakhir tidak
     "Dengan " + C("--until") + ", akun aktif lagi pada putaran penjadwal pertama setelah waktunya "
     "(paling lambat 5 menit). Jam yang sudah lewat hari ini berarti besok.",
     "Gunanya, misalnya, menyisakan kuota akun tertentu untuk Anda pakai sendiri di claude.ai."])
-H2("5.7 balance")
+H2("5.9 balance")
 code("""
 $ hermes account anthropic balance --dry-run       # rencana saja
 $ hermes account anthropic balance                 # jalankan (otomatis tiap 5 menit)
@@ -270,7 +309,7 @@ $ hermes account anthropic balance                 # jalankan (otomatis tiap 5 m
   - recovered: erin@example.com (token refresh retried)
   - order: erin(4%) > bob(5%) > alice(5%) > carol(10%) > frank(30%)
 """)
-H2("5.8 relogin")
+H2("5.10 relogin")
 code("""
 $ hermes account anthropic relogin alice@example.com
 Re-login alice@example.com (anthropic, id=0b1e86)
@@ -285,7 +324,7 @@ LI(["Login baru ditambahkan <b>dulu</b>, lalu email aslinya dicek.",
     "Jika emailnya cocok, entri lama dihapus dan entri baru menempati posisi yang sama.",
     "Jika emailnya berbeda (browser login ke akun lain), login baru dibuang dan entri lama tidak disentuh.",
     "Akun yang sedang diparkir harus di-" + C("unpark") + " dulu. " + C("--yes") + " melewati konfirmasi."])
-H2("5.9 doctor")
+H2("5.11 doctor")
 code("""
 $ hermes account anthropic doctor
 [anthropic] doctor
@@ -303,7 +342,7 @@ $ hermes account anthropic doctor
 """)
 P("Jalankan setelah update Hermes atau saat bot berperilaku aneh. Setiap baris FAIL menyertakan perintah "
   "perbaikannya. Exit code 1 jika ada FAIL.")
-H2("5.10 notify")
+H2("5.12 notify")
 code("""
 hermes account anthropic notify                      # status
 hermes account anthropic notify test                 # kirim pesan tes
@@ -354,36 +393,34 @@ table([
 ], [0.25, 0.47, 0.28])
 P("Ambang 90% di balance membuat akun diistirahatkan sebelum penuh, sehingga sesi baru tidak macet menunggu 600 detik.")
 
-H1("9. Tambah dan hapus akun")
-code("""
-$ hermes account anthropic add name@example.com
-Add name@example.com to anthropic
-  1. A browser sign-in link opens. Use a PRIVATE / INCOGNITO window,
-     otherwise the browser may sign in as an account that is already in the pool.
-  2. Sign in as: name@example.com
-  3. Paste the code back here.
-  The account is kept only if the sign-in really is that account and not a duplicate.
-Continue? [y/N] y
-...
-Verified: name@example.com
-Added name@example.com (id=4f1c2a) to anthropic.
-Balanced now: ...
-
-$ hermes account anthropic remove name@example.com          # minta konfirmasi
-""")
-LI(["Jalankan dari profil <b>default</b> (tanpa " + C("-p") + "). Akun langsung dipakai semua profil.",
-    "Setelah login, email asli dicek. Jika browser ternyata login ke akun lain, atau ke akun yang <b>sudah ada</b> "
-    "di pool (termasuk yang labelnya salah), login itu dibuang dan pool tidak berubah.",
-    "Email yang sudah ada di rotasi atau sedang diparkir ditolak, dengan petunjuk " + C("relogin") + " atau "
-    + C("unpark") + ".",
-    "Akun baru langsung masuk urutan " + C("balance") + ", tanpa menunggu timer.",
-    C("remove") + " menolak menghapus akun aktif terakhir, dan bisa menghapus akun yang sedang diparkir. Untuk "
-    "keluar sementara, pakai " + C("park") + ".",
-    C("add --key") + " untuk provider atau akun berbasis API key (key diminta tanpa ditampilkan).",
-    "Jangan pakai " + C("hermes -p &lt;profil&gt; auth add") + ": profil itu akan punya pool sendiri. "
+H1("9. Panduan: menambah dan menghapus akun")
+H2("Menambah akun Claude")
+OL(["Siapkan email akun Claude (Pro, Max, atau Team) yang belum ada di pool. Cek dengan "
+    + C("hermes account anthropic list") + ".",
+    "Buka terminal di profil <b>default</b> (tanpa " + C("-p") + "), lalu jalankan " + C("hermes account anthropic add name@example.com") + ".",
+    "Jawab " + C("y") + ". Hermes menampilkan link login.",
+    "Buka link itu di jendela <b>private / incognito</b>, lalu login sebagai akun tersebut. Tanpa incognito, browser "
+    "biasanya otomatis memakai akun Claude yang sedang login, yaitu akun yang sudah ada di pool.",
+    "Setujui akses, salin kode yang muncul, tempel ke terminal, lalu Enter.",
+    "Pastikan muncul " + C("Verified") + " dan " + C("Added") + ". Jika muncul " + C("discarded") + ", tutup jendela "
+    "incognito, buka yang baru, lalu ulangi dari langkah 2.",
+    "Cek hasilnya: " + C("hermes account anthropic check") + " (email asli) dan " + C("hermes account anthropic usage") + "."])
+note("Akun baru langsung dipakai semua profil, tetapi sesi bot yang sedang berjalan tetap memakai akunnya sekarang. "
+     "Akun baru dipakai mulai sesi berikutnya (atau setelah " + C("/reset") + ").")
+H2("Menghapus akun")
+OL(["Cari email atau id-nya dengan " + C("hermes account anthropic list") + ".",
+    "Jalankan " + C("hermes account anthropic remove name@example.com") + ", lalu jawab " + C("y") + ".",
+    "Untuk memakainya lagi nanti, tambahkan ulang dengan " + C("add") + " (login baru)."])
+H2("Akun Codex (jika nanti dipakai)")
+P("Caranya sama: " + C("hermes account openai-codex add &lt;email&gt;") + ", login ChatGPT di jendela incognito. Ini hanya "
+  "menyiapkan akun di pool. Agar profil memakai Codex, atur di pengaturan Hermes (model atau fallback), bukan lewat plugin.")
+H2("Hal yang perlu dihindari")
+LI(["Jangan pakai " + C("hermes -p &lt;profil&gt; auth add") + ": profil itu akan punya pool sendiri. "
     + C("doctor") + " mendeteksinya.",
+    "Jangan pakai " + C("hermes auth add") + " langsung: tidak ada cek email, sehingga label bisa salah dan duplikat bisa masuk.",
     "Jangan berbagi token Hermes dengan aplikasi atau perangkat lain. Refresh token sekali pakai, jadi berbagi token "
-    "bisa membuat salah satu login mati."])
+    "bisa membuat salah satu login mati.",
+    "Jika login terus berakhir di akun yang salah, logout dari claude.ai di browser biasa, atau pakai profil browser lain."])
 
 H1("10. Memaksa akun tertentu")
 code("""
