@@ -2,7 +2,7 @@
 
     python3 docs/make_doc.py        # needs reportlab and the DejaVu fonts
 
-Example output comes from real runs with the accounts renamed (alice@example.com, ...).
+Example output is based on real runs, with the accounts renamed (alice@example.com, ...).
 """
 import os
 
@@ -322,7 +322,7 @@ hermes account <provider> <action> [target] [options]
   help                                  bantuan
 """)
 P("<b>Target</b> adalah label akun (email), nomor urut di " + C("list") + ", atau id. " + C("unpark")
-  + " menerima label atau id. Contoh output di bawah berasal dari pool sungguhan dengan nama akun diganti.")
+  + " menerima label atau id. Contoh output di bawah berdasarkan pool sungguhan, dengan nama akun diganti.")
 table([
     ["Aksi", "Mengubah?", "Aksi", "Mengubah?"],
     [C("list") + ", " + C("check") + ", " + C("who") + ", " + C("report") + ", " + C("doctor") + ", " + C("help"),

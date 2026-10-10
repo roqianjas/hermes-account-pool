@@ -99,7 +99,7 @@ python3 -m pyflakes plugins/        # if pyflakes is installed
   python3 docs/make_doc.py      # writes docs/hermes-account-pool.pdf
   ```
 
-- Example output in the docs comes from real runs, with accounts renamed to `alice@example.com`, `bob@example.com` and so on.
+- Example output in the docs is based on real runs, with accounts renamed to `alice@example.com`, `bob@example.com` and so on.
 
 ## Pull request checklist
 
