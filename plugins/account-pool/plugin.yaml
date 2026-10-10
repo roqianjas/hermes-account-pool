@@ -1,7 +1,7 @@
 name: account-pool
 label: Account Pool
-version: 3.4.2
-description: "`hermes account <provider> <action>`: list, check, park/unpark, who, doctor and alerts for any credential-pool provider; usage, report and usage-based balance through provider adapters (anthropic built in)."
+version: 3.4.3
+description: "`hermes account <provider> <action>`: add/remove with email verification, list, check, park/unpark, who, doctor and alerts for any credential-pool provider; usage, report and usage-based balance through provider adapters (anthropic and openai-codex built in)."
 author: roqianjas
 license: MIT
 requires_hermes: ">=0.21"
