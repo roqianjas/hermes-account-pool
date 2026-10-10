@@ -1,8 +1,8 @@
 # hermes-account-pool
 
-Run several accounts of one provider in [Hermes Agent](https://hermes-agent.nousresearch.com/docs) and manage them from one command, `hermes account`. Add accounts with a verified email, see live usage per account, spread the load before an account runs out, park accounts for a while, see which bot is on which account, and get an alert when something needs you.
+Run several accounts of one provider in [Hermes Agent](https://hermes-agent.nousresearch.com/docs) and manage them from one command, `hermes account`, or from an Accounts page in Hermes Desktop. Add accounts with a verified email, see live usage per account, spread the load before an account runs out, park accounts for a while, see which bot is on which account, and get an alert when something needs you.
 
-Version 3.4.3 · MIT · Hermes Agent ≥ 0.21 · Linux with systemd · Indonesian PDF guide in [`docs/`](docs/hermes-account-pool.pdf)
+Version 3.5.0 · MIT · Hermes Agent ≥ 0.21 · Linux with systemd · Indonesian PDF guide in [`docs/`](docs/hermes-account-pool.pdf)
 
 ## Contents
 
@@ -13,6 +13,7 @@ Version 3.4.3 · MIT · Hermes Agent ≥ 0.21 · Linux with systemd · Indonesia
 - [Concepts](#concepts)
 - [Adding and removing accounts](#adding-and-removing-accounts)
 - [Command reference](#command-reference)
+- [Hermes Desktop page](#hermes-desktop-page)
 - [Alerts](#alerts)
 - [How balance works](#how-balance-works)
 - [The timer](#the-timer)
@@ -36,6 +37,7 @@ Hermes already keeps a pool of accounts per provider and moves a session to the 
 | Know which bot uses which account | Not shown | `who` |
 | Hear about a dead login or a full pool | Not reported | Desktop and Telegram alerts |
 | Recover accounts stuck after a network drop during a token refresh | Waits for the cooldown | Retried automatically every 5 minutes |
+| See all of it in one place | Not shown | The Accounts page in Hermes Desktop |
 
 The plugin changes the pool only through Hermes' own `CredentialPool` API and uses no AI tokens.
 
@@ -52,13 +54,14 @@ hermes account anthropic doctor                  # everything OK?
 hermes account anthropic usage                   # live usage per account
 ```
 
-From then on the timer keeps the pool ordered. Day to day you mostly need `usage`, `who`, `park` and `doctor`.
+From then on the timer keeps the pool ordered. Day to day you mostly need `usage`, `who`, `park` and `doctor`. In Hermes Desktop, restart the app once and switch the page on in Capabilities > Plugins to get the same in a page ([Hermes Desktop page](#hermes-desktop-page)).
 
 ## Requirements
 
 - Hermes Agent ≥ 0.21 on Linux. The timer needs systemd user services (`systemctl --user`).
 - Two or more accounts of the same provider. Built-in usage support: Claude Pro / Max / Team (`anthropic`) and ChatGPT Plus / Pro / Team (`openai-codex`). Other providers get the generic commands (see [Providers](#providers)).
 - Optional: `notify-send` (package `libnotify-bin`) for desktop alerts, and a Telegram bot configured in Hermes with `TELEGRAM_ALLOWED_USERS` for Telegram alerts.
+- Optional: Hermes Desktop with desktop plugins, for the Accounts page. Tested with Hermes Agent 0.21.5.
 
 ## Install, update, uninstall
 
@@ -72,7 +75,7 @@ cd hermes-account-pool
 
 `install.sh` does five things:
 
-1. Copies `account-pool` and `account-pool-tracker` to `$HERMES_HOME/plugins/` (default `~/.hermes/plugins/`) and enables `account-pool` in the **default profile only**.
+1. Copies `account-pool` (with the Hermes Desktop page) and `account-pool-tracker` to `$HERMES_HOME/plugins/` (default `~/.hermes/plugins/`) and enables `account-pool` in the **default profile only**.
 2. Symlinks and enables `account-pool-tracker` in every profile under `$HERMES_HOME/profiles/`, so `who` can see every bot.
 3. With `--set-strategy`: sets `credential_pool_strategies.<provider>: fill_first` in the default profile and every other profile. `balance` needs this (see [Concepts](#concepts)).
 4. Installs and starts `hermes-account-balance.timer`, which runs `balance` every 5 minutes, and runs it once right away.
@@ -86,7 +89,7 @@ cd hermes-account-pool
 | `--no-timer` | Skip the timer. Run `balance` yourself. |
 | `-h`, `--help` | Show the options. |
 
-A custom `HERMES_HOME` is respected and written into the service unit. Running sessions load the tracker after `/reset` or after a gateway or desktop restart.
+A custom `HERMES_HOME` is respected and written into the service unit. Running sessions load the tracker after `/reset` or after a gateway or desktop restart. The Accounts page needs two more steps in Hermes Desktop, see [Turn the page on](#turn-the-page-on).
 
 Check the result:
 
@@ -103,7 +106,7 @@ git pull
 ./install.sh                # add the same --provider options you installed with
 ```
 
-The previous plugin folder is backed up to `$HERMES_HOME/plugin-backups/<name>.<timestamp>` (outside `plugins/`, so Hermes never loads it twice). Accounts, parked accounts, history and settings are kept. `install.sh` without `--set-strategy` leaves your strategy as it is.
+The previous plugin folder is backed up to `$HERMES_HOME/plugin-backups/<name>.<timestamp>` (outside `plugins/`, so Hermes never loads it twice). Accounts, parked accounts, history and settings are kept. `install.sh` without `--set-strategy` leaves your strategy as it is. Restart Hermes Desktop after an update so it loads the new page and its backend.
 
 ### Uninstall
 
@@ -111,7 +114,7 @@ The previous plugin folder is backed up to `$HERMES_HOME/plugin-backups/<name>.<
 ./uninstall.sh
 ```
 
-It removes the timer, both plugins and the tracker symlinks. Your accounts in the credential pool are not touched. Parked accounts are **not** returned to rotation: the script warns you and asks first, so unpark them before uninstalling if you want them back. Data files and `credential_pool_strategies` stay; the script lists the files you can delete by hand.
+It removes the timer, both plugins (the Accounts page included) and the tracker symlinks. Your accounts in the credential pool are not touched. Parked accounts are **not** returned to rotation: the script warns you and asks first, so unpark them before uninstalling if you want them back. Data files and `credential_pool_strategies` stay; the script lists the files you can delete by hand.
 
 ## Concepts
 
@@ -411,6 +414,62 @@ Unknown provider 'anthorpic'. Providers in your pool: anthropic. All providers: 
 | 2 | Wrong usage: missing or unknown action, provider, target or option |
 | 130 | Cancelled with Ctrl+C |
 
+## Hermes Desktop page
+
+`account-pool` also brings an **Accounts** page to Hermes Desktop: the pool, its usage, who is on which account, and the actions of `hermes account`, behind buttons. The command keeps working as before; the page uses the same code.
+
+### Turn the page on
+
+1. Run `install.sh` (it copies the page and enables `account-pool` in the default profile).
+2. Restart Hermes Desktop once. The desktop starts the page's backend together with the other enabled plugins, so the page has no data until this restart.
+3. In **Capabilities > Plugins**, find **account-pool** (Agent + Desktop; its desktop name is Accounts) and switch on its **Desktop** half. The page ships switched off, so nothing appears until you do.
+
+**Accounts** now appears in the sidebar. The command palette (Ctrl+K, ⌘K on macOS) has `Accounts: open the account pool`, and the status-bar chip opens it too.
+
+### What the page shows
+
+The header has a provider switch (providers with accounts in the pool, plus the two with built-in adapters), **Live usage**, **Balance now** and **Add account**. The line under it says how old the usage numbers are and when the timer runs next.
+
+| Tab | Content |
+|---|---|
+| Accounts | Four cards: accounts in rotation, parked accounts, the account the next session starts on with its usage, sessions in the last 30 minutes. Then the rotation table in pool order: status, 5-hour usage bar, trend over the last 5 hours, reset time (or `back HH:MM` while benched), the profiles using the account (hover for session, platform and model) and the row buttons **Sign in again**, **Park** and **Remove**. Parked accounts follow with their last known usage, since when they are parked, when they return, and **Unpark** and **Remove**. Active alerts show as a banner on top, a dead account with a **Sign in again** button. |
+| Report | The `report` numbers for 24 hours, 3 days or 7 days: load per account, share, peak, time at 90% or more, busiest hours and the advice line. |
+| Health | Timer state, age of the usage history, active alerts. **Run doctor** runs the `doctor` checks; **Check accounts** runs `check` and shows its output. |
+| Alerts | Desktop and Telegram switches, the profile whose bot sends Telegram alerts, **Send a test alert**, and the alerts active now. |
+
+**Park** asks when the account comes back: when you unpark it, in 1 hour, in 2 hours, or at a time you type (`17:00`, `+90m`, `2026-10-12 08:00`, the same formats as `--until`). **Remove** and **Balance now** ask before they act. Every action reports the same message as the command.
+
+The **status-bar chip** reads `8/8 · 12%`: 8 of 8 accounts in rotation are usable, and the account the next session starts on is at 12%. A dot appears when an alert is active (amber) or no account is usable (red). The chip hides while the provider has no accounts or the backend is not loaded.
+
+### Add an account or sign in again from the page
+
+1. **Add account**, type the account's email, **Start sign-in**. For an existing account, use the key button on its row (or **Sign in again** on a dead-account banner); that is `relogin`.
+2. **Anthropic**: click **Copy link** and open the link in a browser signed in as that account (its own browser profile, or a private window). Check `Logged in as ...`, authorize, copy the code, paste it into the page and click **Finish**. **Codex**: open the page shown, enter the code; the page finishes by itself once you confirm.
+3. The result is the same as on the command line: `add` keeps the sign-in only when the email matches and the account is not in the pool yet, then balances; `relogin` swaps the new login in at the same position only when it is the same account.
+
+**Open in default browser** is there too, but your default browser is often signed in as another account; **Copy link** into the right browser profile is the safe way. A sign-in that is not finished within 15 minutes expires, and **Cancel** drops it at once. Each sign-in can be finished only once.
+
+### Requests to the provider
+
+| You | Requests |
+|---|---|
+| Open the page, switch tabs, look at the chip | None. Usage comes from the history the timer writes every 5 minutes. |
+| Live usage | One usage request per account, parked accounts included. At most once every 2 minutes per provider; the button counts down. |
+| Balance now | The same as `balance`. At most once a minute, shared with Check accounts. |
+| Check accounts | One profile request per account. |
+| Run doctor | One usage request. |
+| Add account, Sign in again | The sign-in, then one profile request to verify the email. |
+
+The usage endpoint limits requests per account (see [Troubleshooting](#troubleshooting)), so the page never calls it on its own.
+
+### How the page is built and secured
+
+- The page is the plugin's `desktop/plugin.js`, a Hermes Desktop plugin. It imports only the Hermes plugin SDK and React, and talks only to its own backend.
+- The backend is `dashboard/plugin_api.py`, mounted by Hermes under `/api/plugins/account-pool/` for plugins in `plugins.enabled`. Hermes requires the desktop's session token for every request.
+- Responses carry labels, ids, states, percentages and times. Tokens never leave the backend. The state of a sign-in in progress (the PKCE verifier for Anthropic, the device id for Codex) stays in the backend's memory.
+- The page always works on the shared pool in the default Hermes home, whichever profile the window shows. Bots cannot use it: it is part of the desktop app, not a tool.
+- One action runs at a time; a second click while one runs gets `Another account action is still running`.
+
 ## Alerts
 
 | Alert | When | Sent |
@@ -486,6 +545,8 @@ Adding an adapter for another provider is a single class; see [CONTRIBUTING.md](
 | Piece | Role |
 |---|---|
 | `plugins/account-pool/` | The `hermes account` command (`__init__.py`) and the provider adapters (`providers.py`). Default profile only. |
+| `plugins/account-pool/desktop/` | The Accounts page for Hermes Desktop (`plugin.js`). Hermes Desktop copies it to `$HERMES_HOME/desktop-plugins/account-pool/`. |
+| `plugins/account-pool/dashboard/` | The page's backend (`plugin_api.py`) and its manifest. `dist/index.js` only tells the browser dashboard that the page lives in Hermes Desktop. |
 | `plugins/account-pool-tracker/` | A `post_api_request` hook that records `{profile, session, platform, model, account label}`. No commands, no tools, no tokens; it swallows every error so it can never break a bot. |
 | `systemd/` | The service and timer templates used by `install.sh`. |
 
@@ -502,7 +563,8 @@ Data files, all mode `600`, in `$HERMES_HOME`:
 How tokens are handled:
 
 - Tokens are never printed or logged. They only go into request headers to the provider's own endpoints.
-- The plugin talks to the provider's API (usage, profile, token refresh) and, for alerts, to Telegram through Hermes' own `hermes send`. Nothing else.
+- The plugin talks to the provider's API (usage, profile, token refresh, sign-in) and, for alerts, to Telegram through Hermes' own `hermes send`. Nothing else.
+- The Accounts page gets no tokens: its backend returns labels, ids, states and numbers only.
 - Refresh tokens can be single use. Every refresh is written back at once, under a file lock for parked accounts.
 - API keys for `add --key` are read without echo inside the plugin, never from the command line.
 - The repository's `.gitignore` excludes `*.json`, `*.jsonl` and `.env`, so state files cannot be committed by accident.
@@ -526,6 +588,10 @@ How tokens are handled:
 | `doctor`: profiles with their OWN pool | Someone ran `hermes -p <profile> auth add` | Remove those entries in that profile (`hermes -p <profile> auth remove ...`) and add the accounts from the default profile |
 | `doctor`: last run failed | The timer's last `balance` failed | `journalctl --user -u hermes-account-balance.service -n 20` |
 | `hermes account`: unknown command | Run with `-p <profile>`; the plugin is in the default profile only | Run it without `-p` |
+| Accounts page: `The account-pool backend did not answer` | Hermes Desktop was not restarted after the install, or `account-pool` is not enabled in the default profile | `hermes plugins enable account-pool`, then restart Hermes Desktop |
+| No Accounts entry in the sidebar | The Desktop half of the plugin is off | Capabilities > Plugins, account-pool, switch on Desktop. After an update: Ctrl+K, `Reload desktop plugins` |
+| Live usage button greyed out | Live usage ran less than 2 minutes ago | Wait for the countdown on the button |
+| Sign-in in the page: `This code belongs to another sign-in` | The code came from another sign-in link, or was copied without the part after `#` | Open the link from this window again and copy the whole code |
 
 ## FAQ
 
@@ -559,12 +625,13 @@ At least two. `report` tells you when the whole pool was nearly full at the same
 - Anthropic weekly quotas are not exposed for Team accounts, so `balance` uses the 5-hour window for `anthropic`.
 - Adapters exist for `anthropic` and `openai-codex`. The generic commands were tested for other providers with API-key entries only. The Codex adapter was verified read-only against a real ChatGPT Team account; `add` with a real Codex sign-in has not been run yet.
 - `who` finds the agent object by scanning running thread frames. A future Hermes refactor may leave `who` empty, but it can never break the bots.
-- `add` and `relogin` with OAuth need an interactive terminal to paste the code.
+- `add` and `relogin` with OAuth need an interactive terminal or the Accounts page to paste the code. The page's Codex sign-in was tested up to the device code; a full Codex sign-in has not been run yet.
+- The Accounts page follows the Hermes Desktop plugin SDK as of Hermes Agent 0.21.5. A future SDK change can break the page; the command is not affected.
 - Linux with systemd only, for the timer. The commands themselves work wherever Hermes runs.
 
 ## Contributing, changelog, license
 
-- Adapters for more providers are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers the adapter interface, the rules for handling tokens, and how to test in a sandbox without touching your real pool.
+- Adapters for more providers are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers the adapter interface, the rules for handling tokens, the Hermes Desktop page, and how to test in a sandbox without touching your real pool.
 - [CHANGELOG.md](CHANGELOG.md) lists every release.
 - [`docs/hermes-account-pool.pdf`](docs/hermes-account-pool.pdf) is the full guide in Indonesian. `docs/make_doc.py` regenerates it (reportlab, DejaVu fonts).
 - License: MIT, see [LICENSE](LICENSE).

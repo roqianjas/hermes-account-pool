@@ -2,6 +2,19 @@
 
 All releases of the `account-pool` plugin. The session tracker `account-pool-tracker` is at 1.0.0 and has not changed.
 
+## 3.5.0
+
+- New: an **Accounts page in Hermes Desktop**, with its own sidebar entry. It lists the accounts in rotation and the parked ones with their 5-hour usage, a trend line for the last 5 hours, the reset time and the profiles using them. Buttons: Live usage, Balance now, Add account, Sign in again, Park (now, for 1 or 2 hours, or until a time), Unpark, Remove. Tabs for Report, Health (doctor, check, timer) and Alerts (switch channels, send a test). The page ships switched off: turn on the Desktop half of account-pool in Capabilities > Plugins.
+- A status-bar chip (`8/8 · 12%`: usable accounts, and the usage of the account the next session starts on) and a command-palette entry open the page.
+- Add and sign-in-again work from the page. Anthropic: copy the link, authorize, paste the code. Codex: enter the device code; the page finishes by itself. The same checks as `add` and `relogin` decide whether the sign-in is kept.
+- The page reads usage from the timer's history, so opening it costs no provider request. Live usage is limited to once every 2 minutes, Balance now and Check accounts to once a minute.
+- The page's backend (`dashboard/plugin_api.py`) never returns tokens, and always works on the shared pool in the default Hermes home, whichever profile the window shows.
+- `remove` calls Hermes' `auth remove` in-process instead of starting a second `hermes`.
+- `uninstall.sh` also removes Hermes Desktop's copy of the page.
+- Tests: `tests/api_sandbox.py` (backend, in a sandbox, fake accounts and a fake sign-in) and `tests/ui/run.mjs` (the page in jsdom).
+- `doctor` says `last run running now` while the timer's balance is running. It said `never`.
+- Internal: command output goes through a per-thread writer, and `report`, `who` and `relogin` have data functions that the page shares with the command. Apart from the `doctor` line above, the command output is unchanged.
+
 ## 3.4.3
 
 - Documentation rewritten: README with quick start, concepts, a full command reference with example output, alerts, the timer, files and security, troubleshooting and FAQ. The Indonesian PDF guide follows the same structure and now covers install, update and uninstall.

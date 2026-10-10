@@ -8,3 +8,7 @@
 auth.json
 __pycache__/
 *.pyc
+# ...except the Hermes Desktop backend manifest, which is code
+!plugins/account-pool/dashboard/manifest.json
+!tests/ui/fixtures.json
+tests/ui/.plugin.under-test.mjs

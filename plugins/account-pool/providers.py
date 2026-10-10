@@ -13,6 +13,11 @@ Hermes credential pool. Anything that needs a provider's own API lives here:
     refresh_parked(record) -> new token fields for a PARKED OAuth account whose
                               access token expired (pool accounts are refreshed
                               by Hermes itself)
+    signin_start()         -> start a sign-in the desktop page can finish without
+    signin_step(state, code)  a terminal: "code" (paste the code shown after
+                              authorizing) or "device" (enter a code on the
+                              provider's page, then the page waits). Returns the
+                              login result Hermes' own `auth add` stores
 
 `entry` is a Hermes PooledCredential, or any object with `access_token`,
 `auth_type` and `expires_at_ms`. Every method may return None ("not available");
@@ -60,9 +65,24 @@ class Adapter:
     def refresh_parked(self, record: dict):
         return None
 
+    def signin_start(self):
+        """{"kind": "code" | "device", "url", "user_code"?, "state": private dict kept by the server}."""
+        return None
+
+    def signin_step(self, state: dict, code: str = ""):
+        """Login result (as `hermes auth add` gets it), or None while a device sign-in is pending.
+
+        Raises ValueError with a message for the user when the sign-in failed.
+        """
+        return None
+
     @property
     def has_usage(self) -> bool:
         return type(self).usage is not Adapter.usage
+
+    @property
+    def has_web_signin(self) -> bool:
+        return type(self).signin_start is not Adapter.signin_start
 
     @property
     def has_identity(self) -> bool:
@@ -151,6 +171,41 @@ class Anthropic(Adapter):
         return {"access_token": new["access_token"], "refresh_token": new["refresh_token"],
                 "expires_at_ms": new["expires_at_ms"]}
 
+    # Same PKCE flow as Hermes' run_hermes_oauth_login_pure(), split in two steps so a page can
+    # show the link and take the pasted code (the CLI version reads it with input()).
+    def signin_start(self):
+        import secrets
+        from urllib.parse import urlencode
+        from agent import anthropic_credentials as ac
+        verifier, challenge = ac._generate_pkce()
+        state = secrets.token_urlsafe(32)
+        params = {"code": "true", "client_id": ac._OAUTH_CLIENT_ID, "response_type": "code",
+                  "redirect_uri": ac._OAUTH_REDIRECT_URI, "scope": ac._OAUTH_SCOPES,
+                  "code_challenge": challenge, "code_challenge_method": "S256", "state": state}
+        return {"kind": "code", "url": "https://claude.ai/oauth/authorize?" + urlencode(params),
+                "state": {"verifier": verifier, "state": state}}
+
+    def signin_step(self, state: dict, code: str = ""):
+        from agent import anthropic_credentials as ac
+        code = (code or "").strip()
+        if not code:
+            raise ValueError("Paste the code shown after you authorize.")
+        part, _, got = code.partition("#")
+        if got != state["state"]:
+            raise ValueError("This code belongs to another sign-in. Open the link from this window and copy the "
+                             "whole code (it contains a #).")
+        body = json.dumps({"grant_type": "authorization_code", "client_id": ac._OAUTH_CLIENT_ID, "code": part,
+                           "state": got, "redirect_uri": ac._OAUTH_REDIRECT_URI,
+                           "code_verifier": state["verifier"]}).encode()
+        try:
+            result = ac._post_oauth_token(body, content_type="application/json", timeout=15, what="exchange")
+        except Exception as x:
+            raise ValueError(f"Token exchange failed: {str(x)[:200] or type(x).__name__}. A code works once and "
+                             f"only for a few minutes: start again.") from None
+        if not result.get("access_token"):
+            raise ValueError("The token answer had no access token.")
+        return ac._oauth_token_state(result)
+
 
 # ── openai-codex (ChatGPT Plus / Pro / Team sign-in) ─────────────────────────
 
@@ -216,6 +271,44 @@ class OpenAICodex(Adapter):
         if new.get("last_refresh"):
             out["last_refresh"] = new["last_refresh"]
         return out
+
+    # Same device-code flow as Hermes' _codex_device_code_login(), but each signin_step() checks
+    # once instead of blocking, so the page polls and the user can cancel at any time.
+    issuer = "https://auth.openai.com"
+
+    def signin_start(self):
+        from hermes_cli import auth_codex as ac
+        d = ac._codex_request_device_code(self.issuer, ac.CODEX_OAUTH_CLIENT_ID)
+        return {"kind": "device", "url": f"{self.issuer}/codex/device", "user_code": d["user_code"],
+                "state": {"device_auth_id": d["device_auth_id"], "user_code": d["user_code"],
+                          "interval": max(3.0, float(d.get("interval") or 5)), "last": 0.0}}
+
+    def signin_step(self, state: dict, code: str = ""):
+        import httpx
+        from hermes_cli import auth_codex as ac
+        from hermes_cli.auth import _utc_now_z
+        if time.time() - state["last"] < state["interval"]:
+            return None
+        state["last"] = time.time()
+        try:
+            with ac._codex_http_client(timeout=httpx.Timeout(15.0)) as client:
+                r = client.post(f"{self.issuer}/api/accounts/deviceauth/token",
+                                json={"device_auth_id": state["device_auth_id"], "user_code": state["user_code"]},
+                                headers={"Content-Type": "application/json"})
+        except Exception as x:
+            raise ValueError(f"Could not reach the sign-in service ({type(x).__name__}).") from None
+        if r.status_code in (403, 404):            # not finished yet
+            return None
+        if r.status_code != 200:
+            raise ValueError(f"The sign-in check answered HTTP {r.status_code}. Start again.")
+        try:
+            tokens = ac._codex_exchange_authorization_code(self.issuer, ac.CODEX_OAUTH_CLIENT_ID, r.json())
+        except Exception as x:
+            raise ValueError(f"Token exchange failed: {x}") from None
+        return {"tokens": {"access_token": tokens.get("access_token", ""),
+                           "refresh_token": tokens.get("refresh_token", "")},
+                "base_url": ac._codex_base_url(), "last_refresh": _utc_now_z(), "auth_mode": "chatgpt",
+                "source": "device-code"}
 
 
 ADAPTERS: dict[str, Adapter] = {a.name: a for a in (Anthropic(), OpenAICodex())}

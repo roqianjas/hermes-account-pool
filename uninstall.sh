@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Remove the account-pool plugins, the session tracker and the systemd timer.
+# Remove the account-pool plugins (with the Hermes Desktop page), the session tracker and the systemd timer.
 # Accounts in the credential pool are NOT touched. Parked accounts stay in
 # $HERMES_HOME/account-pool-parked.json: unpark them before uninstalling if you
 # want them back in rotation.
@@ -34,6 +34,10 @@ fi
 "$HERMES_BIN" plugins disable account-pool-tracker >/dev/null 2>&1 || true
 "$HERMES_BIN" plugins disable account-pool >/dev/null 2>&1 || true
 rm -rf "$ROOT/plugins/account-pool" "$ROOT/plugins/account-pool-tracker"
+# Hermes Desktop's copy of the Accounts page (it would also go on the app's next start)
+if [ -f "$ROOT/desktop-plugins/account-pool/.hermes-package.json" ]; then
+  rm -rf "$ROOT/desktop-plugins/account-pool"
+fi
 echo "plugins removed"
 
 echo

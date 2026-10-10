@@ -1,0 +1,10 @@
+{
+  "name": "account-pool",
+  "label": "Accounts",
+  "description": "Backend for the Accounts page in Hermes Desktop: credential-pool accounts, usage, sessions and actions.",
+  "icon": "Users",
+  "version": "3.5.0",
+  "tab": { "path": "/accounts", "hidden": true },
+  "entry": "dist/index.js",
+  "api": "plugin_api.py"
+}

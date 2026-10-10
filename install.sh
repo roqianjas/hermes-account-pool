@@ -103,3 +103,6 @@ for PROVIDER in "${PROVIDERS[@]}"; do "$HERMES_BIN" account "$PROVIDER" doctor |
 echo
 echo "Done. Start with: hermes account help"
 echo "Running sessions pick up the tracker after /reset or a gateway/desktop restart."
+echo
+echo "Hermes Desktop page (optional): restart Hermes Desktop once so it loads the page's backend,"
+echo "then in Capabilities > Plugins switch on the Desktop half of account-pool. Accounts appears in the sidebar."

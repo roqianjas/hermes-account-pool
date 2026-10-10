@@ -1,6 +1,6 @@
 # Contributing
 
-Bug reports, fixes and adapters for more providers are welcome. This page covers the repository layout, the adapter interface, the rules for handling tokens, how to test without touching your real pool, and what a pull request needs.
+Bug reports, fixes and adapters for more providers are welcome. This page covers the repository layout, the adapter interface, the rules for handling tokens, the Hermes Desktop page, how to test without touching your real pool, and what a pull request needs.
 
 ## Repository layout
 
@@ -9,6 +9,10 @@ Bug reports, fixes and adapters for more providers are welcome. This page covers
 | `plugins/account-pool/__init__.py` | The `hermes account` command: argument parsing, every action, balance, alerts, history |
 | `plugins/account-pool/providers.py` | Provider adapters: usage, identity, parked-token refresh |
 | `plugins/account-pool/plugin.yaml` | Plugin metadata and version |
+| `plugins/account-pool/desktop/plugin.js` | The Accounts page in Hermes Desktop (one ES module, no build step) |
+| `plugins/account-pool/dashboard/plugin_api.py` | The page's backend: FastAPI routes under `/api/plugins/account-pool/` |
+| `plugins/account-pool/dashboard/manifest.json` | Tells Hermes to mount `plugin_api.py`; `dist/index.js` is a stub for the browser dashboard |
+| `tests/api_sandbox.py`, `tests/ui/` | Backend test in a sandbox, and the page in jsdom |
 | `plugins/account-pool-tracker/` | The `post_api_request` hook behind `who` |
 | `systemd/` | Service and timer templates, filled in by `install.sh` |
 | `install.sh`, `uninstall.sh` | Install and remove everything |
@@ -60,6 +64,19 @@ When a request fails, set `self.last_error = self.explain(err, entry)` before re
 6. **Undocumented endpoints are allowed, but say so** in a comment. `doctor` reports FAIL when `usage` stops answering.
 7. **Keep requests few.** `balance` runs every 5 minutes for every account. Do not add extra calls per run, and never loop over the usage endpoint while testing: it rate-limits.
 
+## The Hermes Desktop page
+
+The page and the command share one code base. `plugin_api.py` loads `__init__.py` and calls the same functions: the `_cmd_*` handlers for actions (their output is captured per thread with `_capture()`, so the page shows exactly what the command prints), and data functions such as `_report_data`, `_who_data` and `_relogin_target` for the views. When you add a command or change its output, keep the page in step.
+
+Rules for the page:
+
+1. **No tokens in responses.** Return labels, ids, states and numbers. A sign-in's secret state stays in the backend's `_FLOWS`.
+2. **No provider request on a GET.** Views read files only (pool, parked file, history, sessions). Buttons that call the provider go through a POST and a rate limit: `LIVE_MIN_GAP` for live usage, `NET_MIN_GAP` for balance and check.
+3. **One action at a time.** POST routes that change the pool run inside `_exclusive()`, which also points `HERMES_HOME` at the default root, so every profile sees the shared pool.
+4. **Plain ESM in `plugin.js`.** Import only from `@hermes/plugin-sdk`, `react` and `react/jsx-runtime`, write elements with `createElement`, and style with the desktop's `--ui-*` variables so themes keep working. An identifier that is not imported is a runtime `ReferenceError`; `tests/ui/run.mjs` catches it.
+
+To try a change in Hermes Desktop, copy the plugin to `~/.hermes/plugins/account-pool/`. Changes to `plugin.js` load with Ctrl+K, `Reload desktop plugins`; changes to `plugin_api.py` or `__init__.py` need a Hermes Desktop restart.
+
 ## Testing without touching your real pool
 
 Create the sandbox **outside `~/.hermes`**. Hermes treats any `HERMES_HOME` under `~/.hermes` as part of your real install. When the sandbox has no accounts for a provider, it then falls back to *reading* `~/.hermes/auth.json`, and a `usage` or `balance` run could spend a real single-use refresh token and sign that account out. A sandbox elsewhere is a separate data root. Do not isolate by changing `HOME` either: Hermes then installs a fresh runtime of several hundred MB.
@@ -83,10 +100,25 @@ unset HERMES_HOME; rm -rf "$SB"
 
 Usage needs a real account, so test `usage` and `balance --dry-run` with one, a few times at most, and say in the pull request which account type you tested (for example Pro, Team, or API key).
 
+The page has two tests that need no real account:
+
+```bash
+# backend: fake API-key accounts and a fake sign-in, in a sandbox
+SB=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" hap-sandbox.XXXX)
+HERMES_HOME=$SB ~/.hermes/hermes-agent/venv/bin/python tests/api_sandbox.py
+rm -rf "$SB"
+
+# the page in jsdom, every tab, dialog and button, answered from tests/ui/fixtures.json
+node tests/ui/run.mjs
+```
+
+`tests/ui/run.mjs` borrows React, jsdom and Testing Library from the `node_modules` of your Hermes Agent checkout (`~/.hermes/hermes-agent`, or set `HERMES_AGENT_DIR`). Both tests print one line per check and exit 1 on a failure.
+
 A quick static check before committing:
 
 ```bash
-~/.hermes/hermes-agent/venv/bin/python -m py_compile plugins/account-pool/*.py plugins/account-pool-tracker/*.py
+~/.hermes/hermes-agent/venv/bin/python -m py_compile plugins/account-pool/*.py plugins/account-pool/dashboard/*.py plugins/account-pool-tracker/*.py
+node --input-type=module --check < plugins/account-pool/desktop/plugin.js
 python3 -m pyflakes plugins/        # if pyflakes is installed
 ```
 
@@ -106,5 +138,6 @@ python3 -m pyflakes plugins/        # if pyflakes is installed
 - [ ] Version bumped in `plugins/account-pool/plugin.yaml` and in `docs/make_doc.py`, with an entry in `CHANGELOG.md`.
 - [ ] README and the PDF updated for user-visible changes.
 - [ ] Tested in a sandbox outside `~/.hermes`; real-account tests named in the description.
+- [ ] For changes to the page or its backend: `tests/api_sandbox.py` and `tests/ui/run.mjs` pass, and the page was checked in Hermes Desktop.
 - [ ] No real emails, tokens, hostnames or home paths in code, docs or the PDF (`git grep -nI '@' -- ':!*.pdf'` is a good start).
-- [ ] No state files: `.gitignore` excludes `*.json`, `*.jsonl` and `.env`; keep it that way.
+- [ ] No state files: `.gitignore` excludes `*.json`, `*.jsonl` and `.env` (except the page's `manifest.json` and the UI test fixtures); keep it that way.
