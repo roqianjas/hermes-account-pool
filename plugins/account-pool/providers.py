@@ -101,9 +101,15 @@ class Anthropic(Adapter):
     base = "https://api.anthropic.com"
 
     def _get(self, entry, path: str) -> dict:
+        # Same headers as Hermes' own usage fetcher (agent/account_usage.py). Without a client
+        # User-Agent the request goes out as "Python-urllib/3.x", which Anthropic rate-limits
+        # (HTTP 429) far sooner than Claude Code clients: same token, same second, 429 vs 200.
         req = urllib.request.Request(self.base + path, headers={
             "Authorization": f"Bearer {getattr(entry, 'access_token', '') or ''}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
             "anthropic-beta": "oauth-2025-04-20",
+            "User-Agent": "claude-code/2.1.0",
         })
         with urllib.request.urlopen(req, timeout=20) as r:
             return json.loads(r.read())

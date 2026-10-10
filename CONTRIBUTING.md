@@ -4,6 +4,8 @@
 
 Built in: `anthropic` and `openai-codex`. The Codex adapter is a good template for providers with several limits: it reports the most constraining window and puts the breakdown in `detail`.
 
+**Send a real client `User-Agent`.** Python's default (`Python-urllib/3.x`) can be rate-limited much sooner than the provider's own clients. On Anthropic's usage endpoint the same token got HTTP 429 with the default and 200 with `claude-code/2.1.0` in the same second. Copy the headers Hermes itself uses for that endpoint (see `agent/account_usage.py`).
+
 The core plugin already works for every provider in the Hermes credential pool. An adapter adds the parts that need the provider's own API. Everything is in [`plugins/account-pool/providers.py`](plugins/account-pool/providers.py).
 
 ```python
