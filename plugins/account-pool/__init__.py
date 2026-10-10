@@ -944,6 +944,39 @@ def _timer_info() -> dict:
     return out
 
 
+POOL_STRATEGIES = ("fill_first", "round_robin", "random", "least_used")   # Hermes' credential_pool_strategies
+
+
+def _profile_homes() -> list:
+    """[(name, home)] for the default profile and every profile with a config.yaml."""
+    root = _root()
+    out = [("default", root)]
+    pdir = root / "profiles"
+    if pdir.is_dir():
+        out += [(d.name, d) for d in sorted(pdir.iterdir()) if (d / "config.yaml").exists()]
+    return out
+
+
+def _strategies(provider: str) -> list:
+    """[(profile, value of credential_pool_strategies.<provider> or None when unset)]."""
+    import yaml
+    out = []
+    for name, home in _profile_homes():
+        try:
+            cfg = yaml.safe_load((home / "config.yaml").read_text()) or {}
+        except Exception:
+            cfg = {}
+        value = (cfg.get("credential_pool_strategies") or {}).get(provider) if isinstance(cfg, dict) else None
+        out.append((name, str(value) if value else None))
+    return out
+
+
+def _effective_strategy(value) -> str:
+    """The strategy Hermes uses for a configured value: unset or unknown values mean fill_first."""
+    v = str(value or "").strip().lower()
+    return v if v in POOL_STRATEGIES else "fill_first"
+
+
 def _doctor_checks(provider: str) -> list:
     """[(level, text)] with level ok / warn / fail. Probes the usage endpoint once."""
     import yaml
@@ -953,21 +986,11 @@ def _doctor_checks(provider: str) -> list:
     def add(level, text):
         checks.append((level, text))
 
-    profiles = [("default", root)]
-    pdir = root / "profiles"
-    if pdir.is_dir():
-        profiles += [(d.name, d) for d in sorted(pdir.iterdir()) if (d / "config.yaml").exists()]
+    profiles = _profile_homes()
 
     # strategy per profile
-    bad = []
-    for name, home in profiles:
-        try:
-            cfg = yaml.safe_load((home / "config.yaml").read_text()) or {}
-        except Exception:
-            cfg = {}
-        strat = (cfg.get("credential_pool_strategies") or {}).get(provider) or "fill_first (default)"
-        if not str(strat).startswith("fill_first"):
-            bad.append(f"{name}={strat}")
+    bad = [f"{name}={value}" for name, value in _strategies(provider)
+           if value and not value.startswith("fill_first")]
     add("ok" if not bad else "fail",
         f"strategy fill_first in {len(profiles)} profile{'' if len(profiles) == 1 else 's'}" if not bad else
         f"strategy is not fill_first: {', '.join(bad)} (balance order is ignored there). "

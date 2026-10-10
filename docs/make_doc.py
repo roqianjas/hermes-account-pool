@@ -16,7 +16,7 @@ from reportlab.platypus import (CondPageBreak, KeepTogether, PageBreak, Paragrap
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 from reportlab.platypus.tableofcontents import TableOfContents
 
-VERSION = "3.6.0"
+VERSION = "3.6.1"
 REPO = "github.com/roqianjas/hermes-account-pool"
 FOOTER = f"Hermes plugin account-pool {VERSION} · {REPO}"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hermes-account-pool.pdf")
@@ -218,13 +218,33 @@ P("Timer, kedua plugin (termasuk halaman Accounts), symlink pelacak, dan entri "
   "menampilkan daftar file yang bisa dihapus manual.")
 
 H1("5. Konsep dasar")
-H2("Credential pool dan strategi fill_first")
+H2("Credential pool dan strategi rotasi")
 P("Hermes menyimpan akun tiap provider dalam satu daftar di " + C("~/.hermes/auth.json") + ", dipakai bersama "
   "semua profil. Pengecualian: profil yang pernah menjalankan " + C("hermes -p &lt;profil&gt; auth add") + " punya "
   "pool sendiri (" + C("doctor") + " memperingatkannya).")
-P("Dengan " + C("fill_first") + ", sesi baru mengambil akun sehat paling atas. Saat kena limit, Hermes memindahkan "
-  "sesi ke akun berikutnya. " + C("balance") + " bekerja dengan mengubah urutan daftar ini, jadi butuh "
-  + C("fill_first") + ". Dengan " + C("round_robin") + " urutan diacak setiap sesi baru dan balance tidak berpengaruh.")
+P("Akun mana yang diambil sesi baru adalah pengaturan Hermes, per profil dan provider: "
+  + C("credential_pool_strategies.&lt;provider&gt;") + ". Plugin hanya membacanya (halaman Accounts menampilkannya, "
+  + C("doctor") + " memeriksanya); pengaturannya tetap milik Anda.")
+table([
+    ["Strategi", "Sesi baru mengambil", "Dengan plugin ini"],
+    [C("fill_first") + " (bawaan Hermes)", "Akun pertama yang bisa dipakai di daftar",
+     "<b>Pakai ini.</b> " + C("balance") + " menaruh akun dengan sisa kuota terbanyak di urutan pertama, jadi setiap sesi "
+     "baru mulai di sana."],
+    [C("round_robin"), "Akun berikutnya secara bergiliran; akun itu lalu dipindah ke urutan terakhir",
+     "Bentrok dengan " + C("balance") + ": keduanya menulis urutan, dan giliran tidak melihat sisa kuota."],
+    [C("least_used"), "Akun yang paling jarang dipilih komputer ini",
+     "Menghitung jumlah pemilihan, bukan kuota: pemakaian di claude.ai atau Claude Code tidak terlihat."],
+    [C("random"), "Akun acak yang bisa dipakai", "Urutan dari " + C("balance") + " diabaikan."],
+], [0.17, 0.33, 0.50])
+P(C("fill_first") + " ditambah timer balance adalah rotasi berdasarkan kuota: posisi teratas berpindah ke akun yang "
+  "paling longgar setiap 5 menit. " + C("install.sh --set-strategy") + " memasang " + C("fill_first") + " di semua profil.")
+H2("Sesi yang berjalan tetap di akunnya")
+P("Urutan menentukan tempat <b>sesi baru</b> mulai. Sesi yang sedang berjalan tetap di akunnya sampai akun itu kena "
+  "limit; setelah itu Hermes memindahkannya ke akun berikutnya yang bisa dipakai, yang dijaga " + C("balance")
+  + " tetap paling longgar. Akibatnya akun yang sedang dipakai turun ke tengah daftar seiring pemakaiannya naik, dan akun "
+  "teratas biasanya kosong karena sedang menunggu sesi berikutnya. Sesi memilih akun lagi setelah " + C("/reset")
+  + ", di chat baru, atau setelah gateway atau Hermes Desktop di-restart. Memindahkan sesi lebih awal akan membuang "
+  "prompt cache-nya, dan mengirim ulang konteks yang panjang memakan kuota lebih banyak daripada yang dihemat.")
 H2("Status akun")
 table([
     ["Status", "Diatur oleh", "Dipakai?", "Berakhir saat"],
@@ -577,12 +597,13 @@ P("Header berisi pilihan provider, tombol <b>Live usage</b>, <b>Balance now</b>,
   "bawahnya menunjukkan umur angka pemakaian dan kapan timer jalan berikutnya.")
 table([
     ["Tab", "Isi"],
-    ["Accounts", "Lima kartu: akun dalam rotasi, akun parkir, akun tempat sesi berikutnya mulai beserta pemakaiannya, "
+    ["Accounts", "Baris di bawah header menampilkan strategi rotasi Hermes (arahkan kursor untuk penjelasan tiap "
+     "strategi); banner menyebut profil yang tidak memakai " + C("fill_first") + " beserta perintah perbaikannya. Lima kartu: akun dalam rotasi, akun parkir, akun tempat sesi berikutnya mulai beserta pemakaiannya, "
      "jumlah sesi 30 menit terakhir, dan token 24 jam terakhir. Lalu tabel rotasi sesuai urutan pool: status, bar "
      "pemakaian 5 jam, garis tren 5 jam terakhir, jam reset (atau " + C("back HH:MM") + " saat diistirahatkan), "
      "token 24 jam terakhir (arahkan kursor untuk rincian input, output, cache, jumlah request, dan jendela 5 jam yang "
      "sedang berjalan), profil yang memakai akun itu "
-     "(arahkan kursor untuk melihat sesi, platform, dan model), serta tombol <b>Sign in again</b>, <b>Park</b>, "
+     "(arahkan kursor untuk melihat sesi, platform, model, sejak kapan sesi itu di akun ini, dan akun asalnya bila pindah), serta tombol <b>Sign in again</b>, <b>Park</b>, "
      "<b>Remove</b>. Di bawahnya akun parkir: pemakaian terakhir, sejak kapan, kapan kembali, tombol <b>Unpark</b> dan "
      "<b>Remove</b>. Peringatan aktif tampil sebagai banner di atas; akun mati mendapat tombol <b>Sign in again</b>."],
     ["Report", "Angka " + C("report") + " untuk 24 jam, 3 hari, atau 7 hari: beban per akun, porsi, puncak, waktu "
@@ -810,6 +831,13 @@ qa = [
     ("Apakah balance memindahkan sesi yang sedang berjalan ke akun yang lebih longgar?",
      "Tidak. Sesi yang berjalan tetap di akunnya sampai kena limit, karena pindah akun membuang prompt cache. Sesi baru "
      "mengambil akun paling longgar."),
+    ("Kenapa akun yang sedang dipakai ada di tengah daftar, dan akun #1 kosong?",
+     "Itu tanda balance bekerja. Sesi mulai di akun yang saat itu ada di #1. Pemakaiannya naik, jadi putaran berikutnya "
+     "menaruh akun yang lebih longgar di atasnya. #1 adalah tempat sesi baru berikutnya mulai (lihat bagian 5)."),
+    ("Apakah ada mode round robin?",
+     "Hermes punya (" + C("round_robin") + "), selain " + C("fill_first") + ", " + C("least_used") + ", dan "
+     + C("random") + "; plugin tidak punya mode sendiri. Dengan plugin ini, tetap pakai " + C("fill_first")
+     + ": balance lalu merotasi berdasarkan sisa kuota, bukan giliran. Perbandingan keempatnya ada di bagian 5."),
     ("Apakah plugin mengubah fallback atau model?",
      "Tidak. Fallback, model, dan provider yang dipakai profil tetap di pengaturan Hermes. Satu-satunya pengaturan yang "
      "ditulis proyek ini adalah " + C("credential_pool_strategies") + ", dan hanya jika Anda memakai "
@@ -877,6 +905,9 @@ table([
 H1("19. Riwayat versi")
 table([
     ["Versi", "Perubahan"],
+    ["3.6.1", "Halaman Accounts: strategi rotasi Hermes di header, banner bila ada profil yang tidak memakai "
+     + C("fill_first") + ", penjelasan bahwa sesi berjalan tetap di akunnya, sejak kapan sesi di suatu akun. "
+     "Perbaikan: tooltip beberapa baris kini tetap terpisah per baris."],
     ["3.6.0", "Jumlah token per akun: pelacak sesi 1.1.0 menghitung token setiap panggilan API, " + C("report")
      + " dan halaman Accounts menampilkannya. Perbaikan: daftar profil Telegram di tab Alerts kini mengikuti tema."],
     ["3.5.1", "Perbaikan: halaman Accounts gagal (" + C("backend did not answer") + ") saat Desktop memakai profil selain "

@@ -136,5 +136,21 @@ auth = json.loads((Path(HOME) / "auth.json").read_text())
 toks = [e.get("access_token") for e in auth["credential_pool"]["anthropic"]]
 check("fake-at-r2" in toks and "fake-at-r1" not in toks and "fake-at-a2" not in toks, "only accepted sign-ins saved")
 
+# ── rotation mode: Hermes' credential_pool_strategies per profile ──────────
+mode = c.get("/x/status").json()["rotation_mode"]
+check(mode["default"] == "fill_first" and not mode["other"], "rotation mode: fill_first when unset")
+w = Path(HOME) / "profiles" / "worker-1"
+w.mkdir(parents=True)
+(w / "config.yaml").write_text("credential_pool_strategies:\n  anthropic: Round_Robin\n")
+(Path(HOME) / "profiles" / "worker-2").mkdir()
+(Path(HOME) / "profiles" / "worker-2" / "config.yaml").write_text("credential_pool_strategies:\n  anthropic: bogus\n")
+mode = c.get("/x/status").json()["rotation_mode"]
+check([(r["profile"], r["strategy"]) for r in mode["other"]] == [("worker-1", "round_robin")],
+      "rotation mode: a round_robin profile is reported, an unknown value counts as fill_first (as in Hermes)")
+doc = [t for _, t in core._doctor_checks("anthropic") if t.startswith("strategy")]
+check(doc == ["strategy is not fill_first: worker-1=Round_Robin, worker-2=bogus (balance order is ignored there). "
+              "Fix: hermes -p <profile> config set credential_pool_strategies.anthropic fill_first"],
+      "doctor strategy line unchanged")
+
 print(f"\n{len(failures)} failure(s)")
 sys.exit(1 if failures else 0)

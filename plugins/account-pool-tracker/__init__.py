@@ -4,7 +4,7 @@ Companion to the `account-pool` plugin (`hermes account <provider> who`, `report
 Hermes does not persist the account chosen for a session, so this hook reads
 the live pool from the running agent after each API call and writes:
 
-- {profile, session, platform, model, account} to <hermes root>/account-pool-sessions.json.
+- {profile, session, platform, model, account, since when on that account} to <hermes root>/account-pool-sessions.json.
   Throttled: once per session per minute, or immediately when the session's account changes.
 - the call's token counts (input, output, cache read, cache write, 1 request) added to a
   15-minute bucket of that account in <hermes root>/account-pool-tokens.json. Every call.
@@ -75,10 +75,19 @@ def _write(root: Path, key: str, record: dict) -> None:
         sessions = data.setdefault("sessions", {})
         prev = sessions.get(key) or {}
         record["first_seen"] = prev.get("first_seen", record["last_seen"])
-        if prev.get("account") and prev.get("account") != record["account"]:
+        moved = bool(prev.get("account")) and prev.get("account") != record["account"]
+        if moved:
             record["previous_account"] = prev["account"]
         elif prev.get("previous_account"):
             record["previous_account"] = prev["previous_account"]
+        # When the session started on its current account. Unknown for a session that moved
+        # before tracker 1.2.0 recorded this.
+        if moved:
+            record["account_since"] = record["last_seen"]
+        elif "account_since" in prev:
+            record["account_since"] = prev["account_since"]
+        elif not prev.get("previous_account"):
+            record["account_since"] = record["first_seen"]
         sessions[key] = record
         cutoff = time.time() - KEEP_SECONDS
         data["sessions"] = {k: v for k, v in sessions.items() if v.get("last_seen", 0) >= cutoff}

@@ -1,4 +1,4 @@
-"""Token counting: the session tracker's bucket file, `report`, and the Accounts page backend.
+"""Token counting and session tracking: the session tracker's files, `report`, and the Accounts page backend.
 
     SB=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" hap-sandbox.XXXX)
     HERMES_HOME=$SB ~/.hermes/hermes-agent/venv/bin/python tests/tokens_sandbox.py
@@ -151,6 +151,19 @@ text = out.getvalue()
 check("3.5k" in text and "Tokens through Hermes:" in text and "4 requests" in text, "`report` prints the tokens")
 check(core._fmt_tokens(999) == "999" and core._fmt_tokens(1234) == "1.2k" and core._fmt_tokens(2_500_000) == "2.5M",
       "compact token numbers")
+
+# session tracking: when a session started on its account, and a move to another account
+first = json.loads((Path(HOME) / "account-pool-sessions.json").read_text())["sessions"]["default:s1"]
+check(first.get("account_since") == first["first_seen"], "a new session is on its account since it started")
+time.sleep(1.1)
+call("bob@example.com", U, session="s1")
+moved = json.loads((Path(HOME) / "account-pool-sessions.json").read_text())["sessions"]["default:s1"]
+check(moved["account"] == "bob@example.com" and moved["previous_account"] == "alice@example.com"
+      and moved["account_since"] > first["first_seen"] and moved["first_seen"] == first["first_seen"],
+      "a session that moves gets a new account_since and keeps its first_seen")
+row = next(s for r in c.get("/x/status").json()["rotation"] if r["label"] == "bob@example.com"
+           for s in r["sessions"] if s["session"] == "s1")
+check(row["since"] == moved["account_since"] and row["moved_from"] == "alice@example.com", "status: session since and moved from")
 
 print(f"\n{len(failures)} failure(s)")
 sys.exit(1 if failures else 0)

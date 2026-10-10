@@ -110,6 +110,9 @@ ok(document.querySelectorAll('.hap-bar').length >= status.rotation.filter(r => r
 ok(document.querySelectorAll('svg.hap-spark').length > 0, 'sparklines drawn')
 ok(screen.getByText('Tokens, last 24 h') && screen.getByText('Tokens, 24 h', { selector: 'span' }), 'tokens card and column shown')
 ok(rows[0].textContent.includes('1.2M'), 'tokens of the first account shown compact')
+ok(screen.getByText('rotation: fill_first'), 'rotation mode shown in the header')
+ok(screen.getByText(/New sessions start on #1/), 'rotation table explains where new sessions start')
+ok(!screen.queryByText(/Hermes rotation is not fill_first/), 'no rotation banner while every profile uses fill_first')
 
 // live usage
 await click(screen.getByText('Live usage').closest('button'))
@@ -220,6 +223,20 @@ await click(screen.getByText(/^openai-codex/))
 await screen.findByText('No openai-codex accounts yet.')
 ok(store.provider === 'openai-codex', 'provider choice stored')
 cleanup()
+
+// a profile that does not use fill_first -> banner with the fix
+store.provider = 'anthropic'
+const savedMode = fx['/status?provider=anthropic'].rotation_mode
+const rr = savedMode.profiles.map(r => r.profile === 'worker-3' ? { ...r, strategy: 'round_robin', configured: 'round_robin' } : r)
+fx['/status?provider=anthropic'].rotation_mode = { ...savedMode, profiles: rr, other: rr.filter(r => r.strategy !== 'fill_first') }
+mount('page')
+await screen.findByText(/Hermes rotation is not fill_first in worker-3 \(round_robin\)/)
+ok(screen.getByText('rotation: fill_first, 1 profile(s) differ'), 'rotation banner and header warning for a round_robin profile')
+fx['/status?provider=anthropic'].rotation_mode = savedMode
+cleanup()
+
+// multi-line tooltips keep their line breaks
+ok(document.querySelector('style[data-plugin="account-pool"]').textContent.includes('.hap-ml{white-space:pre-line'), 'multi-line tip style present')
 
 // backend missing -> setup hint
 store.provider = 'anthropic'

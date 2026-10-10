@@ -2,7 +2,7 @@
 
 Run several accounts of one provider in [Hermes Agent](https://hermes-agent.nousresearch.com/docs) and manage them from one command, `hermes account`, or from an Accounts page in Hermes Desktop. Add accounts with a verified email, see live usage per account, spread the load before an account runs out, park accounts for a while, see which bot is on which account, and get an alert when something needs you.
 
-Version 3.6.0 · MIT · Hermes Agent ≥ 0.21 · Linux with systemd · Indonesian PDF guide in [`docs/`](docs/hermes-account-pool.pdf)
+Version 3.6.1 · MIT · Hermes Agent ≥ 0.21 · Linux with systemd · Indonesian PDF guide in [`docs/`](docs/hermes-account-pool.pdf)
 
 ## Contents
 
@@ -121,7 +121,18 @@ It removes the timer, both plugins (the Accounts page included), the tracker sym
 
 **Credential pool.** Hermes keeps the accounts of each provider in one list in `~/.hermes/auth.json`. Every profile shares it, unless a profile was given its own pool by running `hermes -p <profile> auth add` (`doctor` warns about that).
 
-**Strategy `fill_first`.** A new session takes the first healthy account in the list. When it hits a limit, Hermes moves the session to the next one. `balance` works by reordering the list, so it needs `fill_first`. With `round_robin` the order is reshuffled on every session and balancing has no effect.
+**Rotation strategy.** Which account a new session takes is a Hermes setting, per profile and provider: `credential_pool_strategies.<provider>`. The plugin reads it (the Accounts page shows it, `doctor` checks it) and leaves it to you.
+
+| Strategy | A new session takes | With this plugin |
+|---|---|---|
+| `fill_first` (Hermes' default) | the first usable account in the list | **Use this.** `balance` puts the account with the most quota left first, so each new session starts on it. |
+| `round_robin` | the next account in turn, which then moves to the end of the list | Fights `balance`: both rewrite the order, and turns ignore how much quota is left. |
+| `least_used` | the account this computer picked least often | Counts picks, not quota: use in claude.ai or Claude Code is not seen. |
+| `random` | any usable account | The order `balance` sets is ignored. |
+
+`fill_first` plus the balance timer is a rotation by quota: the top spot moves to whichever account has the most room, every 5 minutes. `install.sh --set-strategy` sets `fill_first` in every profile.
+
+**Running sessions keep their account.** The order decides where a *new* session starts. A running session stays on its account until that account hits a limit; then Hermes moves it to the next usable account, which `balance` keeps the least used. So the accounts with sessions on them drift down the list as their usage grows, and the top account is usually idle: it is waiting for the next session. A session picks its account again after `/reset`, in a new chat, or after a gateway or Hermes Desktop restart. Moving running sessions earlier would throw away their prompt cache, and resending a long context costs more quota than it saves.
 
 **Account states.**
 
@@ -450,7 +461,7 @@ The header has a provider switch (providers with accounts in the pool, plus the 
 
 | Tab | Content |
 |---|---|
-| Accounts | Five cards: accounts in rotation, parked accounts, the account the next session starts on with its usage, sessions in the last 30 minutes, tokens in the last 24 hours. Then the rotation table in pool order: status, 5-hour usage bar, trend over the last 5 hours, reset time (or `back HH:MM` while benched), tokens in the last 24 hours (hover for input, output, cache, requests and the current 5-hour window), the profiles using the account (hover for session, platform and model) and the row buttons **Sign in again**, **Park** and **Remove**. Parked accounts follow with their last known usage, since when they are parked, when they return, and **Unpark** and **Remove**. Active alerts show as a banner on top, a dead account with a **Sign in again** button. |
+| Accounts | The header line shows Hermes' rotation strategy (hover for what each one does); a banner names any profile that does not use `fill_first`, with the command that fixes it. Five cards: accounts in rotation, parked accounts, the account the next session starts on with its usage, sessions in the last 30 minutes, tokens in the last 24 hours. Then the rotation table in pool order: status, 5-hour usage bar, trend over the last 5 hours, reset time (or `back HH:MM` while benched), tokens in the last 24 hours (hover for input, output, cache, requests and the current 5-hour window), the profiles using the account (hover for session, platform, model, since when the session is on this account, and the account it moved from) and the row buttons **Sign in again**, **Park** and **Remove**. Parked accounts follow with their last known usage, since when they are parked, when they return, and **Unpark** and **Remove**. Active alerts show as a banner on top, a dead account with a **Sign in again** button. |
 | Report | The `report` numbers for 24 hours, 3 days or 7 days: load per account, share, peak, time at 90% or more, tokens, busiest hours and the advice line. |
 | Health | Timer state, age of the usage history, active alerts. **Run doctor** runs the `doctor` checks; **Check accounts** runs `check` and shows its output. |
 | Alerts | Desktop and Telegram switches, the profile whose bot sends Telegram alerts, **Send a test alert**, and the alerts active now. |
@@ -622,6 +633,12 @@ No. It reads usage and reorders the pool. No model is called.
 
 **Does `balance` move running sessions to a less used account?**
 No. A running session keeps its account until it hits a limit; moving it would discard the prompt cache. New sessions take the least used account.
+
+**Why are the accounts in use in the middle of the list, and #1 idle?**
+That is balance working. A session started on the account that was #1 at the time. Its usage grew, so the next runs moved fresher accounts above it. #1 is where the next new session starts. See [Running sessions keep their account](#concepts).
+
+**Is there a round-robin mode?**
+Hermes has one (`round_robin`), next to `fill_first`, `least_used` and `random`; the plugin has no mode of its own. With this plugin, keep `fill_first`: balance then rotates by quota left instead of by turn. The table under [Concepts](#concepts) compares the four.
 
 **Does the plugin change my fallback provider or models?**
 No. Fallback, models and which provider a profile uses stay in your Hermes configuration. The only setting the project writes is `credential_pool_strategies`, and only when you pass `install.sh --set-strategy`.

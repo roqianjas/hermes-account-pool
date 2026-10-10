@@ -182,7 +182,18 @@ def _alerts(provider: str, labels: dict) -> list[dict]:
 def _session_row(r: dict) -> dict:
     return {"profile": r.get("profile") or "?", "platform": r.get("platform") or "", "model": r.get("model") or "",
             "session": (r.get("session_id") or "")[:22], "last_seen": r.get("last_seen"),
+            # Records from tracker < 1.2.0 have no account_since; a session that never moved has been
+            # on its account since it started.
+            "since": r.get("account_since") or (None if r.get("previous_account") else r.get("first_seen")),
             "moved_from": r.get("previous_account") or ""}
+
+
+def _rotation_mode(provider: str) -> dict:
+    """Hermes' pool strategy per profile. Balance's order only decides for fill_first."""
+    rows = [{"profile": name, "strategy": core._effective_strategy(value), "configured": value}
+            for name, value in core._strategies(provider)]
+    return {"default": rows[0]["strategy"], "profiles": rows,
+            "other": [r for r in rows if r["strategy"] != "fill_first"]}
 
 
 def _status(provider: str) -> dict:
@@ -266,6 +277,7 @@ def _status(provider: str) -> dict:
         "live": {"ts": live["ts"] if live else None, "retry_after": _wait(live and live["ts"], LIVE_MIN_GAP)},
         "timer": _timer(), "alerts": _alerts(provider, {e.id: e.label for e in entries}),
         "threshold": 90, "alert_all_above": cfg.get("alert_all_above", 80), "now": now,
+        "rotation_mode": _rotation_mode(provider),
         "tokens": {"since": counting, "day": core._token_sum(
             {0: [sum(r["tokens"]["day"][k] for r in rotation + parked_rows) for k in core.TOKEN_KEYS]}, 0)},
     }

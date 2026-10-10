@@ -202,7 +202,8 @@
       "model": "claude-sonnet-5-5",
       "session": "20261010_181314_1fac61",
       "last_seen": 1791638628.8687947,
-      "moved_from": ""
+      "moved_from": "",
+      "since": 1791636828.8687947
      },
      {
       "profile": "worker-2",
@@ -210,7 +211,8 @@
       "model": "claude-sonnet-5-5",
       "session": "20261010_181336_cb19b4",
       "last_seen": 1791638210.7591188,
-      "moved_from": ""
+      "moved_from": "",
+      "since": 1791636410.7591188
      }
     ],
     "tokens": {
@@ -625,7 +627,8 @@
       "model": "claude-sonnet-5-5",
       "session": "20261010_181303_7131a3",
       "last_seen": 1791637446.611486,
-      "moved_from": ""
+      "moved_from": "",
+      "since": 1791635646.611486
      }
     ],
     "tokens": {
@@ -1181,7 +1184,8 @@
       "model": "claude-sonnet-5-5",
       "session": "20261010_181302_442f7d",
       "last_seen": 1791639130.27904,
-      "moved_from": ""
+      "moved_from": "",
+      "since": 1791637330.27904
      },
      {
       "profile": "worker-5",
@@ -1189,7 +1193,8 @@
       "model": "claude-sonnet-5-5",
       "session": "20261010_181318_d69964",
       "last_seen": 1791638710.9591231,
-      "moved_from": ""
+      "moved_from": "",
+      "since": 1791636910.9591231
      }
     ],
     "tokens": {
@@ -1403,7 +1408,8 @@
       "model": "claude-sonnet-5-5",
       "session": "20261010_181309_3c4f43",
       "last_seen": 1791638930.588776,
-      "moved_from": ""
+      "moved_from": "",
+      "since": 1791637130.588776
      }
     ],
     "tokens": {
@@ -1647,6 +1653,42 @@
     "requests": 1497,
     "total": 13530019
    }
+  },
+  "rotation_mode": {
+   "default": "fill_first",
+   "profiles": [
+    {
+     "profile": "default",
+     "strategy": "fill_first",
+     "configured": "fill_first"
+    },
+    {
+     "profile": "worker-1",
+     "strategy": "fill_first",
+     "configured": null
+    },
+    {
+     "profile": "worker-2",
+     "strategy": "fill_first",
+     "configured": null
+    },
+    {
+     "profile": "worker-3",
+     "strategy": "fill_first",
+     "configured": null
+    },
+    {
+     "profile": "worker-4",
+     "strategy": "fill_first",
+     "configured": null
+    },
+    {
+     "profile": "worker-5",
+     "strategy": "fill_first",
+     "configured": null
+    }
+   ],
+   "other": []
   }
  },
  "/status?provider=openai-codex": {
@@ -1703,6 +1745,42 @@
     "requests": 0,
     "total": 0
    }
+  },
+  "rotation_mode": {
+   "default": "fill_first",
+   "profiles": [
+    {
+     "profile": "default",
+     "strategy": "fill_first",
+     "configured": "fill_first"
+    },
+    {
+     "profile": "worker-1",
+     "strategy": "fill_first",
+     "configured": null
+    },
+    {
+     "profile": "worker-2",
+     "strategy": "fill_first",
+     "configured": null
+    },
+    {
+     "profile": "worker-3",
+     "strategy": "fill_first",
+     "configured": null
+    },
+    {
+     "profile": "worker-4",
+     "strategy": "fill_first",
+     "configured": null
+    },
+    {
+     "profile": "worker-5",
+     "strategy": "fill_first",
+     "configured": null
+    }
+   ],
+   "other": []
   }
  },
  "/summary?provider=anthropic": {

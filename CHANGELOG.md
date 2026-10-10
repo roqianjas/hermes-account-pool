@@ -1,6 +1,15 @@
 # Changelog
 
-All releases of the `account-pool` plugin and its session tracker `account-pool-tracker` (now 1.1.0).
+All releases of the `account-pool` plugin and its session tracker `account-pool-tracker` (now 1.2.0).
+
+## 3.6.1
+
+- Accounts page: the header shows Hermes' rotation strategy (`credential_pool_strategies`), with what each strategy does on hover. A banner names any profile that does not use `fill_first` and gives the command that fixes it.
+- The line over the rotation table says where new sessions start and that running sessions keep their account until it hits a limit (hover for why).
+- `Used by`: hovering a profile shows since when each session is on that account. The session tracker (1.2.0) records `account_since`; for sessions recorded earlier the page uses the session's start when it never moved.
+- Fix: tooltips with several lines (token split, sessions, account problems) ran into one line, because the desktop's tooltip collapses line breaks.
+- README and PDF: the four Hermes strategies compared, and why accounts in use sit in the middle of the list.
+- Tests: rotation strategy per profile and the unchanged `doctor` line (`tests/api_sandbox.py`); `account_since` (`tests/tokens_sandbox.py`); header, banner and tooltip style (`tests/ui/run.mjs`).
 
 ## 3.6.0
 

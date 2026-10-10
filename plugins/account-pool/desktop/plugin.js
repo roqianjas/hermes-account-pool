@@ -92,6 +92,13 @@ function shortName(label) {
   return String(label || '').split('@')[0]
 }
 
+// Tooltip whose label keeps its line breaks. The desktop's tooltip wraps text with
+// white-space: normal, which would run "a\nb" into one line.
+function MTip({ label, children }) {
+  const text = typeof label === 'string' && label.includes('\n') ? h('span', { className: 'hap-ml' }, label) : label
+  return h(Tip, { label: text }, children)
+}
+
 function fmtTok(n) {
   n = Number(n) || 0
   if (n >= 1e9) return `${(n / 1e9).toFixed(1)}B`
@@ -115,7 +122,7 @@ function TokensCell({ tokens, window }) {
   if (tokens.window && tokens.window.requests) {
     lines.push('', `This ${window} window: ${fmtTok(tokens.window.total)} (${tokens.window.requests} requests)`)
   }
-  return h(Tip, { label: lines.join('\n') }, h('span', null, fmtTok(tokens.day.total)))
+  return h(MTip, { label: lines.join('\n') }, h('span', null, fmtTok(tokens.day.total)))
 }
 
 // The bot picker for Telegram alerts. The SDK Select follows the Hermes theme;
@@ -206,6 +213,8 @@ const CSS = `
 .hap-select{background:var(--ui-bg-input);color:var(--ui-text-primary);border:1px solid var(--ui-stroke-secondary);border-radius:6px;padding:3px 6px;font-size:.75rem;color-scheme:light dark}
 .hap-select option{background:var(--ui-bg-elevated,var(--ui-bg-card));color:var(--ui-text-primary)}
 .hap-select-trigger{width:auto;min-width:170px}
+.hap-ml{white-space:pre-line;display:block}
+.hap-mode{border-bottom:1px dotted currentColor;cursor:help}
 .hap-sharebar{display:inline-block;width:80px;height:5px;border-radius:3px;background:var(--ui-bg-quaternary);overflow:hidden;vertical-align:middle;margin-right:6px}
 .hap-sharebar>i{display:block;height:100%;background:var(--ui-accent)}
 `
@@ -227,7 +236,7 @@ function Spark({ points, now }) {
 function UsageCell({ usage, parked, now }) {
   if (!usage) return h('span', { className: 'hap-tag' }, 'no data yet')
   if (usage.pct == null) {
-    return h(Tip, { label: `The usage window reset after the last reading (${ago(usage.age)}). Live usage or the next timer run shows the new number.` },
+    return h(MTip, { label: `The usage window reset after the last reading (${ago(usage.age)}). Live usage or the next timer run shows the new number.` },
       h('span', { className: 'hap-tag' }, 'window reset since'))
   }
   const pct = usage.pct
@@ -241,7 +250,7 @@ function UsageCell({ usage, parked, now }) {
 }
 
 function IconButton({ icon, label, onClick, disabled }) {
-  return h(Tip, { label },
+  return h(MTip, { label },
     h(Button, { 'aria-label': label, disabled, onClick, size: 'icon-xs', variant: 'ghost' },
       h(Codicon, { name: icon, size: '0.85rem' })))
 }
@@ -258,10 +267,12 @@ function Sessions({ sessions }) {
   const byProfile = {}
   for (const s of sessions) (byProfile[s.profile] ||= []).push(s)
   return h(Fragment, null, Object.entries(byProfile).map(([profile, list]) =>
-    h(Tip, {
+    h(MTip, {
       key: profile,
-      label: list.map(s => `${s.session} · ${s.platform || '-'} · ${s.model || '?'} · ${ago(Date.now() / 1000 - s.last_seen)}`
-        + (s.moved_from ? ` (moved from ${shortName(s.moved_from)})` : '')).join('\n')
+      label: list.map(s => `${s.session} · ${s.platform || '-'} · ${s.model || '?'}\n`
+        + `  on this account ${s.since ? `since ${hhmm(s.since)}` : '(start unknown)'}`
+        + (s.moved_from ? `, moved from ${shortName(s.moved_from)}` : '')
+        + ` · last call ${ago(Date.now() / 1000 - s.last_seen)}`).join('\n')
     }, h('span', { className: 'hap-chip' }, list.length > 1 ? `${profile} ×${list.length}` : profile))))
 }
 
@@ -516,14 +527,20 @@ function AccountsView({ data, provider, openDialog }) {
       h('span', { className: 'hap-pill' }, data.rotation.length),
       h('span', { className: 'hap-grow' }),
       h('span', { className: 'hap-tag', style: { textTransform: 'none', letterSpacing: 0, fontWeight: 400 } },
-        'Hermes uses the first usable account; balance keeps the least-used on top.')),
+        h(MTip, {
+          label: 'Hermes starts each new session on the first usable account (fill_first), and balance moves the least-used account to the top every 5 minutes.\n\n'
+            + 'A running session stays on its account until that account hits a limit, then Hermes moves it to the next one. '
+            + 'Moving it earlier would throw away its prompt cache, and resending the context costs more quota than it saves.\n\n'
+            + '/reset, a new chat or a restart picks the account again.'
+        }, h('span', { className: 'hap-mode' }, 'New sessions start on #1. Running sessions keep their account until it hits a limit.')))),
     h('table', { className: 'hap-table' },
       h('thead', null, h('tr', null,
         h('th', { style: { width: 28 } }, '#'), h('th', null, 'Account'),
         h('th', null, data.has_usage ? `${data.window} usage` : 'Usage'), h('th', null, ''),
         h('th', null, 'Resets'),
-        h('th', { className: 'hap-num' }, h(Tip, { label: 'Tokens Hermes sent and received on this account in the last 24 hours (input, output and cache). Other apps signed in to the same account are not counted.' }, h('span', null, 'Tokens, 24 h'))),
-        h('th', null, 'Used by'), h('th', { style: { width: 96 } }, ''))),
+        h('th', { className: 'hap-num' }, h(MTip, { label: 'Tokens Hermes sent and received on this account in the last 24 hours (input, output and cache). Other apps signed in to the same account are not counted.' }, h('span', null, 'Tokens, 24 h'))),
+        h('th', null, h(MTip, { label: `Profiles with a session on this account in the last ${data.who_minutes} minutes. Hover a profile for its sessions.` }, h('span', null, 'Used by'))),
+        h('th', { style: { width: 96 } }, ''))),
       h('tbody', null, data.rotation.map(r => {
         const st = STATE[r.state] || STATE.active
         return h('tr', { key: r.id },
@@ -531,12 +548,12 @@ function AccountsView({ data, provider, openDialog }) {
           h('td', null, h('div', { className: 'hap-acc' },
             h(StatusDot, { tone: st.tone }),
             h('span', null, r.label),
-            st.text ? h(Tip, { label: (r.problems || []).join('\n') || st.text },
+            st.text ? h(MTip, { label: (r.problems || []).join('\n') || st.text },
               h(Badge, { variant: r.state === 'DEAD' ? 'destructive' : 'warn' }, st.text)) : null)),
           h('td', null, h(UsageCell, { usage: r.usage, now })),
           h('td', null, h(Spark, { points: r.spark, now })),
           h('td', { className: 'hap-num' },
-            r.back_at ? h(Tip, { label: 'Back in rotation at this time' }, h('span', null, `back ${hhmm(r.back_at)}`))
+            r.back_at ? h(MTip, { label: 'Back in rotation at this time' }, h('span', null, `back ${hhmm(r.back_at)}`))
               : hhmm(r.usage && r.usage.pct != null ? r.usage.reset : null)),
           h('td', { className: 'hap-num' }, h(TokensCell, { tokens: r.tokens, window: data.window })),
           h('td', null, h(Sessions, { sessions: r.sessions })),
@@ -562,7 +579,7 @@ function AccountsView({ data, provider, openDialog }) {
             h('td', null, ''),
             h('td', null, h('div', { className: 'hap-acc' },
               h(StatusDot, { tone: p.dead ? 'bad' : 'muted' }), h('span', null, p.label),
-              p.dead ? h(Tip, { label: 'Its sign-in expired while parked: remove it, then add it again.' },
+              p.dead ? h(MTip, { label: 'Its sign-in expired while parked: remove it, then add it again.' },
                 h(Badge, { variant: 'destructive' }, 'sign-in expired')) : null)),
             h('td', null, h(UsageCell, { usage: p.usage, parked: true, now })),
             h('td', null, h(Spark, { points: p.spark, now })),
@@ -629,7 +646,7 @@ function ReportView({ provider }) {
                   h('td', { className: 'hap-num' }, `${Math.round(a.peak)}%`),
                   h('td', { className: 'hap-num' }, `${Math.round(a.hot_min)} min`),
                   h('td', { className: 'hap-num' }, a.tokens && a.tokens.requests
-                    ? h(Tip, { label: tokLines(a.tokens).join('\n') }, h('span', null, fmtTok(a.tokens.total)))
+                    ? h(MTip, { label: tokLines(a.tokens).join('\n') }, h('span', null, fmtTok(a.tokens.total)))
                     : h('span', { className: 'hap-muted' }, '–')))))),
               h('p', { className: 'hap-small hap-muted', style: { marginTop: 8 } },
                 'Used and Peak come from the provider\'s usage percentages. Tokens count only what Hermes sent and received on this computer' +
@@ -849,7 +866,7 @@ function AccountsPage() {
         : null,
       h('span', { className: 'hap-grow' }),
       data && data.has_usage
-        ? h(Tip, { label: liveLeft ? `Available in ${liveLeft}s. The usage endpoint rate-limits per account.` : 'Read live usage of every account now (one request per account).' },
+        ? h(MTip, { label: liveLeft ? `Available in ${liveLeft}s. The usage endpoint rate-limits per account.` : 'Read live usage of every account now (one request per account).' },
           h('span', null, h(Button, { size: 'sm', variant: 'ghost', disabled: !!busy || liveLeft > 0, onClick: refreshLive },
             h(Codicon, { name: 'refresh', size: '0.8rem', spinning: busy === 'live' }), liveLeft ? `Live (${liveLeft}s)` : 'Live usage')))
         : null,
@@ -869,9 +886,18 @@ function AccountsPage() {
         ? h('span', null,
           'Shared pool · ',
           age != null ? `usage from the balance timer, ${ago(age)}` : 'no usage history yet',
-          t && t.active ? ` · next run ${t.running ? 'now' : t.next || '–'}` : ' · balance timer off')
+          t && t.active ? ` · next run ${t.running ? 'now' : t.next || '–'}` : ' · balance timer off',
+          data.rotation_mode ? ' · ' : null,
+          data.rotation_mode ? h(RotationMode, { mode: data.rotation_mode, provider: data.provider }) : null)
         : null),
     h('div', { className: 'hap-body' },
+      data && data.rotation_mode && data.rotation_mode.other.length && view === 'accounts'
+        ? h('div', { className: 'hap-banner' }, h(Codicon, { name: 'warning' }),
+          h('span', { className: 'hap-grow' },
+            `Hermes rotation is not fill_first in ${data.rotation_mode.other.map(r => `${r.profile} (${r.strategy})`).join(', ')}. `
+            + 'Sessions there ignore the balance order. Fix: ',
+            h('code', null, `hermes -p <profile> config set credential_pool_strategies.${data.provider} fill_first`)))
+        : null,
       data && data.alerts.length && view === 'accounts'
         ? data.alerts.map(a => h('div', { className: 'hap-banner', key: a.key }, h(Codicon, { name: 'warning' }),
           h('span', { className: 'hap-grow' }, a.text),
@@ -884,6 +910,29 @@ function AccountsPage() {
         : null,
       content),
     modal)
+}
+
+// Hermes' own rotation setting (credential_pool_strategies). The page shows it; Hermes owns it.
+const MODES = {
+  fill_first: 'fill_first: every new session takes the first usable account. With the balance timer that is the least-used one.',
+  round_robin: 'round_robin: each new session takes the next account in turn and moves it to the end. Rewrites the order balance sets.',
+  least_used: 'least_used: each new session takes the account picked least often by this computer, not the one with the most quota left.',
+  random: 'random: each new session takes a random usable account.'
+}
+
+function RotationMode({ mode, provider }) {
+  const mixed = mode.other.length > 0
+  const label = [
+    `Rotation is a Hermes setting, per profile: credential_pool_strategies.${provider}.`,
+    '',
+    ...Object.values(MODES),
+    '',
+    'fill_first is the one balance is built for: the order it sets decides where new sessions start.',
+    mixed ? `Not fill_first: ${mode.other.map(r => `${r.profile} (${r.strategy})`).join(', ')}.` : `All ${mode.profiles.length} profiles use fill_first.`
+  ].join('\n')
+  return h(MTip, { label },
+    h('span', { className: 'hap-mode', style: mixed ? { color: 'var(--ui-orange)' } : undefined },
+      mixed ? `rotation: ${mode.default}, ${mode.other.length} profile(s) differ` : `rotation: ${mode.default}`))
 }
 
 // ── status bar ───────────────────────────────────────────────────────────────
@@ -904,7 +953,7 @@ function StatusChip() {
     data.max != null ? `Highest usage: ${Math.round(data.max)}%` : '',
     data.alerts ? `${data.alerts} alert(s) active` : ''
   ].filter(Boolean).join('\n')
-  return h(Tip, { label: tip },
+  return h(MTip, { label: tip },
     h('button', {
       type: 'button',
       className: 'inline-flex h-full items-center gap-1 rounded-none px-1.5 text-[0.6875rem] tabular-nums transition-colors text-(--ui-text-tertiary) hover:bg-(--chrome-action-hover) hover:text-foreground',
