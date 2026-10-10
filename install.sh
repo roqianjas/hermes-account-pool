@@ -52,7 +52,24 @@ for p in account-pool account-pool-tracker; do
   find "$ROOT/plugins/$p" -name __pycache__ -prune -exec rm -rf '{}' +
   echo "  $p -> $ROOT/plugins/$p"
 done
-"$HERMES_BIN" plugins enable account-pool >/dev/null && echo "  enabled account-pool (default profile only)"
+"$HERMES_BIN" plugins enable account-pool >/dev/null && echo "  enabled account-pool (default profile: the command)"
+
+# Hermes Desktop mounts a plugin's page backend only when the plugin is in plugins.enabled of the
+# profile it runs. List account-pool in every profile for the Accounts page. No symlink: the agent
+# in a profile does not load the plugin, so profiles get no command and no tools.
+say "Accounts page backend in every profile"
+for prof in $(profiles); do
+  cur="$("$HERMES_BIN" -p "$prof" config get plugins.enabled --json 2>/dev/null || true)"
+  off="$("$HERMES_BIN" -p "$prof" config get plugins.disabled --json 2>/dev/null || true)"
+  case "$off" in *'"account-pool"'*) echo "  $prof: skipped, account-pool is in plugins.disabled"; continue ;; esac
+  case "$cur" in *'"account-pool"'*) echo "  $prof: already listed"; continue ;; esac
+  case "$cur" in
+    \[*\]) new="${cur%]}"; new="${new%"${new##*[![:space:]]}"}"
+           [ "$new" = "[" ] && new='["account-pool"]' || new="$new, \"account-pool\"]" ;;
+    *) new='["account-pool"]' ;;
+  esac
+  "$HERMES_BIN" -p "$prof" config set plugins.enabled "$new" >/dev/null && echo "  $prof: listed"
+done
 
 if [ "$TRACKER" = 1 ]; then
   say "Session tracker"
@@ -104,5 +121,5 @@ echo
 echo "Done. Start with: hermes account help"
 echo "Running sessions pick up the tracker after /reset or a gateway/desktop restart."
 echo
-echo "Hermes Desktop page (optional): restart Hermes Desktop once so it loads the page's backend,"
+echo "Hermes Desktop page (optional): restart Hermes Desktop so it loads the page's backend,"
 echo "then in Capabilities > Plugins switch on the Desktop half of account-pool. Accounts appears in the sidebar."

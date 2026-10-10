@@ -714,7 +714,7 @@ function AccountsPage() {
       h(ErrorState, {
         title: 'The account-pool backend did not answer',
         description: /404|not found/i.test(msg)
-          ? 'Add account-pool to plugins.enabled in the default profile (hermes plugins enable account-pool), then restart Hermes Desktop so it loads the backend.'
+          ? 'Hermes Desktop loads this backend only for profiles that list account-pool in plugins.enabled, and only when it starts. Run ./install.sh again (it adds account-pool to every profile; the command stays in the default profile), then restart Hermes Desktop. "hermes account anthropic doctor" names the profiles that miss it.'
           : msg
       }))
   } else if (view === 'report') content = h(ReportView, { provider })

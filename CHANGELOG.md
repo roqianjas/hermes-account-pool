@@ -2,6 +2,15 @@
 
 All releases of the `account-pool` plugin. The session tracker `account-pool-tracker` is at 1.0.0 and has not changed.
 
+## 3.5.1
+
+- Fix: the Accounts page showed `The account-pool backend did not answer` whenever Hermes Desktop ran a profile other than default. Desktop runs its backend under the profile you last used, and that backend loads a plugin's page routes only when the plugin is in that profile's `plugins.enabled`.
+- `install.sh` adds `account-pool` to `plugins.enabled` of every profile (no symlink, so the agent in a profile does not load it). `uninstall.sh` takes it out again.
+- `register()` registers nothing when it runs in a profile, so the command stays in the default profile.
+- `doctor`: new check `Accounts page backend enabled in every profile`, shown when Hermes Desktop has the page.
+- The page's error text says what to do: run `install.sh` again and restart Hermes Desktop.
+- Test: `tests/profile_backend.py` (backend under a profile, before and after the fix).
+
 ## 3.5.0
 
 - New: an **Accounts page in Hermes Desktop**, with its own sidebar entry. It lists the accounts in rotation and the parked ones with their 5-hour usage, a trend line for the last 5 hours, the reset time and the profiles using them. Buttons: Live usage, Balance now, Add account, Sign in again, Park (now, for 1 or 2 hours, or until a time), Unpark, Remove. Tabs for Report, Health (doctor, check, timer) and Alerts (switch channels, send a test). The page ships switched off: turn on the Desktop half of account-pool in Capabilities > Plugins.

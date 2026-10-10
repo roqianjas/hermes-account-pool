@@ -12,7 +12,7 @@ Bug reports, fixes and adapters for more providers are welcome. This page covers
 | `plugins/account-pool/desktop/plugin.js` | The Accounts page in Hermes Desktop (one ES module, no build step) |
 | `plugins/account-pool/dashboard/plugin_api.py` | The page's backend: FastAPI routes under `/api/plugins/account-pool/` |
 | `plugins/account-pool/dashboard/manifest.json` | Tells Hermes to mount `plugin_api.py`; `dist/index.js` is a stub for the browser dashboard |
-| `tests/api_sandbox.py`, `tests/ui/` | Backend test in a sandbox, and the page in jsdom |
+| `tests/api_sandbox.py`, `tests/profile_backend.py`, `tests/ui/` | Backend tests in a sandbox (actions and sign-in; backend launched under a profile), and the page in jsdom |
 | `plugins/account-pool-tracker/` | The `post_api_request` hook behind `who` |
 | `systemd/` | Service and timer templates, filled in by `install.sh` |
 | `install.sh`, `uninstall.sh` | Install and remove everything |
@@ -73,7 +73,8 @@ Rules for the page:
 1. **No tokens in responses.** Return labels, ids, states and numbers. A sign-in's secret state stays in the backend's `_FLOWS`.
 2. **No provider request on a GET.** Views read files only (pool, parked file, history, sessions). Buttons that call the provider go through a POST and a rate limit: `LIVE_MIN_GAP` for live usage, `NET_MIN_GAP` for balance and check.
 3. **One action at a time.** POST routes that change the pool run inside `_exclusive()`, which also points `HERMES_HOME` at the default root, so every profile sees the shared pool.
-4. **Plain ESM in `plugin.js`.** Import only from `@hermes/plugin-sdk`, `react` and `react/jsx-runtime`, write elements with `createElement`, and style with the desktop's `--ui-*` variables so themes keep working. An identifier that is not imported is a runtime `ReferenceError`; `tests/ui/run.mjs` catches it.
+4. **The command stays in the default profile.** `install.sh` lists `account-pool` in every profile's `plugins.enabled`, because Hermes Desktop mounts the page's routes only for plugins enabled in the profile it runs. `register()` returns early in a profile (`_in_profile()`); keep anything you add to `register()` behind that check.
+5. **Plain ESM in `plugin.js`.** Import only from `@hermes/plugin-sdk`, `react` and `react/jsx-runtime`, write elements with `createElement`, and style with the desktop's `--ui-*` variables so themes keep working. An identifier that is not imported is a runtime `ReferenceError`; `tests/ui/run.mjs` catches it.
 
 To try a change in Hermes Desktop, copy the plugin to `~/.hermes/plugins/account-pool/`. Changes to `plugin.js` load with Ctrl+K, `Reload desktop plugins`; changes to `plugin_api.py` or `__init__.py` need a Hermes Desktop restart.
 
@@ -108,11 +109,18 @@ SB=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" hap-sandbox.XXXX)
 HERMES_HOME=$SB ~/.hermes/hermes-agent/venv/bin/python tests/api_sandbox.py
 rm -rf "$SB"
 
+# backend launched under a profile, as Hermes Desktop does (own sandbox)
+SB=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" hap-sandbox.XXXX)
+HERMES_HOME=$SB ~/.hermes/hermes-agent/venv/bin/python tests/profile_backend.py
+rm -rf "$SB"
+
 # the page in jsdom, every tab, dialog and button, answered from tests/ui/fixtures.json
 node tests/ui/run.mjs
 ```
 
-`tests/ui/run.mjs` borrows React, jsdom and Testing Library from the `node_modules` of your Hermes Agent checkout (`~/.hermes/hermes-agent`, or set `HERMES_AGENT_DIR`). Both tests print one line per check and exit 1 on a failure.
+`tests/ui/run.mjs` borrows React, jsdom and Testing Library from the `node_modules` of your Hermes Agent checkout (`~/.hermes/hermes-agent`, or set `HERMES_AGENT_DIR`). All three print one line per check and exit 1 on a failure.
+
+Testing `install.sh` or `uninstall.sh` in a sandbox needs care: `HERMES_HOME` isolates the plugins and configs, but the timer's systemd units live in your real `~/.config/systemd/user`. Run `install.sh --no-timer`, and run `uninstall.sh` only as a copy without its `systemctl` and `~/.config/systemd` lines, or it disables your real timer.
 
 A quick static check before committing:
 

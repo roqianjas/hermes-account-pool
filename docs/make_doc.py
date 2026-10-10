@@ -16,7 +16,7 @@ from reportlab.platypus import (CondPageBreak, KeepTogether, PageBreak, Paragrap
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 from reportlab.platypus.tableofcontents import TableOfContents
 
-VERSION = "3.5.0"
+VERSION = "3.5.1"
 REPO = "github.com/roqianjas/hermes-account-pool"
 FOOTER = f"Hermes plugin account-pool {VERSION} · {REPO}"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hermes-account-pool.pdf")
@@ -167,10 +167,14 @@ git clone https://github.com/roqianjas/hermes-account-pool.git
 cd hermes-account-pool
 ./install.sh --set-strategy
 """)
-P(C("install.sh") + " mengerjakan lima hal:")
+P(C("install.sh") + " mengerjakan enam hal:")
 OL(["Menyalin " + C("account-pool") + " (beserta halaman Hermes Desktop) dan " + C("account-pool-tracker") + " ke " + C("$HERMES_HOME/plugins/")
-    + " (biasanya " + C("~/.hermes/plugins/") + "), lalu mengaktifkan " + C("account-pool") + " <b>hanya di profil default</b>.",
-    "Membuat symlink dan mengaktifkan " + C("account-pool-tracker") + " di setiap profil di " + C("$HERMES_HOME/profiles/")
+    + " (biasanya " + C("~/.hermes/plugins/") + "), lalu mengaktifkan " + C("account-pool") + " di <b>profil default</b>, "
+    "tempat perintahnya berada.",
+    "Menambahkan " + C("account-pool") + " ke " + C("plugins.enabled") + " setiap profil di " + C("$HERMES_HOME/profiles/")
+    + ", untuk halaman Accounts di Hermes Desktop (alasannya di bagian 8.2). Profil itu tidak mendapat perintah atau "
+    "tool apa pun. Profil yang mencantumkan " + C("account-pool") + " di " + C("plugins.disabled") + " dilewati.",
+    "Membuat symlink dan mengaktifkan " + C("account-pool-tracker") + " di setiap profil"
     + ", supaya " + C("who") + " bisa melihat semua bot.",
     "Dengan " + C("--set-strategy") + ": mengatur " + C("credential_pool_strategies.&lt;provider&gt;: fill_first")
     + " di profil default dan semua profil lain. " + C("balance") + " membutuhkannya (bagian 5).",
@@ -189,7 +193,8 @@ table([
 ], [0.26, 0.74])
 P(C("HERMES_HOME") + " kustom dihormati dan ditulis ke file service. Sesi yang sedang berjalan baru memuat pelacak "
   "setelah " + C("/reset") + ", atau setelah gateway/desktop di-restart. Halaman Accounts butuh dua langkah lagi di "
-  "Hermes Desktop (bagian 8.1). Cek hasilnya:")
+  "Hermes Desktop (bagian 8.1). Profil yang dibuat setelah instalasi perlu " + C("./install.sh") + " lagi supaya "
+  "halaman tetap jalan saat Desktop memakai profil itu; " + C("doctor") + " menyebut profil seperti ini. Cek hasilnya:")
 code("""
 hermes account anthropic doctor
 systemctl --user list-timers hermes-account-balance.timer
@@ -206,7 +211,8 @@ P("Folder plugin lama dicadangkan ke " + C("$HERMES_HOME/plugin-backups/&lt;nama
   "backend-nya yang baru ikut dimuat.")
 H2("4.3 Uninstall")
 code("./uninstall.sh")
-P("Timer, kedua plugin (termasuk halaman Accounts), dan symlink pelacak dihapus. Akun di credential pool <b>tidak</b> disentuh. Akun yang "
+P("Timer, kedua plugin (termasuk halaman Accounts), symlink pelacak, dan entri " + C("account-pool") + " di "
+  + C("plugins.enabled") + " tiap profil dihapus. Akun di credential pool <b>tidak</b> disentuh. Akun yang "
   "diparkir <b>tidak</b> dikembalikan ke rotasi: skrip memperingatkan dan meminta konfirmasi, jadi " + C("unpark")
   + " dulu jika ingin akun itu kembali. File data dan " + C("credential_pool_strategies") + " tetap; skrip "
   "menampilkan daftar file yang bisa dihapus manual.")
@@ -482,6 +488,7 @@ $ hermes account anthropic doctor
   OK    strategy fill_first in 6 profiles
   OK    every profile uses the shared account pool
   OK    session tracker active in every profile
+  OK    Accounts page backend enabled in every profile
   OK    auth.json permissions 600
   OK    account-pool-parked.json permissions 600
   OK    balance timer active, last run 2026-10-10 18:36:09 WIB
@@ -533,15 +540,30 @@ P("Plugin " + C("account-pool") + " juga membawa halaman <b>Accounts</b> untuk H
   "siapa memakai akun apa, dan semua aksi " + C("hermes account") + " dalam bentuk tombol. Perintahnya tetap jalan "
   "seperti biasa; halaman memakai kode yang sama.")
 H2("8.1 Menyalakan halaman")
-OL(["Jalankan " + C("install.sh") + " (menyalin halaman dan mengaktifkan " + C("account-pool") + " di profil default).",
-    "Restart Hermes Desktop sekali. Desktop menjalankan backend halaman bersama plugin lain yang aktif, jadi sebelum "
+OL(["Jalankan " + C("install.sh") + " (menyalin halaman dan mencantumkan " + C("account-pool") + " di semua profil).",
+    "Restart Hermes Desktop. Desktop menjalankan backend halaman bersama plugin lain yang aktif, jadi sebelum "
     "restart ini halaman belum punya data.",
     "Di <b>Capabilities &gt; Plugins</b>, cari <b>account-pool</b> (Agent + Desktop; nama desktop-nya Accounts) dan "
     "nyalakan bagian <b>Desktop</b>. Halaman ini dikirim dalam keadaan mati, jadi belum muncul apa pun sebelum Anda "
     "menyalakannya."])
 P("Setelah itu <b>Accounts</b> muncul di sidebar. Command palette (Ctrl+K) punya " + C("Accounts: open the account pool")
   + ", dan chip di status bar juga membuka halaman ini.")
-H2("8.2 Isi halaman")
+H2("8.2 Kenapa semua profil mencantumkan account-pool")
+P("Hermes Desktop menjalankan backend-nya dengan profil yang terakhir Anda pakai (" + C("hermes --profile &lt;nama&gt; serve")
+  + "). Backend itu hanya memuat route halaman sebuah plugin jika plugin itu ada di " + C("plugins.enabled")
+  + " <b>profil tersebut</b>. Jika " + C("account-pool") + " hanya ada di profil default, halaman jalan saat Desktop "
+  "memakai profil default, dan menampilkan " + C("The account-pool backend did not answer") + " saat memakai profil lain.")
+P("Karena itu " + C("install.sh") + " menambahkan " + C("account-pool") + " ke " + C("plugins.enabled") + " semua profil. "
+  "Selain itu tidak ada yang berubah di profil-profil tersebut:")
+LI(["Agent di sebuah profil memuat plugin dari folder " + C("plugins/") + " milik profil itu sendiri, dan "
+    + C("account-pool") + " tidak ada di sana (tanpa symlink, berbeda dengan pelacak). Bot tidak mendapat perintah, tool, "
+    "atau hook apa pun darinya.",
+    "Jika suatu saat sebuah profil memuatnya juga, " + C("register()") + " mengenali profil itu dan tidak mendaftarkan "
+    "apa pun. " + C("hermes -p &lt;profil&gt; account ...") + " tetap perintah yang tidak dikenal.",
+    "Backend halaman selalu memakai pool bersama di Hermes home default, profil mana pun yang dijalankan Desktop."])
+P(C("doctor") + " memeriksa hal ini jika Hermes Desktop punya halamannya: " + C("Accounts page backend enabled in every profile")
+  + ", atau peringatan berisi nama profil yang belum mencantumkannya.")
+H2("8.3 Isi halaman")
 P("Header berisi pilihan provider, tombol <b>Live usage</b>, <b>Balance now</b>, dan <b>Add account</b>. Baris di "
   "bawahnya menunjukkan umur angka pemakaian dan kapan timer jalan berikutnya.")
 table([
@@ -566,7 +588,7 @@ P("<b>Park</b> menanyakan kapan akun kembali: saat di-unpark, 1 jam lagi, 2 jam 
 P("<b>Chip status bar</b> " + C("8/8 · 12%") + " artinya 8 dari 8 akun dalam rotasi bisa dipakai, dan akun tempat "
   "sesi berikutnya mulai ada di 12%. Muncul titik kuning saat ada peringatan aktif, merah saat tidak ada akun yang "
   "bisa dipakai. Chip disembunyikan selama provider belum punya akun atau backend belum dimuat.")
-H2("8.3 Tambah akun dan login ulang dari halaman")
+H2("8.4 Tambah akun dan login ulang dari halaman")
 OL(["<b>Add account</b>, ketik email akun, <b>Start sign-in</b>. Untuk akun yang sudah ada, pakai tombol kunci di "
     "barisnya (atau <b>Sign in again</b> di banner akun mati); itu sama dengan " + C("relogin") + ".",
     "<b>Anthropic</b>: klik <b>Copy link</b>, buka link itu di browser yang login sebagai akun tersebut (profil "
@@ -579,7 +601,7 @@ OL(["<b>Add account</b>, ketik email akun, <b>Start sign-in</b>. Untuk akun yang
 note("Tombol <b>Open in default browser</b> juga ada, tetapi browser default sering login sebagai akun lain. Cara aman: "
      "<b>Copy link</b> lalu buka di profil browser yang benar. Login yang tidak selesai dalam 15 menit kedaluwarsa, "
      "<b>Cancel</b> langsung membatalkannya, dan setiap login hanya bisa diselesaikan sekali.")
-H2("8.4 Permintaan ke provider")
+H2("8.5 Permintaan ke provider")
 table([
     ["Anda", "Permintaan"],
     ["Membuka halaman, pindah tab, melihat chip", "Tidak ada. Pemakaian dibaca dari riwayat yang ditulis timer tiap "
@@ -593,11 +615,12 @@ table([
 ], [0.34, 0.66])
 P("Endpoint pemakaian membatasi permintaan per akun (lihat Troubleshooting), jadi halaman tidak pernah memanggilnya "
   "sendiri.")
-H2("8.5 Keamanan halaman")
+H2("8.6 Keamanan halaman")
 LI(["Halaman adalah " + C("desktop/plugin.js") + ", sebuah desktop plugin Hermes. Ia hanya mengimpor SDK plugin Hermes "
     "dan React, dan hanya bicara dengan backend-nya sendiri.",
     "Backend-nya " + C("dashboard/plugin_api.py") + ", dipasang Hermes di " + C("/api/plugins/account-pool/")
-    + " untuk plugin yang ada di " + C("plugins.enabled") + ". Setiap permintaan wajib membawa session token desktop.",
+    + " jika " + C("account-pool") + " ada di " + C("plugins.enabled") + " profil yang sedang dijalankan Desktop. Setiap "
+    "permintaan wajib membawa session token desktop.",
     "Jawaban backend hanya berisi label, id, status, persen, dan waktu. Token tidak pernah keluar dari backend. Data "
     "rahasia login yang sedang berjalan (PKCE verifier Anthropic, device id Codex) tetap di memori backend.",
     "Halaman selalu memakai pool bersama di Hermes home default, profil mana pun yang sedang dibuka di jendela. Bot "
@@ -694,7 +717,7 @@ H1("13. File dan keamanan")
 table([
     ["File", "Isi"],
     [C("~/.hermes/plugins/account-pool/"), "Plugin utama (perintah " + C("hermes account") + "), adapter di "
-     + C("providers.py") + ". Hanya di profil default."],
+     + C("providers.py") + ". Perintahnya hanya terdaftar di profil default."],
     [C("~/.hermes/plugins/account-pool/desktop/"), "Halaman Accounts untuk Hermes Desktop. Desktop menyalinnya ke "
      + C("~/.hermes/desktop-plugins/account-pool/") + "."],
     [C("~/.hermes/plugins/account-pool/dashboard/"), "Backend halaman (" + C("plugin_api.py") + ") dan manifest-nya."],
@@ -755,9 +778,9 @@ table([
      "Hapus entri di profil itu, lalu tambah akun dari profil default"],
     ["doctor: last run failed", C("balance") + " terakhir gagal", C("journalctl --user -u") + "<br/>" + C("hermes-account-balance.service -n 20")],
     [C("hermes account") + " tidak dikenal", "Dijalankan dengan -p (plugin hanya di default)", "Jalankan tanpa -p"],
-    ["Halaman: " + C("The account-pool backend did not answer"), "Hermes Desktop belum di-restart setelah instalasi, "
-     "atau " + C("account-pool") + " belum aktif di profil default", C("hermes plugins enable account-pool") + ", lalu "
-     "restart Hermes Desktop"],
+    ["Halaman: " + C("The account-pool backend did not answer"), "Desktop memakai profil yang belum mencantumkan "
+     + C("account-pool") + " (profil baru, atau instalasi sebelum 3.5.1), atau belum di-restart setelah instalasi",
+     C("./install.sh") + " lagi, lalu restart Hermes Desktop. " + C("doctor") + " menyebut profil yang belum"],
     ["Tidak ada Accounts di sidebar", "Bagian Desktop plugin masih mati", "Capabilities &gt; Plugins, account-pool, "
      "nyalakan Desktop. Setelah update: Ctrl+K, " + C("Reload desktop plugins")],
     ["Tombol Live usage abu-abu", "Live usage baru jalan kurang dari 2 menit lalu", "Tunggu hitungan mundurnya"],
@@ -836,6 +859,9 @@ table([
 H1("19. Riwayat versi")
 table([
     ["Versi", "Perubahan"],
+    ["3.5.1", "Perbaikan: halaman Accounts gagal (" + C("backend did not answer") + ") saat Desktop memakai profil selain "
+     "default. " + C("install.sh") + " kini mencantumkan " + C("account-pool") + " di semua profil (tanpa perintah atau "
+     "tool di sana), " + C("doctor") + " memeriksanya."],
     ["3.5.0", "Halaman Accounts di Hermes Desktop: tabel akun, pemakaian, sesi, report, health, alerts, chip status "
      "bar, park/unpark/remove/balance, tambah akun dan login ulang dari halaman. Uji backend dan UI di " + C("tests/") + "."],
     ["3.4.3", "Dokumentasi ditulis ulang (README dan panduan ini). Tanpa perubahan kode."],

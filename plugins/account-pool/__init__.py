@@ -997,6 +997,22 @@ def _doctor_checks(provider: str) -> list:
         "session tracker active in every profile" if not missing else
         f"session tracker missing in: {', '.join(missing)} (`who` will not show them)")
 
+    # Accounts page: Hermes Desktop mounts its backend only for profiles that list account-pool
+    if (root / "desktop-plugins" / "account-pool").is_dir():
+        missing = []
+        for name, home in profiles:
+            try:
+                cfg = yaml.safe_load((home / "config.yaml").read_text()) or {}
+            except Exception:
+                cfg = {}
+            plugins = cfg.get("plugins") or {}
+            if "account-pool" not in (plugins.get("enabled") or []) or "account-pool" in (plugins.get("disabled") or []):
+                missing.append(name)
+        add("ok" if not missing else "warn",
+            "Accounts page backend enabled in every profile" if not missing else
+            f"Accounts page backend not enabled in: {', '.join(missing)} (Hermes Desktop shows "
+            "'backend did not answer' while it runs one of them). Fix: run install.sh again")
+
     # file permissions
     for path in (root / "auth.json", root / "account-pool-parked.json"):
         if path.exists():
@@ -1709,7 +1725,17 @@ def _setup(parser) -> None:
     parser.set_defaults(func=_dispatch)
 
 
+def _in_profile() -> bool:
+    """True when this process runs a named profile (HERMES_HOME=<root>/profiles/<name>)."""
+    return _home().parent.name == "profiles"
+
+
 def register(ctx) -> None:
+    # The command lives in the default profile only. install.sh also lists account-pool in every
+    # profile's plugins.enabled, so Hermes Desktop mounts the Accounts page backend whichever
+    # profile it runs; if a profile ever loads this plugin, it registers nothing there.
+    if _in_profile():
+        return
     ctx.register_cli_command(
         name="account",
         help="Manage credential-pool accounts: hermes account <provider> <action>",
