@@ -43,12 +43,16 @@ Implement only what the provider allows. Methods you leave out stay off: `has_us
 
 ## Testing without touching your real pool
 
+Create the sandbox **outside `~/.hermes`**. Hermes treats any `HERMES_HOME` under `~/.hermes` as part of your real install. When the sandbox has no accounts for a provider, it then falls back to *reading* `~/.hermes/auth.json`, and a `usage` or `balance` run could spend a real single-use refresh token and sign that account out. A sandbox elsewhere is a separate data root.
+
 ```bash
-SB=$(mktemp -d); mkdir -p $SB/plugins
-cp ~/.hermes/config.yaml $SB/
-cp -a plugins/account-pool $SB/plugins/
-export HERMES_HOME=$SB
+SB=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" hap-sandbox.XXXX)
+mkdir -p "$SB/plugins"
+cp ~/.hermes/config.yaml "$SB/"
+cp -a plugins/account-pool "$SB/plugins/"
+export HERMES_HOME=$SB          # first command prepares a runtime inside $SB (about a minute)
 hermes plugins enable account-pool
+hermes account anthropic list   # must show 0 accounts: proof the sandbox is isolated
 hermes auth add my-provider --type api-key --api-key FAKE-1 --label key-one
 hermes auth add my-provider --type api-key --api-key FAKE-2 --label key-two
 hermes account my-provider list
