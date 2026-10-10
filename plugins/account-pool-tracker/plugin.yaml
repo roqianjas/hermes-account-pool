@@ -1,7 +1,7 @@
 name: account-pool-tracker
 label: Account Pool Tracker
-version: 1.0.0
-description: "Records which credential-pool account each session uses, for `hermes account <provider> who`. No commands, no tools; one post_api_request hook."
+version: 1.1.0
+description: "Records which credential-pool account each session uses and the tokens each account used, for `hermes account <provider> who`, `report` and the Accounts page. No commands, no tools; one post_api_request hook."
 author: roqianjas
 license: MIT
 requires_hermes: ">=0.21"

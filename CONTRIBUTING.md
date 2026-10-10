@@ -12,7 +12,7 @@ Bug reports, fixes and adapters for more providers are welcome. This page covers
 | `plugins/account-pool/desktop/plugin.js` | The Accounts page in Hermes Desktop (one ES module, no build step) |
 | `plugins/account-pool/dashboard/plugin_api.py` | The page's backend: FastAPI routes under `/api/plugins/account-pool/` |
 | `plugins/account-pool/dashboard/manifest.json` | Tells Hermes to mount `plugin_api.py`; `dist/index.js` is a stub for the browser dashboard |
-| `tests/api_sandbox.py`, `tests/profile_backend.py`, `tests/ui/` | Backend tests in a sandbox (actions and sign-in; backend launched under a profile), and the page in jsdom |
+| `tests/api_sandbox.py`, `tests/profile_backend.py`, `tests/tokens_sandbox.py`, `tests/ui/` | Backend tests in a sandbox (actions and sign-in; backend launched under a profile; token counting), and the page in jsdom |
 | `plugins/account-pool-tracker/` | The `post_api_request` hook behind `who` |
 | `systemd/` | Service and timer templates, filled in by `install.sh` |
 | `install.sh`, `uninstall.sh` | Install and remove everything |
@@ -75,6 +75,7 @@ Rules for the page:
 3. **One action at a time.** POST routes that change the pool run inside `_exclusive()`, which also points `HERMES_HOME` at the default root, so every profile sees the shared pool.
 4. **The command stays in the default profile.** `install.sh` lists `account-pool` in every profile's `plugins.enabled`, because Hermes Desktop mounts the page's routes only for plugins enabled in the profile it runs. `register()` returns early in a profile (`_in_profile()`); keep anything you add to `register()` behind that check.
 5. **Plain ESM in `plugin.js`.** Import only from `@hermes/plugin-sdk`, `react` and `react/jsx-runtime`, write elements with `createElement`, and style with the desktop's `--ui-*` variables so themes keep working. An identifier that is not imported is a runtime `ReferenceError`; `tests/ui/run.mjs` catches it.
+6. **Use the SDK's controls.** `Select`, `Switch`, `Input`, `Button` and `SegmentedControl` follow the theme. A native `<select>` opens a list that Chromium draws in system colors, white on a dark theme. Reach SDK exports that older Hermes versions lack through `import * as sdk`, with a fallback, so a missing export cannot stop the page from loading.
 
 To try a change in Hermes Desktop, copy the plugin to `~/.hermes/plugins/account-pool/`. Changes to `plugin.js` load with Ctrl+K, `Reload desktop plugins`; changes to `plugin_api.py` or `__init__.py` need a Hermes Desktop restart.
 
@@ -101,7 +102,7 @@ unset HERMES_HOME; rm -rf "$SB"
 
 Usage needs a real account, so test `usage` and `balance --dry-run` with one, a few times at most, and say in the pull request which account type you tested (for example Pro, Team, or API key).
 
-The page has two tests that need no real account:
+The page has these tests, none needing a real account:
 
 ```bash
 # backend: fake API-key accounts and a fake sign-in, in a sandbox
@@ -114,11 +115,16 @@ SB=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" hap-sandbox.XXXX)
 HERMES_HOME=$SB ~/.hermes/hermes-agent/venv/bin/python tests/profile_backend.py
 rm -rf "$SB"
 
+# token counting: tracker hook, report, page backend (own sandbox)
+SB=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" hap-sandbox.XXXX)
+HERMES_HOME=$SB ~/.hermes/hermes-agent/venv/bin/python tests/tokens_sandbox.py
+rm -rf "$SB"
+
 # the page in jsdom, every tab, dialog and button, answered from tests/ui/fixtures.json
 node tests/ui/run.mjs
 ```
 
-`tests/ui/run.mjs` borrows React, jsdom and Testing Library from the `node_modules` of your Hermes Agent checkout (`~/.hermes/hermes-agent`, or set `HERMES_AGENT_DIR`). All three print one line per check and exit 1 on a failure.
+`tests/ui/run.mjs` borrows React, jsdom and Testing Library from the `node_modules` of your Hermes Agent checkout (`~/.hermes/hermes-agent`, or set `HERMES_AGENT_DIR`). All of them print one line per check and exit 1 on a failure.
 
 Testing `install.sh` or `uninstall.sh` in a sandbox needs care: `HERMES_HOME` isolates the plugins and configs, but the timer's systemd units live in your real `~/.config/systemd/user`. Run `install.sh --no-timer`, and run `uninstall.sh` only as a copy without its `systemctl` and `~/.config/systemd` lines, or it disables your real timer.
 

@@ -16,7 +16,7 @@ from reportlab.platypus import (CondPageBreak, KeepTogether, PageBreak, Paragrap
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 from reportlab.platypus.tableofcontents import TableOfContents
 
-VERSION = "3.5.1"
+VERSION = "3.6.0"
 REPO = "github.com/roqianjas/hermes-account-pool"
 FOOTER = f"Hermes plugin account-pool {VERSION} · {REPO}"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hermes-account-pool.pdf")
@@ -175,7 +175,7 @@ OL(["Menyalin " + C("account-pool") + " (beserta halaman Hermes Desktop) dan " +
     + ", untuk halaman Accounts di Hermes Desktop (alasannya di bagian 8.2). Profil itu tidak mendapat perintah atau "
     "tool apa pun. Profil yang mencantumkan " + C("account-pool") + " di " + C("plugins.disabled") + " dilewati.",
     "Membuat symlink dan mengaktifkan " + C("account-pool-tracker") + " di setiap profil"
-    + ", supaya " + C("who") + " bisa melihat semua bot.",
+    + ", supaya " + C("who") + " bisa melihat semua bot dan token setiap bot ikut terhitung.",
     "Dengan " + C("--set-strategy") + ": mengatur " + C("credential_pool_strategies.&lt;provider&gt;: fill_first")
     + " di profil default dan semua profil lain. " + C("balance") + " membutuhkannya (bagian 5).",
     "Memasang dan menyalakan " + C("hermes-account-balance.timer") + " (balance tiap 5 menit), lalu menjalankannya sekali.",
@@ -187,7 +187,7 @@ table([
      + C("ExecStart") + " sendiri."],
     [C("--set-strategy"), "Atur " + C("fill_first") + " untuk tiap provider di semua profil. Tanpa opsi ini strategi "
      "tidak disentuh, dan " + C("doctor") + " memberi tahu jika salah."],
-    [C("--no-tracker"), "Tanpa pelacak sesi. " + C("who") + " akan kosong."],
+    [C("--no-tracker"), "Tanpa pelacak sesi. " + C("who") + " akan kosong dan token tidak dihitung."],
     [C("--no-timer"), "Tanpa timer. " + C("balance") + " dijalankan sendiri."],
     [C("-h") + ", " + C("--help"), "Tampilkan opsi."],
 ], [0.26, 0.74])
@@ -424,17 +424,26 @@ code("""
 $ hermes account anthropic report --hours 24
 [anthropic] usage report: last 24h (45 snapshots, 5.7h covered, from 10-10 12:53)
   'used' adds up 5-hour-window percent: 100 = one full 5-hour window.
-  account                              used  share  peak  time >= 90%
-  heidi@example.com                      17    28%   17%         0 min
-  bob@example.com                        11    18%    9%         0 min
-  carol@example.com                      11    18%   11%         0 min
+  account                              used  share  peak  time >= 90%    tokens
+  heidi@example.com                      17    28%   17%         0 min     3.1M
+  bob@example.com                        11    18%    9%         0 min     1.9M
+  carol@example.com                      11    18%   11%         0 min     2.2M
   ...
-  total                                  60
+  total                                  60                                9.8M
+  Tokens through Hermes: 41.2k input, 512.0k output, 8.6M cache read, 687.0k cache write
+  1204 requests.
   Busiest hours: 18:00-19:00 (25), 13:00-14:00 (18), 17:00-18:00 (14)
   Time with EVERY account >= 90%: 0 min
 """)
 LI([C("used") + ": total kenaikan pemakaian. 100 berarti setara satu jendela 5 jam penuh. " + C("peak")
     + ": nilai tertinggi. " + C("time >= 90%") + ": berapa lama akun hampir habis.",
+    C("tokens") + ": jumlah token yang dikirim dan diterima Hermes lewat akun itu selama periode laporan (input, output, "
+    "cache read, dan cache write dijumlahkan). Baris di bawah tabel merinci totalnya. Pelacak sesi menghitungnya di "
+    "setiap panggilan API mulai versi 1.1.0; jika periode dimulai lebih awal, baris itu menyebut " + C("counted since")
+    + ". " + C("-") + " berarti belum ada panggilan yang terhitung.",
+    C("used") + " dan " + C("tokens") + " mengukur hal berbeda. " + C("used") + " adalah persentase dari provider: "
+    "mencakup pemakaian akun di aplikasi lain (claude.ai, Claude Code) dan memberi bobot berbeda per jenis token "
+    "(cache read jauh lebih murah daripada token output). " + C("tokens") + " hanya menghitung Hermes di komputer ini.",
     "Dengan data minimal 2 jam dan beban nyata, laporan memberi saran: jika <b>semua akun ≥ 90%</b> pernah terjadi "
     "bersamaan, laporan menyarankan menambah akun; jika satu akun menanggung lebih dari separuh beban, laporan "
     "mengarahkan ke " + C("who") + ".",
@@ -568,14 +577,16 @@ P("Header berisi pilihan provider, tombol <b>Live usage</b>, <b>Balance now</b>,
   "bawahnya menunjukkan umur angka pemakaian dan kapan timer jalan berikutnya.")
 table([
     ["Tab", "Isi"],
-    ["Accounts", "Empat kartu: akun dalam rotasi, akun parkir, akun tempat sesi berikutnya mulai beserta pemakaiannya, "
-     "dan jumlah sesi 30 menit terakhir. Lalu tabel rotasi sesuai urutan pool: status, bar pemakaian 5 jam, garis tren "
-     "5 jam terakhir, jam reset (atau " + C("back HH:MM") + " saat diistirahatkan), profil yang memakai akun itu "
+    ["Accounts", "Lima kartu: akun dalam rotasi, akun parkir, akun tempat sesi berikutnya mulai beserta pemakaiannya, "
+     "jumlah sesi 30 menit terakhir, dan token 24 jam terakhir. Lalu tabel rotasi sesuai urutan pool: status, bar "
+     "pemakaian 5 jam, garis tren 5 jam terakhir, jam reset (atau " + C("back HH:MM") + " saat diistirahatkan), "
+     "token 24 jam terakhir (arahkan kursor untuk rincian input, output, cache, jumlah request, dan jendela 5 jam yang "
+     "sedang berjalan), profil yang memakai akun itu "
      "(arahkan kursor untuk melihat sesi, platform, dan model), serta tombol <b>Sign in again</b>, <b>Park</b>, "
      "<b>Remove</b>. Di bawahnya akun parkir: pemakaian terakhir, sejak kapan, kapan kembali, tombol <b>Unpark</b> dan "
      "<b>Remove</b>. Peringatan aktif tampil sebagai banner di atas; akun mati mendapat tombol <b>Sign in again</b>."],
     ["Report", "Angka " + C("report") + " untuk 24 jam, 3 hari, atau 7 hari: beban per akun, porsi, puncak, waktu "
-     "≥ 90%, jam tersibuk, dan saran."],
+     "≥ 90%, token, jam tersibuk, dan saran."],
     ["Health", "Status timer, umur riwayat pemakaian, peringatan aktif. <b>Run doctor</b> menjalankan pemeriksaan "
      + C("doctor") + "; <b>Check accounts</b> menjalankan " + C("check") + " dan menampilkan hasilnya."],
     ["Alerts", "Sakelar desktop dan Telegram, profil yang bot-nya mengirim pesan Telegram, <b>Send a test alert</b>, "
@@ -721,11 +732,12 @@ table([
     [C("~/.hermes/plugins/account-pool/desktop/"), "Halaman Accounts untuk Hermes Desktop. Desktop menyalinnya ke "
      + C("~/.hermes/desktop-plugins/account-pool/") + "."],
     [C("~/.hermes/plugins/account-pool/dashboard/"), "Backend halaman (" + C("plugin_api.py") + ") dan manifest-nya."],
-    [C("~/.hermes/plugins/account-pool-tracker/"), "Pelacak sesi; di-symlink ke " + C("profiles/*/plugins/")
-     + ". Tanpa perintah, tanpa tool, tanpa token."],
+    [C("~/.hermes/plugins/account-pool-tracker/"), "Pelacak sesi dan penghitung token; di-symlink ke "
+     + C("profiles/*/plugins/") + ". Tanpa perintah, tanpa tool, tanpa kredensial."],
     [C("~/.hermes/auth.json"), "Credential pool bersama semua profil (milik Hermes)"],
     [C("~/.hermes/account-pool-parked.json"), "Akun yang diparkir. <b>Berisi token OAuth.</b>"],
     [C("~/.hermes/account-pool-sessions.json"), "Sesi dan akunnya, 24 jam terakhir (tanpa token)"],
+    [C("~/.hermes/account-pool-tokens.json"), "Jumlah token per akun dalam blok 15 menit, 8 hari terakhir. Hanya angka."],
     [C("~/.hermes/account-pool-history.jsonl"), "Riwayat pemakaian, satu snapshot per putaran timer. Dipangkas ke "
      "14 hari terakhir saat file melewati 3 MB."],
     [C("~/.hermes/account-pool-alerts.json"), "Peringatan yang sudah terkirim (satu pesan per kejadian)"],
@@ -810,7 +822,11 @@ qa = [
      + " menandai FAIL, dan pindah akun bawaan Hermes tetap jalan seperti biasa."),
     ("Bisakah bot pekerja menjalankan " + C("hermes account") + "?",
      "Tidak, dan itu disengaja. Perintahnya hanya dipasang di profil default. Bot hanya menjalankan pelacak, yang "
-     "mencatat akun mana yang mereka pakai."),
+     "mencatat akun mana yang mereka pakai dan berapa token yang mereka habiskan di akun itu."),
+    ("Kenapa token suatu akun banyak tetapi persentasenya rendah, atau sebaliknya?",
+     "Persentase berasal dari provider, untuk semua pemakaian akun itu, dengan bobot per jenis token. Sebagian besar "
+     "yang dikirim Hermes adalah cache read, yang bobotnya kecil. Pemakaian di Claude Code atau claude.ai menaikkan "
+     "persentase tanpa menambah token Hermes."),
     ("Berapa akun yang dibutuhkan?",
      "Minimal dua. " + C("report") + " memberi tahu jika seluruh pool pernah hampir penuh bersamaan; itu tanda untuk "
      "menambah akun."),
@@ -826,6 +842,8 @@ LI(["Pemakaian berasal dari <b>endpoint yang tidak didokumentasikan resmi</b>: "
     "Kuota mingguan Anthropic tidak tersedia untuk akun Team, jadi balance untuk " + C("anthropic") + " memakai jendela 5 jam.",
     "Adapter Codex baru diuji read-only pada akun ChatGPT Team asli; " + C("add") + " dengan login Codex sungguhan "
     "belum pernah dijalankan. Perintah umum untuk provider lain baru dites dengan akun API key.",
+    "Hitungan token dimulai saat pelacak 1.1.0 pertama kali jalan dan hanya mencakup Hermes di komputer ini. "
+    "Disimpan 8 hari dalam blok 15 menit, jadi awal periode dibulatkan ke seperempat jam terdekat.",
     C("who") + " mencari sesi lewat stack thread yang sedang berjalan. Jika suatu update Hermes mengubah struktur "
     "internalnya, " + C("who") + " kosong tetapi bot tidak terganggu (pelacak menelan semua error).",
     C("add") + " dan " + C("relogin") + " dengan OAuth butuh terminal interaktif atau halaman Accounts untuk menempel "
@@ -859,6 +877,8 @@ table([
 H1("19. Riwayat versi")
 table([
     ["Versi", "Perubahan"],
+    ["3.6.0", "Jumlah token per akun: pelacak sesi 1.1.0 menghitung token setiap panggilan API, " + C("report")
+     + " dan halaman Accounts menampilkannya. Perbaikan: daftar profil Telegram di tab Alerts kini mengikuti tema."],
     ["3.5.1", "Perbaikan: halaman Accounts gagal (" + C("backend did not answer") + ") saat Desktop memakai profil selain "
      "default. " + C("install.sh") + " kini mencantumkan " + C("account-pool") + " di semua profil (tanpa perintah atau "
      "tool di sana), " + C("doctor") + " memeriksanya."],

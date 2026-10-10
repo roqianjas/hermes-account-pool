@@ -4,6 +4,7 @@ import { NM, require } from './env.mjs'
 
 const React = require('react')
 const h = React.createElement
+const Fragment = React.Fragment
 const RQ = await import(NM + '@tanstack/react-query/build/modern/index.js')
 export const { useQuery, useQueryClient } = RQ
 
@@ -40,6 +41,13 @@ export const SegmentedControl = ({ options, value, onChange }) =>
 export const StatusDot = ({ tone }) => h('span', { 'data-tone': tone })
 export const Switch = ({ checked, onCheckedChange, disabled }) =>
   h('button', { role: 'switch', 'aria-checked': checked, disabled, onClick: () => onCheckedChange(!checked) })
+// Select family: a native <select> stand-in (the real one is a themed Radix popover).
+export const Select = ({ value, disabled, onValueChange, children }) =>
+  h('select', { 'data-sdk-select': true, value, disabled, onChange: e => onValueChange(e.target.value) }, children)
+export const SelectTrigger = () => null
+export const SelectValue = () => null
+export const SelectContent = ({ children }) => h(Fragment, null, children)
+export const SelectItem = ({ value, children }) => h('option', { value }, children)
 export const Tip = ({ label, children }) => h('span', { title: typeof label === 'string' ? label : undefined }, children)
 
 export function ConfirmDialog({ open, onClose, onConfirm, title, description, children, confirmLabel = 'Confirm' }) {

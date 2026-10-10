@@ -1208,12 +1208,60 @@ def _cmd_relogin(args) -> int:
     return _accept_relogin(provider, label, old_id, old_priority, new[0])
 
 
+TOKEN_KEYS = ("input", "output", "cache_read", "cache_write", "requests")
+TOKEN_BUCKET = 900         # seconds per bucket, as written by the session tracker
+
+
+def _token_buckets(provider: str) -> tuple:
+    """({label: {bucket_start: [in, out, cache_read, cache_write, requests]}}, counting_since or None).
+
+    Written by the session tracker (account-pool-tracker >= 1.1.0) after every API call through the pool."""
+    data = _load_json(_root() / "account-pool-tokens.json", {}) or {}
+    raw = ((data.get("buckets") or {}).get(provider)) or {}
+    out = {}
+    for label, slots in raw.items():
+        rows = {}
+        for k, v in (slots or {}).items():
+            try:
+                rows[float(k)] = [int(x) for x in v[:5]]
+            except (TypeError, ValueError):
+                continue
+        out[label] = rows
+    return out, data.get("since")
+
+
+def _token_sum(rows: dict, since: float, until: float = None) -> dict:
+    """Totals of the buckets that start at or after `since` (and before `until`)."""
+    acc = [0, 0, 0, 0, 0]
+    for start, v in rows.items():
+        if start >= since and (until is None or start < until):
+            for i in range(5):
+                acc[i] += v[i] if i < len(v) else 0
+    out = dict(zip(TOKEN_KEYS, acc))
+    out["total"] = sum(acc[:4])
+    return out
+
+
+def _fmt_tokens(n) -> str:
+    n = float(n or 0)
+    for unit, size in (("B", 1e9), ("M", 1e6), ("k", 1e3)):
+        if n >= size:
+            return f"{n / size:.1f}{unit}"
+    return f"{n:.0f}"
+
+
 def _report_data(provider: str, hours: float) -> dict:
     """Load per account from the usage history. Keys: snapshots, span_h, start, accounts (label, used,
     share, peak, hot_min; heaviest first), total, busiest [(hour, used)], full_min, advice."""
-    hist = _read_history(provider, time.time() - hours * 3600)
+    since_ts = time.time() - hours * 3600
+    hist = _read_history(provider, since_ts)
+    buckets, counting = _token_buckets(provider)
+    tokens = {label: _token_sum(rows, since_ts) for label, rows in buckets.items()}
+    tokens = {label: t for label, t in tokens.items() if t["requests"]}
+    tokens_total = _token_sum({0: [sum(t[k] for t in tokens.values()) for k in TOKEN_KEYS]}, 0)
     out = {"hours": hours, "snapshots": len(hist), "window": _window(provider), "accounts": [], "total": 0.0,
-           "busiest": [], "full_min": 0.0, "span_h": 0.0, "start": None, "advice": ""}
+           "busiest": [], "full_min": 0.0, "span_h": 0.0, "start": None, "advice": "",
+           "tokens_total": tokens_total, "tokens_since": counting}
     if len(hist) < 2:
         return out
     series = defaultdict(list)
@@ -1253,8 +1301,10 @@ def _report_data(provider: str, hours: float) -> dict:
         span_h=span, start=hist[0]["ts"], total=total, full_min=full_min, advice=advice,
         busiest=sorted(hourly.items(), key=lambda kv: -kv[1])[:3],
         accounts=[{"label": label, "used": burn[label], "share": burn[label] / total * 100 if total else 0,
-                   "peak": peak[label], "hot_min": hot[label]}
-                  for label in sorted(series, key=lambda l: -burn[l])])
+                   "peak": peak[label], "hot_min": hot[label], "tokens": tokens.get(label)}
+                  for label in sorted(series, key=lambda l: -burn[l])]
+        + [{"label": label, "used": 0.0, "share": 0.0, "peak": 0.0, "hot_min": 0.0, "tokens": tokens[label]}
+           for label in sorted(set(tokens) - set(series), key=lambda l: -tokens[l]["total"])])
     return out
 
 
@@ -1276,10 +1326,20 @@ def _cmd_report(args) -> int:
           f"from {time.strftime('%m-%d %H:%M', time.localtime(data['start']))})")
     w = data["window"]
     _p(f"  'used' adds up {w}-window percent: 100 = one full {w} window.")
-    _p(f"  {'account':34s} {'used':>6s} {'share':>6s} {'peak':>5s}  {'time >= 90%':>11s}")
+    _p(f"  {'account':34s} {'used':>6s} {'share':>6s} {'peak':>5s}  {'time >= 90%':>11s}  {'tokens':>8s}")
     for a in data["accounts"]:
-        _p(f"  {a['label']:34s} {a['used']:6.0f} {a['share']:5.0f}% {a['peak']:4.0f}%  {a['hot_min']:8.0f} min")
-    _p(f"  {'total':34s} {data['total']:6.0f}")
+        tok = _fmt_tokens(a["tokens"]["total"]) if a.get("tokens") else "-"
+        _p(f"  {a['label']:34s} {a['used']:6.0f} {a['share']:5.0f}% {a['peak']:4.0f}%  {a['hot_min']:8.0f} min  {tok:>7s}")
+    tt = data["tokens_total"]
+    _p(f"  {'total':34s} {data['total']:6.0f}{'':29s}{_fmt_tokens(tt['total']) if tt['requests'] else '-':>7s}")
+    if tt["requests"]:
+        since = data.get("tokens_since")
+        _p(f"  Tokens through Hermes: {_fmt_tokens(tt['input'])} input, {_fmt_tokens(tt['output'])} output, "
+           f"{_fmt_tokens(tt['cache_read'])} cache read, {_fmt_tokens(tt['cache_write'])} cache write")
+        _p(f"  {tt['requests']} requests"
+           + (f", counted since {time.strftime('%m-%d %H:%M', time.localtime(since))}." if since and since > data['start'] else "."))
+    else:
+        _p("  Tokens: none counted yet. The session tracker counts them from version 1.1.0 on.")
     if data["busiest"]:
         _p("  Busiest hours: " + ", ".join(f"{h:02d}:00-{(h + 1) % 24:02d}:00 ({v:.0f})" for h, v in data["busiest"]))
     _p(f"  Time with EVERY account >= 90%: {data['full_min']:.0f} min")

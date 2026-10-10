@@ -2,7 +2,7 @@
 
 Run several accounts of one provider in [Hermes Agent](https://hermes-agent.nousresearch.com/docs) and manage them from one command, `hermes account`, or from an Accounts page in Hermes Desktop. Add accounts with a verified email, see live usage per account, spread the load before an account runs out, park accounts for a while, see which bot is on which account, and get an alert when something needs you.
 
-Version 3.5.1 · MIT · Hermes Agent ≥ 0.21 · Linux with systemd · Indonesian PDF guide in [`docs/`](docs/hermes-account-pool.pdf)
+Version 3.6.0 · MIT · Hermes Agent ≥ 0.21 · Linux with systemd · Indonesian PDF guide in [`docs/`](docs/hermes-account-pool.pdf)
 
 ## Contents
 
@@ -77,7 +77,7 @@ cd hermes-account-pool
 
 1. Copies `account-pool` (with the Hermes Desktop page) and `account-pool-tracker` to `$HERMES_HOME/plugins/` (default `~/.hermes/plugins/`) and enables `account-pool` in the **default profile**, where the command lives.
 2. Adds `account-pool` to `plugins.enabled` of every profile under `$HERMES_HOME/profiles/`, for the Accounts page in Hermes Desktop ([why](#why-every-profile-lists-account-pool)). Profiles get no command and no tools from it. A profile with `account-pool` in `plugins.disabled` is skipped.
-3. Symlinks and enables `account-pool-tracker` in every profile, so `who` can see every bot.
+3. Symlinks and enables `account-pool-tracker` in every profile, so `who` can see every bot and tokens are counted for every bot.
 4. With `--set-strategy`: sets `credential_pool_strategies.<provider>: fill_first` in the default profile and every other profile. `balance` needs this (see [Concepts](#concepts)).
 5. Installs and starts `hermes-account-balance.timer`, which runs `balance` every 5 minutes, and runs it once right away.
 6. Runs `hermes account <provider> doctor`.
@@ -86,7 +86,7 @@ cd hermes-account-pool
 |---|---|
 | `--provider <name>` | Provider the timer balances (default `anthropic`). Repeat for several: `--provider anthropic --provider openai-codex`. Each gets its own `ExecStart` line. |
 | `--set-strategy` | Set `fill_first` for each provider in every profile. Without it the strategy is left alone and `doctor` tells you if it is wrong. |
-| `--no-tracker` | Skip the session tracker. `who` stays empty. |
+| `--no-tracker` | Skip the session tracker. `who` stays empty and no tokens are counted. |
 | `--no-timer` | Skip the timer. Run `balance` yourself. |
 | `-h`, `--help` | Show the options. |
 
@@ -316,18 +316,22 @@ Columns: profile, platform, session id, model, last API call. `--minutes 120` wi
 $ hermes account anthropic report --hours 24
 [anthropic] usage report: last 24h (45 snapshots, 5.7h covered, from 10-10 12:53)
   'used' adds up 5-hour-window percent: 100 = one full 5-hour window.
-  account                              used  share  peak  time >= 90%
-  heidi@example.com                      17    28%   17%         0 min
-  bob@example.com                        11    18%    9%         0 min
-  carol@example.com                      11    18%   11%         0 min
+  account                              used  share  peak  time >= 90%    tokens
+  heidi@example.com                      17    28%   17%         0 min     3.1M
+  bob@example.com                        11    18%    9%         0 min     1.9M
+  carol@example.com                      11    18%   11%         0 min     2.2M
   ...
-  total                                  60
+  total                                  60                                9.8M
+  Tokens through Hermes: 41.2k input, 512.0k output, 8.6M cache read, 687.0k cache write
+  1204 requests.
   Busiest hours: 18:00-19:00 (25), 13:00-14:00 (18), 17:00-18:00 (14)
   Time with EVERY account >= 90%: 0 min
 ```
 
 - `used`: the sum of usage increases. 100 equals one full 5-hour window.
 - `peak`: the highest value seen. `time >= 90%`: how long the account was nearly full.
+- `tokens`: the tokens Hermes sent and received on the account in the period: input, output, cache read and cache write, summed. The two lines under the table split the total and count the requests. The session tracker counts them on every API call from version 1.1.0 on, so a period that starts earlier says `counted since`. `-`: no call counted.
+- `used` and `tokens` measure different things. `used` is the provider's own percentage, which includes the account's use in other apps (claude.ai, Claude Code) and weights token types differently (a cache read costs much less than an output token). `tokens` covers only Hermes on this computer.
 - With at least 2 hours of data and some real load, the report adds advice: when every account was ≥ 90% at the same time, it suggests adding an account; when one account carried more than half the load, it points you to `who`.
 - The default window is 24 hours (`--hours N`). History covers at least the last 14 days.
 
@@ -446,8 +450,8 @@ The header has a provider switch (providers with accounts in the pool, plus the 
 
 | Tab | Content |
 |---|---|
-| Accounts | Four cards: accounts in rotation, parked accounts, the account the next session starts on with its usage, sessions in the last 30 minutes. Then the rotation table in pool order: status, 5-hour usage bar, trend over the last 5 hours, reset time (or `back HH:MM` while benched), the profiles using the account (hover for session, platform and model) and the row buttons **Sign in again**, **Park** and **Remove**. Parked accounts follow with their last known usage, since when they are parked, when they return, and **Unpark** and **Remove**. Active alerts show as a banner on top, a dead account with a **Sign in again** button. |
-| Report | The `report` numbers for 24 hours, 3 days or 7 days: load per account, share, peak, time at 90% or more, busiest hours and the advice line. |
+| Accounts | Five cards: accounts in rotation, parked accounts, the account the next session starts on with its usage, sessions in the last 30 minutes, tokens in the last 24 hours. Then the rotation table in pool order: status, 5-hour usage bar, trend over the last 5 hours, reset time (or `back HH:MM` while benched), tokens in the last 24 hours (hover for input, output, cache, requests and the current 5-hour window), the profiles using the account (hover for session, platform and model) and the row buttons **Sign in again**, **Park** and **Remove**. Parked accounts follow with their last known usage, since when they are parked, when they return, and **Unpark** and **Remove**. Active alerts show as a banner on top, a dead account with a **Sign in again** button. |
+| Report | The `report` numbers for 24 hours, 3 days or 7 days: load per account, share, peak, time at 90% or more, tokens, busiest hours and the advice line. |
 | Health | Timer state, age of the usage history, active alerts. **Run doctor** runs the `doctor` checks; **Check accounts** runs `check` and shows its output. |
 | Alerts | Desktop and Telegram switches, the profile whose bot sends Telegram alerts, **Send a test alert**, and the alerts active now. |
 
@@ -561,7 +565,7 @@ Adding an adapter for another provider is a single class; see [CONTRIBUTING.md](
 | `plugins/account-pool/` | The `hermes account` command (`__init__.py`) and the provider adapters (`providers.py`). The command registers in the default profile only. |
 | `plugins/account-pool/desktop/` | The Accounts page for Hermes Desktop (`plugin.js`). Hermes Desktop copies it to `$HERMES_HOME/desktop-plugins/account-pool/`. |
 | `plugins/account-pool/dashboard/` | The page's backend (`plugin_api.py`) and its manifest. `dist/index.js` only tells the browser dashboard that the page lives in Hermes Desktop. |
-| `plugins/account-pool-tracker/` | A `post_api_request` hook that records `{profile, session, platform, model, account label}`. No commands, no tools, no tokens; it swallows every error so it can never break a bot. |
+| `plugins/account-pool-tracker/` | A `post_api_request` hook that records `{profile, session, platform, model, account label}` and adds each call's token counts to its account. No commands, no tools, no credentials; it swallows every error so it can never break a bot. |
 | `systemd/` | The service and timer templates used by `install.sh`. |
 
 Data files, all mode `600`, in `$HERMES_HOME`:
@@ -570,6 +574,7 @@ Data files, all mode `600`, in `$HERMES_HOME`:
 |---|---|
 | `account-pool-parked.json` | Parked accounts. **Contains OAuth tokens.** |
 | `account-pool-sessions.json` | Sessions and their account, last 24 hours (no tokens) |
+| `account-pool-tokens.json` | Token counts per account in 15-minute buckets, last 8 days. Numbers only. |
 | `account-pool-history.jsonl` | Usage snapshots, one per timer run. Trimmed to the last 14 days once the file passes 3 MB. |
 | `account-pool-alerts.json` | Alerts already sent, so each incident is reported once |
 | `account-pool.json` | Alert settings |
@@ -628,7 +633,10 @@ Yes, with a separate sign-in there. The quota is shared, so that use shows up in
 `usage`, `report` and usage-based ordering stop, `doctor` reports FAIL, and Hermes' built-in rotation keeps working as before.
 
 **Can a worker bot run `hermes account`?**
-No. The command is installed in the default profile only, on purpose. Bots run the tracker, which only records which account they use.
+No. The command is installed in the default profile only, on purpose. Bots run the tracker, which only records which account they use and how many tokens they spent on it.
+
+**Why does an account show many tokens but a low percentage, or the other way round?**
+The percentage is the provider's, for everything on the account, weighted by token type. Most of what Hermes sends is cache reads, which count for little. Use against Claude Code or claude.ai raises the percentage without adding Hermes tokens.
 
 **How many accounts do I need?**
 At least two. `report` tells you when the whole pool was nearly full at the same time, which is the signal to add one.
@@ -638,6 +646,7 @@ At least two. `report` tells you when the whole pool was nearly full at the same
 - Usage comes from **undocumented endpoints**: `https://api.anthropic.com/api/oauth/usage` and `https://chatgpt.com/backend-api/wham/usage` (the one behind Codex CLI's `/status`). They can change or rate-limit without notice. The plugin sends the same client headers as Hermes' own usage fetcher.
 - Anthropic weekly quotas are not exposed for Team accounts, so `balance` uses the 5-hour window for `anthropic`.
 - Adapters exist for `anthropic` and `openai-codex`. The generic commands were tested for other providers with API-key entries only. The Codex adapter was verified read-only against a real ChatGPT Team account; `add` with a real Codex sign-in has not been run yet.
+- Token counts start when tracker 1.1.0 first runs and cover Hermes on this computer only. They are kept for 8 days, in 15-minute buckets, so a period starts at the nearest quarter hour.
 - `who` finds the agent object by scanning running thread frames. A future Hermes refactor may leave `who` empty, but it can never break the bots.
 - `add` and `relogin` with OAuth need an interactive terminal or the Accounts page to paste the code. The page's Codex sign-in was tested up to the device code; a full Codex sign-in has not been run yet.
 - The Accounts page follows the Hermes Desktop plugin SDK as of Hermes Agent 0.21.5. A future SDK change can break the page; the command is not affected.

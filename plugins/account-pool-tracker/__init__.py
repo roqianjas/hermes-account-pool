@@ -1,15 +1,16 @@
-"""Record which credential-pool account each session is using.
+"""Record which credential-pool account each session is using, and how many tokens each account used.
 
-Companion to the `account-pool` plugin (`hermes account <provider> who`).
+Companion to the `account-pool` plugin (`hermes account <provider> who`, `report`, the Accounts page).
 Hermes does not persist the account chosen for a session, so this hook reads
-the live pool from the running agent after each API call and writes
-{profile, session, platform, model, account} to
-<hermes root>/account-pool-sessions.json (mode 600). Labels and ids only,
-never tokens.
+the live pool from the running agent after each API call and writes:
 
-Writes are throttled: once per session per minute, or immediately when the
-session's account changes (e.g. after a rotation). Any failure is swallowed
-so the hook can never break a turn.
+- {profile, session, platform, model, account} to <hermes root>/account-pool-sessions.json.
+  Throttled: once per session per minute, or immediately when the session's account changes.
+- the call's token counts (input, output, cache read, cache write, 1 request) added to a
+  15-minute bucket of that account in <hermes root>/account-pool-tokens.json. Every call.
+
+Both files are mode 600 and hold labels, ids and numbers only, never credentials.
+Any failure is swallowed so the hook can never break a turn.
 """
 from __future__ import annotations
 
@@ -19,6 +20,8 @@ import time
 from pathlib import Path
 
 KEEP_SECONDS = 24 * 3600
+TOKEN_BUCKET = 900                 # seconds per token bucket
+TOKEN_KEEP = 8 * 24 * 3600         # token buckets older than this are dropped
 _last: dict[str, tuple[str, float]] = {}
 
 
@@ -86,6 +89,46 @@ def _write(root: Path, key: str, record: dict) -> None:
         os.replace(tmp, path)
 
 
+def _replace_json(path: Path, data: dict) -> None:
+    tmp = path.with_suffix(".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        json.dump(data, fh, separators=(",", ":"))
+    os.replace(tmp, path)
+
+
+def _add_tokens(root: Path, provider: str, label: str, usage, now: float) -> None:
+    """Add one call's tokens to its account: buckets[provider][label][bucket start] = [in, out, cache read, cache write, calls]."""
+    if not isinstance(usage, dict) or not provider or not label:
+        return
+    vals = [int(usage.get(k) or 0) for k in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens")]
+    if not any(vals):
+        return
+    import fcntl
+    path = root / "account-pool-tokens.json"
+    with open(root / "account-pool-tokens.lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            data = json.loads(path.read_text())
+        except Exception:
+            data = {"version": 1, "bucket": TOKEN_BUCKET, "since": now, "buckets": {}}
+        buckets = data.setdefault("buckets", {})
+        slot = str(int(now // TOKEN_BUCKET * TOKEN_BUCKET))
+        row = buckets.setdefault(provider, {}).setdefault(label, {}).setdefault(slot, [0, 0, 0, 0, 0])
+        for i, v in enumerate(vals):
+            row[i] += v
+        row[4] += 1
+        cutoff = now - TOKEN_KEEP
+        for prov in list(buckets):
+            for lab in list(buckets[prov]):
+                buckets[prov][lab] = {k: v for k, v in buckets[prov][lab].items() if int(k) >= cutoff}
+                if not buckets[prov][lab]:
+                    del buckets[prov][lab]
+            if not buckets[prov]:
+                del buckets[prov]
+        _replace_json(path, data)
+
+
 def _on_api_request(**kw) -> None:
     try:
         agent = _find_agent(kw.get("session_id") or "")
@@ -100,6 +143,14 @@ def _on_api_request(**kw) -> None:
         key = f"{profile}:{session_id}"
         label = entry.label or entry.id
         now = time.time()
+        pool_provider = getattr(pool, "provider", "") or ""
+        call_provider = kw.get("provider") or ""
+        # A call that went to another provider (a fallback) did not use this pool's account.
+        if pool_provider and (not call_provider or call_provider == pool_provider):
+            try:
+                _add_tokens(root, pool_provider, label, kw.get("usage"), now)
+            except Exception:
+                pass
         prev = _last.get(key)
         if prev and prev[0] == label and now - prev[1] < 60:
             return

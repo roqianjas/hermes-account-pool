@@ -1,6 +1,14 @@
 # Changelog
 
-All releases of the `account-pool` plugin. The session tracker `account-pool-tracker` is at 1.0.0 and has not changed.
+All releases of the `account-pool` plugin and its session tracker `account-pool-tracker` (now 1.1.0).
+
+## 3.6.0
+
+- New: **token counts per account.** The session tracker (1.1.0) adds the input, output, cache-read and cache-write tokens of every API call to the account that made it, in `account-pool-tokens.json` (15-minute buckets, 8 days, numbers only). Calls that went to a fallback provider are not counted.
+- `report` has a `tokens` column and a line that splits the total into input, output, cache read, cache write and requests.
+- Accounts page: a `Tokens, last 24 h` card, a `Tokens, 24 h` column (hover for the split and the current 5-hour window), and tokens in the Report tab.
+- Fix: the Telegram profile picker on the Alerts tab opened a white list that ignored the Hermes theme. It is the desktop's own Select now; with an older Hermes Desktop, the native list gets theme colors.
+- Test: `tests/tokens_sandbox.py` (tracker hook, `report`, page backend).
 
 ## 3.5.1
 

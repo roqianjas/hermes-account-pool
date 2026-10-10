@@ -212,7 +212,25 @@
       "last_seen": 1791638210.7591188,
       "moved_from": ""
      }
-    ]
+    ],
+    "tokens": {
+     "day": {
+      "input": 10000,
+      "output": 60000,
+      "cache_read": 1000000,
+      "cache_write": 130000,
+      "requests": 251,
+      "total": 1200000
+     },
+     "window": {
+      "input": 14445,
+      "output": 29203,
+      "cache_read": 266255,
+      "cache_write": 154193,
+      "requests": 263,
+      "total": 464096
+     }
+    }
    },
    {
     "pos": 2,
@@ -399,7 +417,25 @@
       10.0
      ]
     ],
-    "sessions": []
+    "sessions": [],
+    "tokens": {
+     "day": {
+      "input": 14201,
+      "output": 17336,
+      "cache_read": 2641919,
+      "cache_write": 137071,
+      "requests": 175,
+      "total": 2810527
+     },
+     "window": {
+      "input": 7942,
+      "output": 75607,
+      "cache_read": 74341,
+      "cache_write": 186317,
+      "requests": 41,
+      "total": 344207
+     }
+    }
    },
    {
     "pos": 3,
@@ -591,7 +627,25 @@
       "last_seen": 1791637446.611486,
       "moved_from": ""
      }
-    ]
+    ],
+    "tokens": {
+     "day": {
+      "input": 27962,
+      "output": 64374,
+      "cache_read": 2497441,
+      "cache_write": 191421,
+      "requests": 398,
+      "total": 2781198
+     },
+     "window": {
+      "input": 12321,
+      "output": 86674,
+      "cache_read": 322732,
+      "cache_write": 23932,
+      "requests": 290,
+      "total": 445659
+     }
+    }
    },
    {
     "pos": 4,
@@ -722,7 +776,25 @@
       17.0
      ]
     ],
-    "sessions": []
+    "sessions": [],
+    "tokens": {
+     "day": {
+      "input": 5902,
+      "output": 9673,
+      "cache_read": 264932,
+      "cache_write": 69861,
+      "requests": 143,
+      "total": 350368
+     },
+     "window": {
+      "input": 3971,
+      "output": 65808,
+      "cache_read": 314372,
+      "cache_write": 105535,
+      "requests": 245,
+      "total": 489686
+     }
+    }
    },
    {
     "pos": 5,
@@ -905,7 +977,25 @@
       20.0
      ]
     ],
-    "sessions": []
+    "sessions": [],
+    "tokens": {
+     "day": {
+      "input": 14800,
+      "output": 73042,
+      "cache_read": 2478663,
+      "cache_write": 81248,
+      "requests": 347,
+      "total": 2647753
+     },
+     "window": {
+      "input": 34753,
+      "output": 5602,
+      "cache_read": 154220,
+      "cache_write": 193657,
+      "requests": 63,
+      "total": 388232
+     }
+    }
    },
    {
     "pos": 6,
@@ -1101,7 +1191,25 @@
       "last_seen": 1791638710.9591231,
       "moved_from": ""
      }
-    ]
+    ],
+    "tokens": {
+     "day": {
+      "input": 20229,
+      "output": 58317,
+      "cache_read": 1918180,
+      "cache_write": 164511,
+      "requests": 62,
+      "total": 2161237
+     },
+     "window": {
+      "input": 18645,
+      "output": 46324,
+      "cache_read": 371096,
+      "cache_write": 80205,
+      "requests": 282,
+      "total": 516270
+     }
+    }
    },
    {
     "pos": 7,
@@ -1297,7 +1405,25 @@
       "last_seen": 1791638930.588776,
       "moved_from": ""
      }
-    ]
+    ],
+    "tokens": {
+     "day": {
+      "input": 3949,
+      "output": 14204,
+      "cache_read": 1212321,
+      "cache_write": 167624,
+      "requests": 75,
+      "total": 1398098
+     },
+     "window": {
+      "input": 9064,
+      "output": 43129,
+      "cache_read": 209924,
+      "cache_write": 121322,
+      "requests": 54,
+      "total": 383439
+     }
+    }
    },
    {
     "pos": 8,
@@ -1432,7 +1558,25 @@
       57.0
      ]
     ],
-    "sessions": []
+    "sessions": [],
+    "tokens": {
+     "day": {
+      "input": 2035,
+      "output": 32984,
+      "cache_read": 70843,
+      "cache_write": 74976,
+      "requests": 46,
+      "total": 180838
+     },
+     "window": {
+      "input": 26606,
+      "output": 57091,
+      "cache_read": 246408,
+      "cache_write": 130045,
+      "requests": 57,
+      "total": 460150
+     }
+    }
    }
   ],
   "parked": [
@@ -1455,7 +1599,18 @@
       1791630453,
       29.0
      ]
-    ]
+    ],
+    "tokens": {
+     "day": {
+      "input": 0,
+      "output": 0,
+      "cache_read": 0,
+      "cache_write": 0,
+      "requests": 0,
+      "total": 0
+     },
+     "window": null
+    }
    }
   ],
   "other_sessions": [],
@@ -1481,7 +1636,18 @@
   "alerts": [],
   "threshold": 90,
   "alert_all_above": 80,
-  "now": 1791639237.2891102
+  "now": 1791639237.2891102,
+  "tokens": {
+   "since": 1791380037.2891102,
+   "day": {
+    "input": 99078,
+    "output": 329930,
+    "cache_read": 12084299,
+    "cache_write": 1016712,
+    "requests": 1497,
+    "total": 13530019
+   }
+  }
  },
  "/status?provider=openai-codex": {
   "provider": "openai-codex",
@@ -1526,7 +1692,18 @@
   "alerts": [],
   "threshold": 90,
   "alert_all_above": 80,
-  "now": 1791639237.3420007
+  "now": 1791639237.3420007,
+  "tokens": {
+   "since": null,
+   "day": {
+    "input": 0,
+    "output": 0,
+    "cache_read": 0,
+    "cache_write": 0,
+    "requests": 0,
+    "total": 0
+   }
+  }
  },
  "/summary?provider=anthropic": {
   "provider": "anthropic",
@@ -1552,63 +1729,135 @@
     "used": 57.0,
     "share": 29.381443298969074,
     "peak": 57.0,
-    "hot_min": 0.0
+    "hot_min": 0.0,
+    "tokens": {
+     "input": 15008,
+     "output": 40360,
+     "cache_read": 2474990,
+     "cache_write": 108314,
+     "requests": 64,
+     "total": 2638672
+    }
    },
    {
     "label": "erin@example.com",
     "used": 26.0,
     "share": 13.402061855670103,
     "peak": 20.0,
-    "hot_min": 0.0
+    "hot_min": 0.0,
+    "tokens": {
+     "input": 23796,
+     "output": 6985,
+     "cache_read": 1405307,
+     "cache_write": 127492,
+     "requests": 80,
+     "total": 1563580
+    }
    },
    {
     "label": "frank@example.com",
     "used": 25.0,
     "share": 12.886597938144329,
     "peak": 21.0,
-    "hot_min": 0.0
+    "hot_min": 0.0,
+    "tokens": {
+     "input": 18147,
+     "output": 18244,
+     "cache_read": 664538,
+     "cache_write": 22871,
+     "requests": 50,
+     "total": 723800
+    }
    },
    {
     "label": "grace@example.com",
     "used": 24.0,
     "share": 12.371134020618557,
     "peak": 30.0,
-    "hot_min": 0.0
+    "hot_min": 0.0,
+    "tokens": {
+     "input": 33904,
+     "output": 28288,
+     "cache_read": 2050099,
+     "cache_write": 198802,
+     "requests": 306,
+     "total": 2311093
+    }
    },
    {
     "label": "dave@example.com",
     "used": 17.0,
     "share": 8.762886597938143,
     "peak": 17.0,
-    "hot_min": 0.0
+    "hot_min": 0.0,
+    "tokens": {
+     "input": 31322,
+     "output": 71698,
+     "cache_read": 890145,
+     "cache_write": 69986,
+     "requests": 394,
+     "total": 1063151
+    }
    },
    {
     "label": "bob@example.com",
     "used": 15.0,
     "share": 7.731958762886598,
     "peak": 10.0,
-    "hot_min": 0.0
+    "hot_min": 0.0,
+    "tokens": {
+     "input": 10583,
+     "output": 59949,
+     "cache_read": 3327609,
+     "cache_write": 188746,
+     "requests": 216,
+     "total": 3586887
+    }
    },
    {
     "label": "alice@example.com",
     "used": 15.0,
     "share": 7.731958762886598,
     "peak": 10.0,
-    "hot_min": 0.0
+    "hot_min": 0.0,
+    "tokens": {
+     "input": 27877,
+     "output": 60149,
+     "cache_read": 588669,
+     "cache_write": 75801,
+     "requests": 20,
+     "total": 752496
+    }
    },
    {
     "label": "carol@example.com",
     "used": 15.0,
     "share": 7.731958762886598,
     "peak": 15.0,
-    "hot_min": 0.0
+    "hot_min": 0.0,
+    "tokens": {
+     "input": 21932,
+     "output": 7573,
+     "cache_read": 1231602,
+     "cache_write": 75236,
+     "requests": 115,
+     "total": 1336343
+    }
    },
    {
     "label": "ivan@example.com",
     "used": 0.0,
     "share": 0.0,
     "peak": 29.0,
-    "hot_min": 0.0
+    "hot_min": 0.0,
+    "tokens": {
+     "input": 39811,
+     "output": 18150,
+     "cache_read": 1753707,
+     "cache_write": 31038,
+     "requests": 94,
+     "total": 1842706
+    }
    }
   ],
   "total": 194.0,
@@ -1630,7 +1879,16 @@
   "span_h": 7.635555555555555,
   "start": 1791611588,
   "advice": "",
-  "available": true
+  "available": true,
+  "tokens_total": {
+   "input": 222380,
+   "output": 311396,
+   "cache_read": 14386666,
+   "cache_write": 898286,
+   "requests": 1339,
+   "total": 15818728
+  },
+  "tokens_since": 1791380037.2891102
  },
  "/report?provider=anthropic&hours=72": {
   "hours": 72.0,
@@ -1642,63 +1900,135 @@
     "used": 57.0,
     "share": 29.381443298969074,
     "peak": 57.0,
-    "hot_min": 0.0
+    "hot_min": 0.0,
+    "tokens": {
+     "input": 30936,
+     "output": 38852,
+     "cache_read": 994407,
+     "cache_write": 22510,
+     "requests": 332,
+     "total": 1086705
+    }
    },
    {
     "label": "erin@example.com",
     "used": 26.0,
     "share": 13.402061855670103,
     "peak": 20.0,
-    "hot_min": 0.0
+    "hot_min": 0.0,
+    "tokens": {
+     "input": 21419,
+     "output": 55616,
+     "cache_read": 1479739,
+     "cache_write": 39240,
+     "requests": 58,
+     "total": 1596014
+    }
    },
    {
     "label": "frank@example.com",
     "used": 25.0,
     "share": 12.886597938144329,
     "peak": 21.0,
-    "hot_min": 0.0
+    "hot_min": 0.0,
+    "tokens": {
+     "input": 15679,
+     "output": 81380,
+     "cache_read": 477978,
+     "cache_write": 186877,
+     "requests": 144,
+     "total": 761914
+    }
    },
    {
     "label": "grace@example.com",
     "used": 24.0,
     "share": 12.371134020618557,
     "peak": 30.0,
-    "hot_min": 0.0
+    "hot_min": 0.0,
+    "tokens": {
+     "input": 26161,
+     "output": 53719,
+     "cache_read": 165049,
+     "cache_write": 183092,
+     "requests": 252,
+     "total": 428021
+    }
    },
    {
     "label": "dave@example.com",
     "used": 17.0,
     "share": 8.762886597938143,
     "peak": 17.0,
-    "hot_min": 0.0
+    "hot_min": 0.0,
+    "tokens": {
+     "input": 33701,
+     "output": 80310,
+     "cache_read": 633603,
+     "cache_write": 55582,
+     "requests": 217,
+     "total": 803196
+    }
    },
    {
     "label": "bob@example.com",
     "used": 15.0,
     "share": 7.731958762886598,
     "peak": 10.0,
-    "hot_min": 0.0
+    "hot_min": 0.0,
+    "tokens": {
+     "input": 12101,
+     "output": 45738,
+     "cache_read": 866835,
+     "cache_write": 79869,
+     "requests": 332,
+     "total": 1004543
+    }
    },
    {
     "label": "alice@example.com",
     "used": 15.0,
     "share": 7.731958762886598,
     "peak": 10.0,
-    "hot_min": 0.0
+    "hot_min": 0.0,
+    "tokens": {
+     "input": 14438,
+     "output": 25771,
+     "cache_read": 1146472,
+     "cache_write": 184882,
+     "requests": 303,
+     "total": 1371563
+    }
    },
    {
     "label": "carol@example.com",
     "used": 15.0,
     "share": 7.731958762886598,
     "peak": 15.0,
-    "hot_min": 0.0
+    "hot_min": 0.0,
+    "tokens": {
+     "input": 27441,
+     "output": 68244,
+     "cache_read": 924557,
+     "cache_write": 178212,
+     "requests": 60,
+     "total": 1198454
+    }
    },
    {
     "label": "ivan@example.com",
     "used": 0.0,
     "share": 0.0,
     "peak": 29.0,
-    "hot_min": 0.0
+    "hot_min": 0.0,
+    "tokens": {
+     "input": 5106,
+     "output": 18610,
+     "cache_read": 1867719,
+     "cache_write": 48586,
+     "requests": 39,
+     "total": 1940021
+    }
    }
   ],
   "total": 194.0,
@@ -1720,7 +2050,16 @@
   "span_h": 7.635555555555555,
   "start": 1791611588,
   "advice": "",
-  "available": true
+  "available": true,
+  "tokens_total": {
+   "input": 186982,
+   "output": 468240,
+   "cache_read": 8556359,
+   "cache_write": 978850,
+   "requests": 1737,
+   "total": 10190431
+  },
+  "tokens_since": 1791380037.2891102
  },
  "/report?provider=anthropic&hours=168": {
   "hours": 168.0,
@@ -1732,63 +2071,135 @@
     "used": 57.0,
     "share": 29.381443298969074,
     "peak": 57.0,
-    "hot_min": 0.0
+    "hot_min": 0.0,
+    "tokens": {
+     "input": 18723,
+     "output": 36248,
+     "cache_read": 2248976,
+     "cache_write": 122658,
+     "requests": 151,
+     "total": 2426605
+    }
    },
    {
     "label": "erin@example.com",
     "used": 26.0,
     "share": 13.402061855670103,
     "peak": 20.0,
-    "hot_min": 0.0
+    "hot_min": 0.0,
+    "tokens": {
+     "input": 34178,
+     "output": 43461,
+     "cache_read": 1865027,
+     "cache_write": 156334,
+     "requests": 109,
+     "total": 2099000
+    }
    },
    {
     "label": "frank@example.com",
     "used": 25.0,
     "share": 12.886597938144329,
     "peak": 21.0,
-    "hot_min": 0.0
+    "hot_min": 0.0,
+    "tokens": {
+     "input": 6507,
+     "output": 21567,
+     "cache_read": 3997499,
+     "cache_write": 79872,
+     "requests": 265,
+     "total": 4105445
+    }
    },
    {
     "label": "grace@example.com",
     "used": 24.0,
     "share": 12.371134020618557,
     "peak": 30.0,
-    "hot_min": 0.0
+    "hot_min": 0.0,
+    "tokens": {
+     "input": 6858,
+     "output": 41728,
+     "cache_read": 2446152,
+     "cache_write": 75679,
+     "requests": 124,
+     "total": 2570417
+    }
    },
    {
     "label": "dave@example.com",
     "used": 17.0,
     "share": 8.762886597938143,
     "peak": 17.0,
-    "hot_min": 0.0
+    "hot_min": 0.0,
+    "tokens": {
+     "input": 3086,
+     "output": 14064,
+     "cache_read": 3241471,
+     "cache_write": 90567,
+     "requests": 230,
+     "total": 3349188
+    }
    },
    {
     "label": "bob@example.com",
     "used": 15.0,
     "share": 7.731958762886598,
     "peak": 10.0,
-    "hot_min": 0.0
+    "hot_min": 0.0,
+    "tokens": {
+     "input": 18322,
+     "output": 12924,
+     "cache_read": 1969424,
+     "cache_write": 32215,
+     "requests": 110,
+     "total": 2032885
+    }
    },
    {
     "label": "alice@example.com",
     "used": 15.0,
     "share": 7.731958762886598,
     "peak": 10.0,
-    "hot_min": 0.0
+    "hot_min": 0.0,
+    "tokens": {
+     "input": 26168,
+     "output": 74599,
+     "cache_read": 1282633,
+     "cache_write": 169990,
+     "requests": 87,
+     "total": 1553390
+    }
    },
    {
     "label": "carol@example.com",
     "used": 15.0,
     "share": 7.731958762886598,
     "peak": 15.0,
-    "hot_min": 0.0
+    "hot_min": 0.0,
+    "tokens": {
+     "input": 25733,
+     "output": 23141,
+     "cache_read": 486681,
+     "cache_write": 138055,
+     "requests": 189,
+     "total": 673610
+    }
    },
    {
     "label": "ivan@example.com",
     "used": 0.0,
     "share": 0.0,
     "peak": 29.0,
-    "hot_min": 0.0
+    "hot_min": 0.0,
+    "tokens": {
+     "input": 36205,
+     "output": 81603,
+     "cache_read": 2855372,
+     "cache_write": 56791,
+     "requests": 322,
+     "total": 3029971
+    }
    }
   ],
   "total": 194.0,
@@ -1810,7 +2221,16 @@
   "span_h": 7.635555555555555,
   "start": 1791611588,
   "advice": "",
-  "available": true
+  "available": true,
+  "tokens_total": {
+   "input": 175780,
+   "output": 349335,
+   "cache_read": 20393235,
+   "cache_write": 922161,
+   "requests": 1587,
+   "total": 21840511
+  },
+  "tokens_since": 1791380037.2891102
  },
  "/report?provider=openai-codex&hours=24": {
   "hours": 24.0,
@@ -1823,7 +2243,15 @@
   "span_h": 0.0,
   "start": null,
   "advice": "",
-  "available": true
+  "available": true,
+  "tokens_total": {
+   "input": 0,
+   "output": 0,
+   "cache_read": 0,
+   "cache_write": 0,
+   "requests": 0,
+   "total": 0
+  }
  },
  "/notify": {
   "desktop": true,

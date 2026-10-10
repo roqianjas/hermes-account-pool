@@ -221,6 +221,16 @@ def _status(provider: str) -> dict:
 
     who = core._who_data(provider, WHO_MINUTES)
     by_label = {a["label"]: [_session_row(r) for r in a["sessions"]] for a in who["accounts"]}
+    buckets, counting = core._token_buckets(provider)
+
+    def tokens_for(label: str, usage):
+        """Tokens of the last 24 h, and of the current usage window when its start is known (to 15 min)."""
+        rows = buckets.get(label) or {}
+        day = core._token_sum(rows, now - 24 * 3600)
+        win = None
+        if ad.window_seconds and usage and usage.get("pct") is not None and usage.get("reset") and usage["reset"] > now:
+            win = core._token_sum(rows, usage["reset"] - ad.window_seconds - core.TOKEN_BUCKET + 1)
+        return {"day": day, "window": win}
     rotation = []
     for pos, e in enumerate(entries, 1):
         state = core._entry_state(e)
@@ -230,11 +240,14 @@ def _status(provider: str) -> dict:
             "back_at": getattr(e, "last_error_reset_at", None) if state in ("BENCHED", "LIMITED") else None,
             "usage": usage_for(e.label), "spark": spark.get(e.label, []), "sessions": by_label.get(e.label, []),
         })
+        rotation[-1]["tokens"] = tokens_for(e.label, rotation[-1]["usage"])
     parked_rows = [{
         "id": p.get("id"), "label": p.get("label", "?"), "since": p.get("_parked_at"),
         "until": p.get("_until"), "dead": bool(p.get("_dead")), "auth": p.get("auth_type", ""),
         "usage": usage_for(p.get("label", "?")), "spark": spark.get(p.get("label", "?"), []),
     } for p in parked]
+    for row in parked_rows:
+        row["tokens"] = tokens_for(row["label"], row["usage"])
     other_sessions = [s for a in who["accounts"] if a["label"] not in {e.label for e in entries}
                       for s in (_session_row(r) for r in a["sessions"])]
 
@@ -253,6 +266,8 @@ def _status(provider: str) -> dict:
         "live": {"ts": live["ts"] if live else None, "retry_after": _wait(live and live["ts"], LIVE_MIN_GAP)},
         "timer": _timer(), "alerts": _alerts(provider, {e.id: e.label for e in entries}),
         "threshold": 90, "alert_all_above": cfg.get("alert_all_above", 80), "now": now,
+        "tokens": {"since": counting, "day": core._token_sum(
+            {0: [sum(r["tokens"]["day"][k] for r in rotation + parked_rows) for k in core.TOKEN_KEYS]}, 0)},
     }
 
 

@@ -41,6 +41,7 @@ class Adapter:
     name = ""
     window = "usage window"       # shown in output, e.g. "5-hour"
     window_short = "window"       # used in bench reasons, e.g. "5h"
+    window_seconds = None         # length of the window `reset` ends, when it is fixed (tokens per window)
     oauth_only = True             # only OAuth entries carry account-level data
     last_error = ""               # why the last usage() returned None (shown next to "n/a")
 
@@ -118,6 +119,7 @@ class Anthropic(Adapter):
     name = "anthropic"
     window = "5-hour"
     window_short = "5h"
+    window_seconds = 5 * 3600
     base = "https://api.anthropic.com"
 
     def _get(self, entry, path: str) -> dict:

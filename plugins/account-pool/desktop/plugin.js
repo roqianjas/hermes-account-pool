@@ -35,6 +35,7 @@ import {
   useQuery,
   useQueryClient
 } from '@hermes/plugin-sdk'
+import * as sdk from '@hermes/plugin-sdk'
 import { createElement as h, Fragment, useEffect, useState } from 'react'
 
 const ID = 'account-pool'
@@ -89,6 +90,45 @@ function ago(seconds) {
 
 function shortName(label) {
   return String(label || '').split('@')[0]
+}
+
+function fmtTok(n) {
+  n = Number(n) || 0
+  if (n >= 1e9) return `${(n / 1e9).toFixed(1)}B`
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`
+  if (n >= 1e3) return `${(n / 1e3).toFixed(1)}k`
+  return String(Math.round(n))
+}
+
+function tokLines(t) {
+  return [
+    `input ${fmtTok(t.input)} · output ${fmtTok(t.output)}`,
+    `cache read ${fmtTok(t.cache_read)} · cache write ${fmtTok(t.cache_write)}`,
+    `${t.requests} request${t.requests === 1 ? '' : 's'}`
+  ]
+}
+
+// Tokens of one account: last 24 h, with the current usage window in the tip.
+function TokensCell({ tokens, window }) {
+  if (!tokens || !tokens.day || !tokens.day.requests) return h('span', { className: 'hap-muted' }, '–')
+  const lines = [`Last 24 h through Hermes: ${fmtTok(tokens.day.total)}`, ...tokLines(tokens.day)]
+  if (tokens.window && tokens.window.requests) {
+    lines.push('', `This ${window} window: ${fmtTok(tokens.window.total)} (${tokens.window.requests} requests)`)
+  }
+  return h(Tip, { label: lines.join('\n') }, h('span', null, fmtTok(tokens.day.total)))
+}
+
+// The bot picker for Telegram alerts. The SDK Select follows the Hermes theme;
+// a native <select> (older Hermes) is styled as far as Chromium allows.
+function ProfileSelect({ value, profiles, disabled, onChange }) {
+  if (sdk.Select && sdk.SelectTrigger && sdk.SelectContent && sdk.SelectItem && sdk.SelectValue) {
+    return h(sdk.Select, { value, disabled, onValueChange: onChange },
+      h(sdk.SelectTrigger, { size: 'sm', className: 'hap-select-trigger', 'aria-label': 'Profile whose Telegram bot sends the alerts' },
+        h(sdk.SelectValue, null)),
+      h(sdk.SelectContent, null, profiles.map(p => h(sdk.SelectItem, { key: p, value: p }, p))))
+  }
+  return h('select', { className: 'hap-select', value, disabled, onChange: e => onChange(e.target.value) },
+    profiles.map(p => h('option', { key: p, value: p }, p)))
 }
 
 const STATE = {
@@ -163,7 +203,9 @@ const CSS = `
 .hap-empty{display:flex;flex-direction:column;align-items:center;gap:10px;padding:48px 16px;text-align:center;font-size:.75rem;color:var(--ui-text-tertiary)}
 .hap-setting{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--ui-stroke-tertiary);font-size:.75rem}
 .hap-setting-t{color:var(--ui-text-primary);font-weight:500}
-.hap-select{background:var(--ui-bg-input);color:var(--ui-text-primary);border:1px solid var(--ui-stroke-secondary);border-radius:6px;padding:3px 6px;font-size:.75rem}
+.hap-select{background:var(--ui-bg-input);color:var(--ui-text-primary);border:1px solid var(--ui-stroke-secondary);border-radius:6px;padding:3px 6px;font-size:.75rem;color-scheme:light dark}
+.hap-select option{background:var(--ui-bg-elevated,var(--ui-bg-card));color:var(--ui-text-primary)}
+.hap-select-trigger{width:auto;min-width:170px}
 .hap-sharebar{display:inline-block;width:80px;height:5px;border-radius:3px;background:var(--ui-bg-quaternary);overflow:hidden;vertical-align:middle;margin-right:6px}
 .hap-sharebar>i{display:block;height:100%;background:var(--ui-accent)}
 `
@@ -461,6 +503,13 @@ function AccountsView({ data, provider, openDialog }) {
         k: `Sessions, last ${data.who_minutes} min`,
         v: String(data.sessions_active),
         s: top ? `highest: ${shortName(top.label)} ${Math.round(top.usage.pct)}%` : ''
+      }),
+      h(Card, {
+        k: 'Tokens, last 24 h',
+        v: data.tokens && data.tokens.day.requests ? fmtTok(data.tokens.day.total) : '–',
+        s: data.tokens && data.tokens.day.requests
+          ? `${fmtTok(data.tokens.day.output)} output · ${data.tokens.day.requests} requests`
+          : data.tokens && data.tokens.since ? 'none in 24 h' : 'counting starts with the next request'
       })),
 
     h('div', { className: 'hap-section' }, 'In rotation',
@@ -472,7 +521,9 @@ function AccountsView({ data, provider, openDialog }) {
       h('thead', null, h('tr', null,
         h('th', { style: { width: 28 } }, '#'), h('th', null, 'Account'),
         h('th', null, data.has_usage ? `${data.window} usage` : 'Usage'), h('th', null, ''),
-        h('th', null, 'Resets'), h('th', null, 'Used by'), h('th', { style: { width: 96 } }, ''))),
+        h('th', null, 'Resets'),
+        h('th', { className: 'hap-num' }, h(Tip, { label: 'Tokens Hermes sent and received on this account in the last 24 hours (input, output and cache). Other apps signed in to the same account are not counted.' }, h('span', null, 'Tokens, 24 h'))),
+        h('th', null, 'Used by'), h('th', { style: { width: 96 } }, ''))),
       h('tbody', null, data.rotation.map(r => {
         const st = STATE[r.state] || STATE.active
         return h('tr', { key: r.id },
@@ -487,6 +538,7 @@ function AccountsView({ data, provider, openDialog }) {
           h('td', { className: 'hap-num' },
             r.back_at ? h(Tip, { label: 'Back in rotation at this time' }, h('span', null, `back ${hhmm(r.back_at)}`))
               : hhmm(r.usage && r.usage.pct != null ? r.usage.reset : null)),
+          h('td', { className: 'hap-num' }, h(TokensCell, { tokens: r.tokens, window: data.window })),
           h('td', null, h(Sessions, { sessions: r.sessions })),
           h('td', null, h('div', { className: 'hap-actions' },
             r.auth === 'oauth' && data.web_signin
@@ -505,7 +557,7 @@ function AccountsView({ data, provider, openDialog }) {
         h('table', { className: 'hap-table' },
           h('thead', null, h('tr', null,
             h('th', { style: { width: 28 } }, ''), h('th', null, 'Account'), h('th', null, 'Last known usage'),
-            h('th', null, ''), h('th', null, 'Parked'), h('th', null, 'Returns'), h('th', { style: { width: 96 } }, ''))),
+            h('th', null, ''), h('th', null, 'Parked'), h('th', { className: 'hap-num' }, 'Tokens, 24 h'), h('th', null, 'Returns'), h('th', { style: { width: 96 } }, ''))),
           h('tbody', null, data.parked.map(p => h('tr', { key: p.id },
             h('td', null, ''),
             h('td', null, h('div', { className: 'hap-acc' },
@@ -515,6 +567,7 @@ function AccountsView({ data, provider, openDialog }) {
             h('td', null, h(UsageCell, { usage: p.usage, parked: true, now })),
             h('td', null, h(Spark, { points: p.spark, now })),
             h('td', { className: 'hap-num' }, hhmm(p.since)),
+            h('td', { className: 'hap-num' }, h(TokensCell, { tokens: p.tokens, window: data.window })),
             h('td', { className: 'hap-num' }, p.until ? hhmm(p.until) : h('span', { className: 'hap-tag' }, 'when unparked')),
             h('td', null, h('div', { className: 'hap-actions' },
               h(IconButton, { icon: 'debug-start', label: 'Unpark (back into rotation)', onClick: () => openDialog({ type: 'unpark', row: p }) }),
@@ -554,19 +607,33 @@ function ReportView({ provider }) {
                 h(Card, {
                   k: 'Busiest hours', v: d.busiest.length ? `${String(d.busiest[0][0]).padStart(2, '0')}:00` : '–',
                   s: d.busiest.map(([hr, v]) => `${String(hr).padStart(2, '0')}:00 (${Math.round(v)})`).join(', ')
+                }),
+                h(Card, {
+                  k: 'Tokens through Hermes',
+                  v: d.tokens_total && d.tokens_total.requests ? fmtTok(d.tokens_total.total) : '–',
+                  s: d.tokens_total && d.tokens_total.requests
+                    ? `${fmtTok(d.tokens_total.input)} in · ${fmtTok(d.tokens_total.output)} out · ${fmtTok(d.tokens_total.cache_read)} cache read`
+                    : 'none counted yet'
                 })),
               d.advice ? h('div', { className: 'hap-banner' }, h(Codicon, { name: 'lightbulb' }), h('span', null, d.advice)) : null,
               h('table', { className: 'hap-table' },
                 h('thead', null, h('tr', null,
                   h('th', null, 'Account'), h('th', { className: 'hap-num' }, 'Used'), h('th', null, 'Share'),
-                  h('th', { className: 'hap-num' }, 'Peak'), h('th', { className: 'hap-num' }, 'Time ≥ 90%'))),
+                  h('th', { className: 'hap-num' }, 'Peak'), h('th', { className: 'hap-num' }, 'Time ≥ 90%'),
+                  h('th', { className: 'hap-num' }, 'Tokens'))),
                 h('tbody', null, d.accounts.map(a => h('tr', { key: a.label },
                   h('td', { style: { color: 'var(--ui-text-primary)' } }, a.label),
                   h('td', { className: 'hap-num' }, Math.round(a.used)),
                   h('td', null, h('span', { className: 'hap-sharebar' }, h('i', { style: { width: `${Math.min(100, a.share)}%` } })),
                     h('span', { className: 'hap-tag' }, `${Math.round(a.share)}%`)),
                   h('td', { className: 'hap-num' }, `${Math.round(a.peak)}%`),
-                  h('td', { className: 'hap-num' }, `${Math.round(a.hot_min)} min`)))))))
+                  h('td', { className: 'hap-num' }, `${Math.round(a.hot_min)} min`),
+                  h('td', { className: 'hap-num' }, a.tokens && a.tokens.requests
+                    ? h(Tip, { label: tokLines(a.tokens).join('\n') }, h('span', null, fmtTok(a.tokens.total)))
+                    : h('span', { className: 'hap-muted' }, '–')))))),
+              h('p', { className: 'hap-small hap-muted', style: { marginTop: 8 } },
+                'Used and Peak come from the provider\'s usage percentages. Tokens count only what Hermes sent and received on this computer' +
+                (d.tokens_since && d.tokens_since > (d.start || 0) ? `, since ${new Date(d.tokens_since * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}.` : '.'))))
 }
 
 function HealthView({ provider, data, openResult }) {
@@ -644,10 +711,10 @@ function AlertsView({ provider, data, openResult }) {
       h('div', { className: 'hap-grow' },
         h('div', { className: 'hap-setting-t' }, 'Telegram'),
         h('div', { className: 'hap-small hap-muted' }, 'To your private chat (the first TELEGRAM_ALLOWED_USERS entry), sent by the bot of:')),
-      h('select', {
-        className: 'hap-select', value: n.via, disabled: busy || !n.telegram,
-        onChange: e => act(`telegram-via=${e.target.value}`)
-      }, n.profiles.map(p => h('option', { key: p, value: p }, p))),
+      h(ProfileSelect, {
+        value: n.via, profiles: n.profiles, disabled: busy || !n.telegram,
+        onChange: v => { if (v && v !== n.via) act(`telegram-via=${v}`) }
+      }),
       h(Switch, { checked: n.telegram, disabled: busy, onCheckedChange: v => act(v ? 'telegram-on' : 'telegram-off') })),
     h('div', { className: 'hap-row', style: { marginTop: 12 } },
       h(Button, { size: 'sm', variant: 'outline', disabled: busy, onClick: () => act('test', true) },
