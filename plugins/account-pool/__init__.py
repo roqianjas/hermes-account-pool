@@ -916,6 +916,30 @@ def _cmd_doctor(args) -> int:
     return 1 if fails else 0
 
 
+def _signin(cmd, provider: str, before: set):
+    """Run a `hermes auth add` child. Returns its exit code, or None when the user pressed Ctrl+C.
+
+    On Ctrl+C the child gets the same signal and stops; anything it may still have saved
+    is removed, so a cancelled sign-in never leaves a half-added account behind.
+    """
+    proc = subprocess.Popen(cmd, env=_hermes_env())
+    try:
+        return proc.wait()
+    except KeyboardInterrupt:
+        try:
+            proc.wait(timeout=10)
+        except (KeyboardInterrupt, subprocess.TimeoutExpired):
+            proc.kill()
+            proc.wait()
+        pool = _pool(provider)
+        for e in [e for e in pool.entries() if e.id not in before]:
+            idx, _, _ = pool.resolve_target(e.id)
+            if idx is not None:
+                pool.remove_index(idx)
+        print("\nCancelled (Ctrl+C). Nothing was added.")
+        return None
+
+
 def _cmd_relogin(args) -> int:
     provider = _norm(args.provider)
     pool = _pool(provider)
@@ -951,8 +975,10 @@ def _cmd_relogin(args) -> int:
             print("Cancelled. Nothing changed.")
             return 1
     before = {e.id for e in pool.entries()}
-    rc = subprocess.call([_hermes_bin(), "auth", "add", provider, "--type", "oauth", "--label", label],
-                         env=_hermes_env())
+    rc = _signin([_hermes_bin(), "auth", "add", provider, "--type", "oauth", "--label", label], provider, before)
+    if rc is None:
+        print("The old entry is unchanged.")
+        return 130
     pool = _pool(provider)
     new = [e for e in pool.entries() if e.id not in before]
     if rc != 0 or not new:
@@ -1156,7 +1182,9 @@ def _cmd_add(args) -> int:
 
     before = {e.id for e in entries}
     cmd = [_hermes_bin(), "auth", "add", provider, "--type", "api-key" if use_key else "oauth", "--label", label]
-    rc = subprocess.call(cmd, env=_hermes_env())
+    rc = _signin(cmd, provider, before)
+    if rc is None:
+        return 130
     pool = _pool(provider)
     new = [e for e in pool.entries() if e.id not in before]
     if rc != 0 or not new:
@@ -1339,7 +1367,11 @@ def _dispatch(args) -> int:
             return 2
     if args.threshold is None:
         args.threshold = 90.0
-    return HANDLERS[action](args)
+    try:
+        return HANDLERS[action](args)
+    except KeyboardInterrupt:
+        print("\nCancelled (Ctrl+C).")
+        return 130
 
 
 def _setup(parser) -> None:
