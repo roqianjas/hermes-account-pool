@@ -1,6 +1,6 @@
 name: account-pool
 label: Account Pool
-version: 3.3.1
+version: 3.3.2
 description: "`hermes account <provider> <action>`: list, check, park/unpark, who, doctor and alerts for any credential-pool provider; usage, report and usage-based balance through provider adapters (anthropic built in)."
 author: roqianjas
 license: MIT

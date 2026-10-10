@@ -70,7 +70,7 @@ def footer(c, doc):
     c.saveState()
     c.setFont("Sans", 7.5)
     c.setFillColor(MUTED)
-    c.drawString(18 * mm, 10 * mm, "Hermes plugin account-pool 3.3.1 · github.com/roqianjas/hermes-account-pool")
+    c.drawString(18 * mm, 10 * mm, "Hermes plugin account-pool 3.3.2 · github.com/roqianjas/hermes-account-pool")
     c.drawRightString(A4[0] - 18 * mm, 10 * mm, f"Halaman {doc.page}")
     c.setStrokeColor(LINE)
     c.line(18 * mm, 14 * mm, A4[0] - 18 * mm, 14 * mm)
@@ -79,7 +79,7 @@ def footer(c, doc):
 
 # ── content ──────────────────────────────────────────────────────────────────
 st += [Paragraph("Plugin account-pool: perintah <font name='Mono'>hermes account</font>", s_title),
-       Paragraph("Dokumentasi lengkap versi 3.3.1: kelola akun di credential pool Hermes, bagi pemakaian akun "
+       Paragraph("Dokumentasi lengkap versi 3.3.2: kelola akun di credential pool Hermes, bagi pemakaian akun "
                  "Claude secara merata, pantau sesi, pulihkan masalah otomatis, dan terima peringatan.", s_sub)]
 
 H1("1. Ringkasan")
@@ -145,7 +145,7 @@ P("Dengan " + C("fill_first") + ", setiap sesi baru mengambil akun teratas, yait
 H1("3. Lokasi file")
 table([
     ["File", "Isi"],
-    [C("~/.hermes/plugins/account-pool/"), "Plugin utama (perintah " + C("hermes account") + "), versi 3.3.1; adapter di " + C("providers.py")],
+    [C("~/.hermes/plugins/account-pool/"), "Plugin utama (perintah " + C("hermes account") + "), versi 3.3.2; adapter di " + C("providers.py")],
     [C("~/.hermes/plugins/account-pool-tracker/"), "Pelacak sesi; di-symlink ke " + C("profiles/*/plugins/")],
     [C("~/.hermes/auth.json"), "Credential pool bersama semua profil"],
     [C("~/.hermes/account-pool-parked.json"), "Akun yang diparkir (berisi token)"],
@@ -200,7 +200,7 @@ table([
     ["RATE LIMITED", "Anthropic membalas 429/402", "Tunggu reset; Hermes memakai akun lain"],
     ["BENCHED by balance", "Diistirahatkan karena ≥ 90%", "Otomatis aktif lagi saat reset"],
     ["COOLING DOWN", "Refresh token gagal, biasanya jaringan putus", "Dipulihkan otomatis oleh penjadwal"],
-    ["WRONG LABEL", "Label berbeda dari email asli", C("relogin") + " di jendela incognito"],
+    ["WRONG LABEL", "Label berbeda dari email asli", C("relogin") + " di browser yang login sebagai akun itu"],
     ["DUPLICATE", "Akun yang sama terdaftar dua kali", C("hermes account anthropic remove &lt;id&gt;")],
 ], [0.22, 0.43, 0.35])
 H2("5.3 usage")
@@ -255,10 +255,11 @@ H2("5.6 add")
 code("""
 $ hermes account anthropic add name@example.com
 Add name@example.com to anthropic
-  1. A browser sign-in link opens. Use a PRIVATE / INCOGNITO window,
-     otherwise the browser may sign in as an account that is already in the pool.
-  2. Sign in as: name@example.com
-  3. Paste the code back here.
+  1. Open the sign-in link in a browser that is signed in as THIS account:
+     its own Chrome profile, or a private / incognito window.
+  2. Make sure the page says: Logged in as name@example.com  (otherwise: Switch account)
+     "Sign in again to continue" is normal when that browser login is old.
+  3. Authorize, then paste the code back here.
   The account is kept only if the sign-in really is that account and not a duplicate.
 Continue? [y/N] y
    (login Hermes: buka link, login, salin kode, tempel)
@@ -313,10 +314,11 @@ H2("5.10 relogin")
 code("""
 $ hermes account anthropic relogin alice@example.com
 Re-login alice@example.com (anthropic, id=0b1e86)
-  1. A browser sign-in link opens. Use a PRIVATE / INCOGNITO window,
-     otherwise the browser may sign in as a different account.
-  2. Sign in as: alice@example.com
-  3. Paste the code back here.
+  1. Open the sign-in link in a browser that is signed in as THIS account:
+     its own Chrome profile, or a private / incognito window.
+  2. Make sure the page says: Logged in as alice@example.com  (otherwise: Switch account)
+     "Sign in again to continue" is normal when that browser login is old.
+  3. Authorize, then paste the code back here.
 The old entry is replaced only if the new sign-in really is that account.
 Continue? [y/N]
 """)
@@ -399,11 +401,14 @@ OL(["Siapkan email akun Claude (Pro, Max, atau Team) yang belum ada di pool. Cek
     + C("hermes account anthropic list") + ".",
     "Buka terminal di profil <b>default</b> (tanpa " + C("-p") + "), lalu jalankan " + C("hermes account anthropic add name@example.com") + ".",
     "Jawab " + C("y") + ". Hermes menampilkan link login.",
-    "Buka link itu di jendela <b>private / incognito</b>, lalu login sebagai akun tersebut. Tanpa incognito, browser "
-    "biasanya otomatis memakai akun Claude yang sedang login, yaitu akun yang sudah ada di pool.",
-    "Setujui akses, salin kode yang muncul, tempel ke terminal, lalu Enter.",
-    "Pastikan muncul " + C("Verified") + " dan " + C("Added") + ". Jika muncul " + C("discarded") + ", tutup jendela "
-    "incognito, buka yang baru, lalu ulangi dari langkah 2.",
+    "Buka link itu di browser yang login sebagai <b>akun tersebut</b>: profil Chrome milik akun itu, atau jendela "
+    "<b>private / incognito</b> lalu login. Pastikan halaman menulis " + C("Logged in as name@example.com") + "; jika bukan, klik "
+    "<b>Switch account</b>. Browser yang login sebagai akun lain akan memberikan akun lain itu ke Hermes.",
+    "Jika muncul <b>\"Sign in again to continue\"</b>, itu normal: Anthropic meminta login ulang bila login di browser "
+    "sudah lama. Klik, lalu login sebagai akun yang sama. " + C("hermes auth add") + " bawaan pun mendapat halaman yang sama.",
+    "Setujui akses (Authorize), salin kode yang muncul, tempel ke terminal, lalu Enter.",
+    "Pastikan muncul " + C("Verified") + " dan " + C("Added") + ". Jika muncul " + C("discarded") + ", pindahkan "
+    "browser ke akun yang benar (atau jendela private baru), lalu ulangi dari langkah 2.",
     "Cek hasilnya: " + C("hermes account anthropic check") + " (email asli) dan " + C("hermes account anthropic usage") + "."])
 note("Akun baru langsung dipakai semua profil, tetapi sesi bot yang sedang berjalan tetap memakai akunnya sekarang. "
      "Akun baru dipakai mulai sesi berikutnya (atau setelah " + C("/reset") + ").")
@@ -412,7 +417,7 @@ OL(["Cari email atau id-nya dengan " + C("hermes account anthropic list") + ".",
     "Jalankan " + C("hermes account anthropic remove name@example.com") + ", lalu jawab " + C("y") + ".",
     "Untuk memakainya lagi nanti, tambahkan ulang dengan " + C("add") + " (login baru)."])
 H2("Akun Codex (jika nanti dipakai)")
-P("Caranya sama: " + C("hermes account openai-codex add &lt;email&gt;") + ", login ChatGPT di jendela incognito. Ini hanya "
+P("Caranya sama: " + C("hermes account openai-codex add &lt;email&gt;") + ", login ChatGPT di browser yang login sebagai akun itu. Ini hanya "
   "menyiapkan akun di pool. Agar profil memakai Codex, atur di pengaturan Hermes (model atau fallback), bukan lewat plugin.")
 H2("Hal yang perlu dihindari")
 LI(["Jangan pakai " + C("hermes -p &lt;profil&gt; auth add") + ": profil itu akan punya pool sendiri. "
@@ -420,7 +425,7 @@ LI(["Jangan pakai " + C("hermes -p &lt;profil&gt; auth add") + ": profil itu aka
     "Jangan pakai " + C("hermes auth add") + " langsung: tidak ada cek email, sehingga label bisa salah dan duplikat bisa masuk.",
     "Jangan berbagi token Hermes dengan aplikasi atau perangkat lain. Refresh token sekali pakai, jadi berbagi token "
     "bisa membuat salah satu login mati.",
-    "Jika login terus berakhir di akun yang salah, logout dari claude.ai di browser biasa, atau pakai profil browser lain."])
+    "Jika login terus berakhir di akun yang salah, pakai profil Chrome milik akun itu atau jendela private baru."])
 
 H1("10. Memaksa akun tertentu")
 code("""
@@ -450,6 +455,7 @@ LI(["<b>Sesi yang berjalan tidak dipindah</b> sebelum akunnya kena limit. Pindah
 H1("12. Troubleshooting")
 table([
     ["Gejala", "Penyebab umum", "Solusi"],
+    ["Login: \"Sign in again to continue\"", "Login di browser sudah lama (kebijakan Anthropic)", "Klik, login ulang sebagai akun yang sama"],
     ["Bot \"retrying in 600s\"", "Akun kena 429 sebelum balance mengistirahatkannya",
      C("hermes account anthropic balance") + ", lalu stop dan kirim ulang pesan"],
     ["check: DEAD", "Login dicabut atau token dipakai aplikasi lain", C("hermes account anthropic relogin &lt;email&gt;")],

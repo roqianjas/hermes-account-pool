@@ -112,10 +112,11 @@ hermes account anthropic add you@example.com
 ```
 
 1. Answer `y`. Hermes prints a sign-in link.
-2. Open the link in a **private / incognito** window and sign in as that account. A normal window usually signs in as whichever account the browser already uses, and that one is often in the pool already.
-3. Approve, copy the code, paste it into the terminal and press Enter.
-4. Look for `Verified: you@example.com` and `Added ...`. The account is balanced right away.
-5. Check it: `hermes account anthropic check` (real email) and `hermes account anthropic usage`.
+2. Open the link in a browser that is signed in as **that** account: its own Chrome profile, or a private / incognito window where you sign in. Check that the page says `Logged in as you@example.com`; if not, click **Switch account**. A browser signed in as another account would hand Hermes that account instead.
+3. If the page says **"Sign in again to continue"**, that is normal: Anthropic asks for a fresh sign-in when the browser's login is old. Click it and sign in as the same account. Plain `hermes auth add` gets the same page.
+4. Authorize, copy the code, paste it into the terminal and press Enter.
+5. Look for `Verified: you@example.com` and `Added ...`. The account is balanced right away.
+6. Check it: `hermes account anthropic check` (real email) and `hermes account anthropic usage`.
 
 What `add` can answer:
 
@@ -128,7 +129,7 @@ What `add` can answer:
 | Email is parked | `... is parked. Return it with: ... unpark ...` | unchanged, refused before sign-in |
 | Sign-in cancelled or failed | `Sign-in did not complete. Nothing was added.` | unchanged |
 
-After a `discarded` message, close the private window, open a new one and run `add` again. Running bot sessions keep their current account; the new account is used from the next session (or after `/reset`).
+After a `discarded` message, switch the browser to the right account (or use a fresh private window) and run `add` again. Running bot sessions keep their current account; the new account is used from the next session (or after `/reset`).
 
 Options: `--yes` skips the confirmation, `--key` adds an API-key account (the key is asked for without echo).
 
@@ -148,7 +149,7 @@ hermes account anthropic remove you@example.com   # email or id; asks for confir
 
 ### Codex
 
-The same commands work for `openai-codex`: `hermes account openai-codex add you@example.com` with a ChatGPT sign-in. This only puts the account in the pool. Making a profile use Codex (main model or fallback) is a normal Hermes setting.
+The same commands work for `openai-codex`: `hermes account openai-codex add you@example.com` with a ChatGPT sign-in, in a browser signed in as that account. This only puts the account in the pool. Making a profile use Codex (main model or fallback) is a normal Hermes setting.
 
 ## How it works
 

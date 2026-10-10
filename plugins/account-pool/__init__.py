@@ -934,10 +934,11 @@ def _cmd_relogin(args) -> int:
                          f"  hermes account {provider} add {label} --key")
     verify = providers.get(provider).has_identity
     print(f"Re-login {label} ({provider}, id={old_id})")
-    print("  1. A browser sign-in link opens. Use a PRIVATE / INCOGNITO window,")
-    print(f"     otherwise the browser may sign in as a different account.")
-    print(f"  2. Sign in as: {label}")
-    print("  3. Paste the code back here.")
+    print("  1. Open the sign-in link in a browser that is signed in as THIS account:")
+    print("     its own Chrome profile, or a private / incognito window.")
+    print(f"  2. Make sure the page says: Logged in as {label}  (otherwise: Switch account)")
+    print("     \"Sign in again to continue\" is normal when that browser login is old.")
+    print("  3. Authorize, then paste the code back here.")
     print("The old entry is replaced only if the new sign-in really is that account."
           if verify else
           f"NOTE: {provider} has no identity adapter, so the account cannot be verified. Sign in carefully.")
@@ -963,7 +964,7 @@ def _cmd_relogin(args) -> int:
         idx, _, _ = pool.resolve_target(fresh.id)
         pool.remove_index(idx)
         print(f"Signed in as {ident}, not {label}. The new sign-in was discarded; the old entry is unchanged.")
-        print("Retry in a private/incognito window.")
+        print(f"Retry in a browser signed in as {label} (its own Chrome profile or a private window).")
         return 1
     idx, _, _ = pool.resolve_target(old_id)
     if idx is not None:
@@ -1141,10 +1142,11 @@ def _cmd_add(args) -> int:
     if use_key:
         print("  You will be asked for the API key (input is hidden).")
     else:
-        print("  1. A browser sign-in link opens. Use a PRIVATE / INCOGNITO window,")
-        print("     otherwise the browser may sign in as an account that is already in the pool.")
-        print(f"  2. Sign in as: {label}")
-        print("  3. Paste the code back here.")
+        print("  1. Open the sign-in link in a browser that is signed in as THIS account:")
+        print("     its own Chrome profile, or a private / incognito window.")
+        print(f"  2. Make sure the page says: Logged in as {label}  (otherwise: Switch account)")
+        print("     \"Sign in again to continue\" is normal when that browser login is old.")
+        print("  3. Authorize, then paste the code back here.")
         print("  The account is kept only if the sign-in really is that account and not a duplicate."
               if verify else
               f"  NOTE: {provider} has no identity adapter, so the account cannot be verified.")
@@ -1177,7 +1179,7 @@ def _cmd_add(args) -> int:
                              and (e.label or "").lower() == ident.lower()), None)
                 hint = f" ({ident} is already in the pool as id={same.id})" if same else ""
                 return discard(f"Signed in as {ident}, not {label}{hint}. The sign-in was discarded.\n"
-                               f"Retry in a private/incognito window, signed in as {label}.")
+                               f"Retry in a browser signed in as {label} (its own Chrome profile or a private window).")
             for e in pool.entries():
                 if e.id == fresh.id:
                     continue
