@@ -351,10 +351,10 @@ _CACHED: set = set()          # labels whose usage came from history this run (n
 _SNAP: dict = {}
 
 
-def _last_snapshot(provider: str) -> dict:
-    """Newest history record for the provider (reads only the end of the file)."""
+def _recent_snapshots(provider: str) -> list:
+    """History records for the provider, newest first (reads only the end of the file)."""
     if provider not in _SNAP:
-        rec = {}
+        recs = []
         try:
             with open(_history_path(), "rb") as fh:
                 fh.seek(0, 2)
@@ -365,27 +365,34 @@ def _last_snapshot(provider: str) -> dict:
                     except Exception:
                         continue
                     if r.get("provider") == provider:
-                        rec = r
-                        break
+                        recs.append(r)
         except OSError:
             pass
-        _SNAP[provider] = rec
+        _SNAP[provider] = recs
     return _SNAP[provider]
 
 
 def _cached_usage(provider: str, label: str, max_age: float = 900):
     """Last recorded usage for an account when the endpoint is temporarily unavailable.
 
-    Only values younger than 15 minutes whose window has not reset yet are used.
+    Takes the newest snapshot that contains the account (a run that used a cached value
+    does not record it again), only if it is younger than 15 minutes and its window has
+    not reset yet.
     """
-    rec = _last_snapshot(provider)
-    age = time.time() - float(rec.get("ts", 0) or 0)
-    pct = (rec.get("usage") or {}).get(label)
-    reset = (rec.get("reset") or {}).get(label)
-    if pct is None or age > max_age or (reset and reset <= time.time()):
-        return None
-    _CACHED.add(label)
-    return float(pct), reset, f"last known, {max(1, round(age / 60))} min ago"
+    now = time.time()
+    for rec in _recent_snapshots(provider):
+        age = now - float(rec.get("ts", 0) or 0)
+        if age > max_age:
+            return None
+        pct = (rec.get("usage") or {}).get(label)
+        if pct is None:
+            continue
+        reset = (rec.get("reset") or {}).get(label)
+        if reset and reset <= now:
+            return None
+        _CACHED.add(label)
+        return float(pct), reset, f"last known, {max(1, round(age / 60))} min ago"
+    return None
 
 
 def _usage_reason(provider) -> str:
