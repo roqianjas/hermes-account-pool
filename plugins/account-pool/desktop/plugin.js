@@ -107,12 +107,30 @@ function fmtTok(n) {
   return String(Math.round(n))
 }
 
+// API list price of a token group: "$12.34", "$12.34+" when part of it has no known price.
+function fmtCost(t) {
+  if (!t || !t.requests || !(t.cost > 0)) return '–'
+  return `$${t.cost >= 1000 ? Math.round(t.cost).toLocaleString('en-US') : t.cost.toFixed(2)}${t.unpriced ? '+' : ''}`
+}
+
 function tokLines(t) {
-  return [
+  const lines = [
     `input ${fmtTok(t.input)} · output ${fmtTok(t.output)}`,
     `cache read ${fmtTok(t.cache_read)} · cache write ${fmtTok(t.cache_write)}`,
     `${t.requests} request${t.requests === 1 ? '' : 's'}`
   ]
+  if (t.cost > 0) lines.push(`${fmtCost(t)} at API list prices${t.unpriced ? ` (${fmtTok(t.unpriced)} tokens have no known price)` : ''}`)
+  else if (t.unpriced) lines.push('API price unknown: counted before the tracker recorded the model')
+  if (t.model && t.model !== '?') lines.push(`mostly ${t.model}`)
+  return lines
+}
+
+const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+
+function when(ts) {
+  if (!ts) return '–'
+  const d = new Date(ts * 1000)
+  return `${DAY_NAMES[(d.getDay() + 6) % 7]} ${hhmm(ts)}`
 }
 
 // Tokens of one account: last 24 h, with the current usage window in the tip.
@@ -217,6 +235,13 @@ const CSS = `
 .hap-mode{border-bottom:1px dotted currentColor;cursor:help}
 .hap-sharebar{display:inline-block;width:80px;height:5px;border-radius:3px;background:var(--ui-bg-quaternary);overflow:hidden;vertical-align:middle;margin-right:6px}
 .hap-sharebar>i{display:block;height:100%;background:var(--ui-accent)}
+.hap-heat{display:grid;grid-template-columns:76px repeat(24,minmax(9px,1fr));gap:2px;align-items:center;max-width:760px;margin-top:4px}
+.hap-heat>i{display:block;height:16px;border-radius:3px;background:var(--ui-bg-quaternary)}
+.hap-heat>i.on{outline:1px solid var(--ui-text-primary)}
+.hap-heat-l{font-size:.625rem;color:var(--ui-text-tertiary);white-space:nowrap;font-variant-numeric:tabular-nums}
+.hap-heat-read{min-height:1.4em;margin-top:6px}
+.hap-days{display:flex;gap:4px;flex-wrap:wrap}
+.hap-time{width:76px}
 `
 
 // ── small pieces ─────────────────────────────────────────────────────────────
@@ -320,6 +345,44 @@ function ParkDialog({ provider, row, onClose, onDone }) {
     mode !== 'open'
       ? h('span', { className: 'hap-small hap-muted' }, 'The balance timer returns it on its first run after that time.')
       : null))
+}
+
+// Park an account every week at the same hours; the balance timer applies it.
+function ScheduleDialog({ provider, row, current, onClose, onDone }) {
+  const [days, setDays] = useState(current ? current.days : [0, 1, 2, 3, 4])
+  const [from, setFrom] = useState(current ? current.from : '09:00')
+  const [to, setTo] = useState(current ? current.to : '17:00')
+  const time = /^([01]?\d|2[0-3])[:.][0-5]\d$/
+  const valid = days.length && time.test(from.trim()) && time.test(to.trim()) && from.trim() !== to.trim()
+  const toggle = d => setDays(days.includes(d) ? days.filter(x => x !== d) : [...days, d].sort())
+  return h(ConfirmDialog, {
+    open: true,
+    onClose,
+    title: `Park ${row.label} on a schedule`,
+    description: 'The balance timer parks it when a window starts and brings it back when it ends. Unparking it by hand inside a window keeps it in rotation until the next window.',
+    confirmLabel: current ? 'Save schedule' : 'Add schedule',
+    busyLabel: 'Saving…',
+    onConfirm: async () => {
+      if (!valid) throw new Error('Pick at least one day and two different times (HH:MM).')
+      const every = `${days.map(d => DAY_NAMES[d].toLowerCase()).join(',')} ${from.trim()}-${to.trim()}`
+      const r = await post('/action', { action: 'schedule', provider, target: row.id, every })
+      if (!r.ok) throw new Error(r.output || 'Saving the schedule failed')
+      onDone(firstLine(r.output))
+    }
+  },
+  h('div', { className: 'hap-field' },
+    h('span', { className: 'hap-muted' }, 'Days'),
+    h('div', { className: 'hap-days' }, DAY_NAMES.map((name, d) => h(Button, {
+      key: name, size: 'sm', variant: days.includes(d) ? 'default' : 'outline', 'aria-pressed': days.includes(d), onClick: () => toggle(d)
+    }, name)))),
+  h('div', { className: 'hap-field' },
+    h('span', { className: 'hap-muted' }, 'Parked from … to'),
+    h('div', { className: 'hap-row' },
+      h(Input, { className: 'hap-time', value: from, onChange: e => setFrom(e.target.value), placeholder: '09:00', 'aria-label': 'Parked from' }),
+      h('span', { className: 'hap-muted' }, 'to'),
+      h(Input, { className: 'hap-time', value: to, onChange: e => setTo(e.target.value), placeholder: '17:00', 'aria-label': 'Parked until' }),
+      h('span', { className: 'hap-small hap-muted' }, 'local time; an end before the start runs past midnight'))),
+  valid ? null : h('span', { className: 'hap-small', style: { color: 'var(--ui-orange)' } }, 'Pick at least one day and two different times (HH:MM).'))
 }
 
 function SignInDialog({ provider, mode, row, verify, onClose }) {
@@ -484,8 +547,16 @@ function SignInDialog({ provider, mode, row, verify, onClose }) {
 
 // ── views ────────────────────────────────────────────────────────────────────
 
+function SchedChip({ s }) {
+  if (!s) return null
+  return h(MTip, { label: `Parked ${s.every} by the balance timer.` + (s.next ? `\nNext window: ${when(s.next)}` : '') },
+    h('span', { className: 'hap-chip' }, h(Codicon, { name: 'calendar', size: '0.65rem' }), ` ${s.every}`))
+}
+
 function AccountsView({ data, provider, openDialog }) {
   const now = data.now
+  const schedules = data.schedules || []
+  const schedOf = label => schedules.find(s => s.label.toLowerCase() === String(label).toLowerCase())
   const active = data.rotation.filter(r => r.state === 'active')
   const next = active[0]
   const known = data.rotation.filter(r => r.usage && r.usage.pct != null)
@@ -519,7 +590,9 @@ function AccountsView({ data, provider, openDialog }) {
         k: 'Tokens, last 24 h',
         v: data.tokens && data.tokens.day.requests ? fmtTok(data.tokens.day.total) : '–',
         s: data.tokens && data.tokens.day.requests
-          ? `${fmtTok(data.tokens.day.output)} output · ${data.tokens.day.requests} requests`
+          ? (data.tokens.day.cost > 0
+              ? `${fmtCost(data.tokens.day)} at API prices · ${data.tokens.day.requests} requests`
+              : `${fmtTok(data.tokens.day.output)} output · ${data.tokens.day.requests} requests`)
           : data.tokens && data.tokens.since ? 'none in 24 h' : 'counting starts with the next request'
       })),
 
@@ -549,7 +622,8 @@ function AccountsView({ data, provider, openDialog }) {
             h(StatusDot, { tone: st.tone }),
             h('span', null, r.label),
             st.text ? h(MTip, { label: (r.problems || []).join('\n') || st.text },
-              h(Badge, { variant: r.state === 'DEAD' ? 'destructive' : 'warn' }, st.text)) : null)),
+              h(Badge, { variant: r.state === 'DEAD' ? 'destructive' : 'warn' }, st.text)) : null,
+            h(SchedChip, { s: schedOf(r.label) }))),
           h('td', null, h(UsageCell, { usage: r.usage, now })),
           h('td', null, h(Spark, { points: r.spark, now })),
           h('td', { className: 'hap-num' },
@@ -562,6 +636,7 @@ function AccountsView({ data, provider, openDialog }) {
               ? h(IconButton, { icon: 'key', label: 'Sign in again', onClick: () => openDialog({ type: 'relogin', row: r }) })
               : null,
             h(IconButton, { icon: 'debug-pause', label: 'Park (take out of rotation)', onClick: () => openDialog({ type: 'park', row: r }) }),
+            h(IconButton, { icon: 'calendar', label: 'Park on a schedule', onClick: () => openDialog({ type: 'schedule', row: r, current: schedOf(r.label) }) }),
             h(IconButton, { icon: 'trash', label: 'Remove', onClick: () => openDialog({ type: 'remove', row: r }) }))))
       }))),
 
@@ -580,21 +655,104 @@ function AccountsView({ data, provider, openDialog }) {
             h('td', null, h('div', { className: 'hap-acc' },
               h(StatusDot, { tone: p.dead ? 'bad' : 'muted' }), h('span', null, p.label),
               p.dead ? h(MTip, { label: 'Its sign-in expired while parked: remove it, then add it again.' },
-                h(Badge, { variant: 'destructive' }, 'sign-in expired')) : null)),
+                h(Badge, { variant: 'destructive' }, 'sign-in expired')) : null,
+              h(SchedChip, { s: schedOf(p.label) }))),
             h('td', null, h(UsageCell, { usage: p.usage, parked: true, now })),
             h('td', null, h(Spark, { points: p.spark, now })),
             h('td', { className: 'hap-num' }, hhmm(p.since)),
             h('td', { className: 'hap-num' }, h(TokensCell, { tokens: p.tokens, window: data.window })),
-            h('td', { className: 'hap-num' }, p.until ? hhmm(p.until) : h('span', { className: 'hap-tag' }, 'when unparked')),
+            h('td', { className: 'hap-num' }, p.until
+              ? (p.by === 'schedule' ? h(MTip, { label: 'Parked by its schedule; returns when the window ends.' }, h('span', null, `${hhmm(p.until)} (schedule)`)) : hhmm(p.until))
+              : h('span', { className: 'hap-tag' }, 'when unparked')),
             h('td', null, h('div', { className: 'hap-actions' },
               h(IconButton, { icon: 'debug-start', label: 'Unpark (back into rotation)', onClick: () => openDialog({ type: 'unpark', row: p }) }),
+              h(IconButton, { icon: 'calendar', label: 'Park on a schedule', onClick: () => openDialog({ type: 'schedule', row: p, current: schedOf(p.label) }) }),
               h(IconButton, { icon: 'trash', label: 'Remove', onClick: () => openDialog({ type: 'remove', row: p, parked: true }) }))))))))
+      : null,
+
+    schedules.length
+      ? h(Fragment, null,
+        h('div', { className: 'hap-section' }, 'Park schedules', h('span', { className: 'hap-pill' }, schedules.length),
+          h('span', { className: 'hap-grow' }),
+          h('span', { className: 'hap-tag', style: { textTransform: 'none', letterSpacing: 0, fontWeight: 400 } },
+            'Applied by the balance timer: parked when a window starts, back when it ends.')),
+        h('table', { className: 'hap-table', 'data-table': 'schedules' },
+          h('thead', null, h('tr', null, h('th', null, 'Account'), h('th', null, 'Parked'), h('th', null, 'Now'), h('th', { style: { width: 96 } }, ''))),
+          h('tbody', null, schedules.map(sc => h('tr', { key: sc.label },
+            h('td', { style: { color: 'var(--ui-text-primary)' } }, sc.label),
+            h('td', null, sc.every),
+            h('td', null, !sc.found ? h('span', { style: { color: 'var(--ui-orange)' } }, 'not in the pool')
+              : sc.in_window && sc.parked ? (sc.until ? `parked, back ${hhmm(sc.until)}` : 'parked by hand')
+                : sc.in_window ? h(MTip, { label: 'Unparked by hand inside the window, or parking was refused (the last working account is never parked). The next window parks it again.' }, h('span', null, 'in rotation'))
+                  : h('span', { className: 'hap-muted' }, `next ${when(sc.next)}`)),
+            h('td', null, h('div', { className: 'hap-actions' },
+              sc.found ? h(IconButton, { icon: 'edit', label: 'Change schedule', onClick: () => openDialog({ type: 'schedule', row: { label: sc.label, id: sc.id || sc.label }, current: sc }) }) : null,
+              h(IconButton, { icon: 'close', label: 'Remove schedule', onClick: () => openDialog({ type: 'unschedule', row: sc }) }))))))))
       : null,
 
     data.other_sessions.length
       ? h('p', { className: 'hap-small hap-muted', style: { marginTop: 12 } },
         `${data.other_sessions.length} session(s) ran on accounts that are no longer in the pool.`)
       : null)
+}
+
+// Load per local hour for the last 7 days: quota used (from the balance timer) or tokens (from the tracker).
+function HourChart({ chart }) {
+  const [metric, setMetric] = useState(chart.has_usage ? 'used' : 'tokens')
+  const [hover, setHover] = useState(null)
+  const values = chart.days.flatMap(d => d[metric])
+  const top = Math.max(0, ...values)
+  const fmt = v => metric === 'tokens' ? `${fmtTok(v)} tokens` : `${Math.round(v)} (${chart.window}-window %)`
+  const cell = (d, hr) => {
+    const v = d[metric][hr]
+    const on = hover && hover.d === d && hover.hr === hr
+    return h('i', {
+      key: `${d.date}-${hr}`,
+      className: on ? 'on' : undefined,
+      style: v ? { background: `color-mix(in srgb, var(--ui-accent) ${Math.round(20 + 80 * v / (top || 1))}%, transparent)` } : undefined,
+      onMouseEnter: () => setHover({ d, hr }),
+      'data-v': v
+    })
+  }
+  let read = `Darker = more. Busiest hour: ${top ? fmt(top) : 'none yet'}. Hover a cell for its numbers.`
+  if (hover) {
+    const { d, hr } = hover
+    read = `${d.dow} ${d.date}, ${String(hr).padStart(2, '0')}:00-${String((hr + 1) % 24).padStart(2, '0')}:00: `
+      + (chart.has_usage ? `quota used ${Math.round(d.used[hr])}, ` : '')
+      + `${fmtTok(d.tokens[hr])} tokens in ${d.requests[hr]} request${d.requests[hr] === 1 ? '' : 's'}`
+  }
+  return h(Fragment, null,
+    h('div', { className: 'hap-section' }, 'Load by hour, last 7 days',
+      h('span', { className: 'hap-grow' }),
+      chart.has_usage
+        ? h(SegmentedControl, { options: [{ id: 'used', label: 'Quota used' }, { id: 'tokens', label: 'Tokens' }], value: metric, onChange: setMetric })
+        : null),
+    h('div', { className: 'hap-heat', 'data-chart': metric, onMouseLeave: () => setHover(null) },
+      h('span', null),
+      Array.from({ length: 24 }, (_, hr) => h('span', { key: `h${hr}`, className: 'hap-heat-l' }, hr % 3 ? '' : String(hr).padStart(2, '0'))),
+      chart.days.map(d => [h('span', { key: `l${d.date}`, className: 'hap-heat-l' }, `${d.dow} ${d.date}`), ...d[metric].map((_, hr) => cell(d, hr))])),
+    h('div', { className: 'hap-small hap-muted hap-heat-read' }, read))
+}
+
+function GroupTable({ title, kind, rows, total, extra }) {
+  const shown = rows.filter(r => r.requests)
+  if (!shown.length) return null
+  const name = r => r.name === '?' ? h(MTip, { label: 'Counted before the session tracker recorded profile and model (tracker 1.3.0). It leaves the report within 8 days.' }, h('span', { className: 'hap-muted' }, 'not split yet')) : r.name
+  return h(Fragment, null,
+    h('div', { className: 'hap-section' }, title, h('span', { className: 'hap-pill' }, shown.length)),
+    h('table', { className: 'hap-table', 'data-table': kind },
+      h('thead', null, h('tr', null,
+        h('th', null, kind === 'bots' ? 'Profile' : 'Model'), h('th', { className: 'hap-num' }, 'Tokens'), h('th', null, 'Share'),
+        h('th', { className: 'hap-num' }, 'Requests'), h('th', { className: 'hap-num' }, 'API price'),
+        extra ? h('th', null, extra[0]) : null)),
+      h('tbody', null, shown.map(r => h('tr', { key: r.name },
+        h('td', { style: { color: 'var(--ui-text-primary)' } }, name(r)),
+        h('td', { className: 'hap-num' }, h(MTip, { label: tokLines(r).join('\n') }, h('span', null, fmtTok(r.total)))),
+        h('td', null, h('span', { className: 'hap-sharebar' }, h('i', { style: { width: `${total ? Math.min(100, r.total / total * 100) : 0}%` } })),
+          h('span', { className: 'hap-tag' }, `${total ? Math.round(r.total / total * 100) : 0}%`)),
+        h('td', { className: 'hap-num' }, r.requests),
+        h('td', { className: 'hap-num' }, fmtCost(r)),
+        extra ? h('td', null, extra[1](r)) : null)))))
 }
 
 function ReportView({ provider }) {
@@ -605,52 +763,68 @@ function ReportView({ provider }) {
     refetchInterval: 300000
   })
   const d = q.data
+  const tt = d && d.tokens_total
+  const counted = tt && tt.requests
+  const since = d && d.tokens_since && d.tokens_since > (d.start || 0)
+    ? `, since ${new Date(d.tokens_since * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}` : ''
+  const usage = d && d.available && d.snapshots >= 2
   return h(Fragment, null,
     h('div', { className: 'hap-row', style: { margin: '4px 0 10px' } },
       h(SegmentedControl, {
         options: [{ id: '24', label: '24 hours' }, { id: '72', label: '3 days' }, { id: '168', label: '7 days' }],
         value: hours, onChange: setHours
       }),
-      h('span', { className: 'hap-small hap-muted' }, 'From the history the balance timer records. No provider call.')),
+      h('span', { className: 'hap-small hap-muted' }, 'From the history the balance timer records and the tokens the session tracker counts. No provider call.')),
     q.isLoading ? h(Loader, { type: 'lemniscate-bloom' })
       : q.error ? h(ErrorState, { title: errText(q.error) })
         : !d.available ? h('p', { className: 'hap-muted hap-small' }, d.message)
-          : d.snapshots < 2 ? h('p', { className: 'hap-muted hap-small' }, `Not enough history yet (${d.snapshots} snapshot(s)). The timer records one every 5 minutes.`)
-            : h(Fragment, null,
-              h('div', { className: 'hap-cards' },
-                h(Card, { k: 'Load', v: `${Math.round(d.total)}`, s: `100 = one full ${d.window} window` }),
-                h(Card, { k: 'Covered', v: `${d.span_h.toFixed(1)} h`, s: `${d.snapshots} snapshots` }),
-                h(Card, { k: 'Every account ≥ 90%', v: `${Math.round(d.full_min)} min`, s: d.full_min ? 'the pool ran out of headroom' : 'never' }),
-                h(Card, {
-                  k: 'Busiest hours', v: d.busiest.length ? `${String(d.busiest[0][0]).padStart(2, '0')}:00` : '–',
-                  s: d.busiest.map(([hr, v]) => `${String(hr).padStart(2, '0')}:00 (${Math.round(v)})`).join(', ')
-                }),
-                h(Card, {
-                  k: 'Tokens through Hermes',
-                  v: d.tokens_total && d.tokens_total.requests ? fmtTok(d.tokens_total.total) : '–',
-                  s: d.tokens_total && d.tokens_total.requests
-                    ? `${fmtTok(d.tokens_total.input)} in · ${fmtTok(d.tokens_total.output)} out · ${fmtTok(d.tokens_total.cache_read)} cache read`
-                    : 'none counted yet'
-                })),
-              d.advice ? h('div', { className: 'hap-banner' }, h(Codicon, { name: 'lightbulb' }), h('span', null, d.advice)) : null,
-              h('table', { className: 'hap-table' },
-                h('thead', null, h('tr', null,
-                  h('th', null, 'Account'), h('th', { className: 'hap-num' }, 'Used'), h('th', null, 'Share'),
-                  h('th', { className: 'hap-num' }, 'Peak'), h('th', { className: 'hap-num' }, 'Time ≥ 90%'),
-                  h('th', { className: 'hap-num' }, 'Tokens'))),
-                h('tbody', null, d.accounts.map(a => h('tr', { key: a.label },
-                  h('td', { style: { color: 'var(--ui-text-primary)' } }, a.label),
-                  h('td', { className: 'hap-num' }, Math.round(a.used)),
-                  h('td', null, h('span', { className: 'hap-sharebar' }, h('i', { style: { width: `${Math.min(100, a.share)}%` } })),
-                    h('span', { className: 'hap-tag' }, `${Math.round(a.share)}%`)),
-                  h('td', { className: 'hap-num' }, `${Math.round(a.peak)}%`),
-                  h('td', { className: 'hap-num' }, `${Math.round(a.hot_min)} min`),
-                  h('td', { className: 'hap-num' }, a.tokens && a.tokens.requests
-                    ? h(MTip, { label: tokLines(a.tokens).join('\n') }, h('span', null, fmtTok(a.tokens.total)))
-                    : h('span', { className: 'hap-muted' }, '–')))))),
-              h('p', { className: 'hap-small hap-muted', style: { marginTop: 8 } },
-                'Used and Peak come from the provider\'s usage percentages. Tokens count only what Hermes sent and received on this computer' +
-                (d.tokens_since && d.tokens_since > (d.start || 0) ? `, since ${new Date(d.tokens_since * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}.` : '.'))))
+          : h(Fragment, null,
+            h('div', { className: 'hap-cards' },
+              usage ? h(Card, { k: 'Load', v: `${Math.round(d.total)}`, s: `100 = one full ${d.window} window` }) : null,
+              usage ? h(Card, { k: 'Covered', v: `${d.span_h.toFixed(1)} h`, s: `${d.snapshots} snapshots` }) : null,
+              usage ? h(Card, { k: 'Every account ≥ 90%', v: `${Math.round(d.full_min)} min`, s: d.full_min ? 'the pool ran out of headroom' : 'never' }) : null,
+              usage ? h(Card, {
+                k: 'Busiest hours', v: d.busiest.length ? `${String(d.busiest[0][0]).padStart(2, '0')}:00` : '–',
+                s: d.busiest.map(([hr, v]) => `${String(hr).padStart(2, '0')}:00 (${Math.round(v)})`).join(', ')
+              }) : null,
+              h(Card, {
+                k: 'Tokens through Hermes',
+                v: counted ? fmtTok(tt.total) : '–',
+                s: counted ? `${fmtTok(tt.input)} in · ${fmtTok(tt.output)} out · ${fmtTok(tt.cache_read)} cache read` : 'none counted yet'
+              }),
+              h(Card, {
+                k: 'At API list prices',
+                v: counted ? fmtCost(tt) : '–',
+                s: !counted ? 'no tokens yet' : tt.unpriced ? `+ ${fmtTok(tt.unpriced)} tokens with no known price` : 'what the tokens would cost through the API'
+              })),
+            usage ? null : h('p', { className: 'hap-muted hap-small' }, `Not enough usage history yet (${d.snapshots} snapshot(s)). The timer records one every 5 minutes.`),
+            usage && d.advice ? h('div', { className: 'hap-banner' }, h(Codicon, { name: 'lightbulb' }), h('span', null, d.advice)) : null,
+            usage ? h('table', { className: 'hap-table', 'data-table': 'accounts' },
+              h('thead', null, h('tr', null,
+                h('th', null, 'Account'), h('th', { className: 'hap-num' }, 'Used'), h('th', null, 'Share'),
+                h('th', { className: 'hap-num' }, 'Peak'), h('th', { className: 'hap-num' }, 'Time ≥ 90%'),
+                h('th', { className: 'hap-num' }, 'Tokens'), h('th', { className: 'hap-num' }, 'API price'))),
+              h('tbody', null, d.accounts.map(a => h('tr', { key: a.label },
+                h('td', { style: { color: 'var(--ui-text-primary)' } }, a.label),
+                h('td', { className: 'hap-num' }, Math.round(a.used)),
+                h('td', null, h('span', { className: 'hap-sharebar' }, h('i', { style: { width: `${Math.min(100, a.share)}%` } })),
+                  h('span', { className: 'hap-tag' }, `${Math.round(a.share)}%`)),
+                h('td', { className: 'hap-num' }, `${Math.round(a.peak)}%`),
+                h('td', { className: 'hap-num' }, `${Math.round(a.hot_min)} min`),
+                h('td', { className: 'hap-num' }, a.tokens && a.tokens.requests
+                  ? h(MTip, { label: tokLines(a.tokens).join('\n') }, h('span', null, fmtTok(a.tokens.total)))
+                  : h('span', { className: 'hap-muted' }, '–')),
+                h('td', { className: 'hap-num' }, fmtCost(a.tokens)))))) : null,
+            h(GroupTable, {
+              title: 'By profile (bot)', kind: 'bots', rows: d.by_profile || [], total: tt && tt.total,
+              extra: ['Mostly', r => r.model && r.model !== '?' ? `${r.model}${r.accounts > 1 ? ` · ${r.accounts} accounts` : ''}` : '–']
+            }),
+            h(GroupTable, { title: 'By model', kind: 'models', rows: d.by_model || [], total: tt && tt.total }),
+            d.chart ? h(HourChart, { chart: d.chart }) : null,
+            h('p', { className: 'hap-small hap-muted', style: { marginTop: 8 } },
+              (usage ? 'Used and Peak come from the provider\'s usage percentages. ' : '')
+              + `Tokens count only what Hermes sent and received on this computer${since}. `
+              + 'API price is what those tokens would cost at the provider\'s list prices; a subscription is billed flat, so it shows what the use is worth, not a bill.')))
 }
 
 function HealthView({ provider, data, openResult }) {
@@ -698,13 +872,17 @@ function HealthView({ provider, data, openResult }) {
 
 function AlertsView({ provider, data, openResult }) {
   const invalidate = useInvalidate()
-  const q = useQuery({ queryKey: [ID, 'notify'], queryFn: () => get('/notify') })
+  const q = useQuery({ queryKey: [ID, 'notify', provider], queryFn: () => get(`/notify?provider=${encodeURIComponent(provider)}`) })
   const [busy, setBusy] = useState(false)
+  const [dailyAt, setDailyAt] = useState('08:00')
+  const savedDaily = q.data && q.data.daily
+  useEffect(() => { if (savedDaily) setDailyAt(savedDaily) }, [savedDaily])
+  const dailyOk = /^([01]?\d|2[0-3])[:.][0-5]\d$/.test(dailyAt.trim())
   const act = async (target, result) => {
     setBusy(true)
     try {
       const r = await post('/action', { action: 'notify', provider, target })
-      if (result) openResult('Test alert', r.output)
+      if (result) openResult(result, r.output)
       else if (!r.ok) notify('error', r.output)
       invalidate()
     } catch (e) {
@@ -733,9 +911,24 @@ function AlertsView({ provider, data, openResult }) {
         onChange: v => { if (v && v !== n.via) act(`telegram-via=${v}`) }
       }),
       h(Switch, { checked: n.telegram, disabled: busy, onCheckedChange: v => act(v ? 'telegram-on' : 'telegram-off') })),
+    h('div', { className: 'hap-setting' },
+      h('div', { className: 'hap-grow' },
+        h('div', { className: 'hap-setting-t' }, 'Daily summary'),
+        h('div', { className: 'hap-small hap-muted' },
+          'Tokens, bots, API price and load of the last 24 hours, once a day, to the channels above'
+          + (n.daily ? `. Sent by the first timer run after ${n.daily}${n.daily_last ? `; last sent ${n.daily_last}` : ''}.` : '.'))),
+      h(Input, {
+        className: 'hap-time', value: dailyAt, disabled: busy, 'aria-label': 'Time of the daily summary', placeholder: '08:00',
+        onChange: e => setDailyAt(e.target.value),
+        onBlur: () => { if (n.daily && dailyOk && dailyAt.trim() !== n.daily) act(`daily=${dailyAt.trim()}`) },
+        onKeyDown: e => { if (e.key === 'Enter') e.currentTarget.blur() }
+      }),
+      h(Switch, { checked: !!n.daily, disabled: busy || (!n.daily && !dailyOk), onCheckedChange: v => act(v ? `daily=${dailyAt.trim()}` : 'daily-off') })),
     h('div', { className: 'hap-row', style: { marginTop: 12 } },
-      h(Button, { size: 'sm', variant: 'outline', disabled: busy, onClick: () => act('test', true) },
-        h(Codicon, { name: 'bell', size: '0.8rem' }), busy ? 'Sending…' : 'Send a test alert')),
+      h(Button, { size: 'sm', variant: 'outline', disabled: busy, onClick: () => act('test', 'Test alert') },
+        h(Codicon, { name: 'bell', size: '0.8rem' }), busy ? 'Sending…' : 'Send a test alert'),
+      h(Button, { size: 'sm', variant: 'outline', disabled: busy, onClick: () => act('summary', 'Daily summary') },
+        h(Codicon, { name: 'graph', size: '0.8rem' }), 'Send the summary now')),
     h('div', { className: 'hap-section' }, 'Active now', h('span', { className: 'hap-pill' }, data.alerts.length)),
     data.alerts.length
       ? data.alerts.map(a => h('div', { className: 'hap-check', key: a.key },
@@ -810,6 +1003,20 @@ function AccountsPage() {
   if (dialog && data) {
     const close = () => setDialog(null)
     if (dialog.type === 'park') modal = h(ParkDialog, { provider, row: dialog.row, onClose: close, onDone: done })
+    else if (dialog.type === 'schedule') modal = h(ScheduleDialog, { provider, row: dialog.row, current: dialog.current, onClose: close, onDone: done })
+    else if (dialog.type === 'unschedule') {
+      modal = h(ConfirmDialog, {
+        open: true, onClose: close, title: `Remove the schedule of ${dialog.row.label}?`, confirmLabel: 'Remove schedule', busyLabel: 'Removing…',
+        description: dialog.row.parked_by_schedule
+          ? 'The timer stops parking it. It is parked now and stays parked until the current window ends; unpark it to return it sooner.'
+          : 'The timer stops parking it. The account itself is not changed.',
+        onConfirm: async () => {
+          const r = await post('/action', { action: 'unschedule', provider, target: dialog.row.label })
+          if (!r.ok) throw new Error(r.output || 'Removing the schedule failed')
+          done(firstLine(r.output))
+        }
+      })
+    }
     else if (dialog.type === 'unpark') {
       modal = h(ConfirmDialog, {
         open: true, onClose: close, title: `Unpark ${dialog.row.label}?`, confirmLabel: 'Unpark', busyLabel: 'Unparking…',

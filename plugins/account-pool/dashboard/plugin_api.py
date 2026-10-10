@@ -105,7 +105,8 @@ def _run(handler, **kw) -> dict:
     """Run a CLI handler with its output captured. Caller holds _exclusive()."""
     # The page asks for confirmation itself, so `remove` runs with --yes (_dispatch rejects it elsewhere).
     args = SimpleNamespace(provider=None, action=None, target=None, until=None, threshold=None, dry_run=False,
-                           hours=None, minutes=None, yes=kw.get("action") == "remove", key=False)
+                           hours=None, minutes=None, yes=kw.get("action") == "remove", key=False, every=None,
+                           chart=False)
     for k, v in kw.items():
         setattr(args, k, v)
     with core._capture() as buf:
@@ -232,15 +233,20 @@ def _status(provider: str) -> dict:
 
     who = core._who_data(provider, WHO_MINUTES)
     by_label = {a["label"]: [_session_row(r) for r in a["sessions"]] for a in who["accounts"]}
-    buckets, counting = core._token_buckets(provider)
+    token_rows, counting = core._token_rows(provider)
+    by_account = {}
+    for row in token_rows:
+        by_account.setdefault(row[0], []).append(row)
 
     def tokens_for(label: str, usage):
-        """Tokens of the last 24 h, and of the current usage window when its start is known (to 15 min)."""
-        rows = buckets.get(label) or {}
-        day = core._token_sum(rows, now - 24 * 3600)
+        """Tokens of the last 24 h (with their API list price), and of the current usage window when its
+        start is known (to 15 min)."""
+        rows = by_account.get(label) or []
+        day = core._token_group(provider, rows, now - 24 * 3600, by="all").get("all") or core._empty_tokens()
         win = None
         if ad.window_seconds and usage and usage.get("pct") is not None and usage.get("reset") and usage["reset"] > now:
-            win = core._token_sum(rows, usage["reset"] - ad.window_seconds - core.TOKEN_BUCKET + 1)
+            start = usage["reset"] - ad.window_seconds - core.TOKEN_BUCKET + 1
+            win = core._token_group(provider, rows, start, by="all").get("all") or core._empty_tokens()
         return {"day": day, "window": win}
     rotation = []
     for pos, e in enumerate(entries, 1):
@@ -254,7 +260,7 @@ def _status(provider: str) -> dict:
         rotation[-1]["tokens"] = tokens_for(e.label, rotation[-1]["usage"])
     parked_rows = [{
         "id": p.get("id"), "label": p.get("label", "?"), "since": p.get("_parked_at"),
-        "until": p.get("_until"), "dead": bool(p.get("_dead")), "auth": p.get("auth_type", ""),
+        "until": p.get("_until"), "dead": bool(p.get("_dead")), "auth": p.get("auth_type", ""), "by": p.get("_by"),
         "usage": usage_for(p.get("label", "?")), "spark": spark.get(p.get("label", "?"), []),
     } for p in parked]
     for row in parked_rows:
@@ -278,8 +284,9 @@ def _status(provider: str) -> dict:
         "timer": _timer(), "alerts": _alerts(provider, {e.id: e.label for e in entries}),
         "threshold": 90, "alert_all_above": cfg.get("alert_all_above", 80), "now": now,
         "rotation_mode": _rotation_mode(provider),
-        "tokens": {"since": counting, "day": core._token_sum(
-            {0: [sum(r["tokens"]["day"][k] for r in rotation + parked_rows) for k in core.TOKEN_KEYS]}, 0)},
+        "tokens": {"since": counting,
+                   "day": core._token_group(provider, token_rows, now - 24 * 3600, by="all").get("all") or core._empty_tokens()},
+        "schedules": core._schedule_rows(provider),
     }
 
 
@@ -325,12 +332,14 @@ def report(provider: str = "anthropic", hours: float = 24):
         p = _provider(provider)
         if not providers.get(p).has_usage:
             return {"available": False, "message": core._no_usage_text(p)}
-        return dict(core._report_data(p, hours), available=True)
+        return dict(core._report_data(p, hours), available=True, chart=core._chart_data(p))
 
 
 @router.get("/notify")
-def notify_status():
+def notify_status(provider: str = "anthropic"):
     with _root_home():
+        p = _provider(provider)
+        at = core._daily_at(core._config())
         cfg = core._config()
         root = core._root()
         profiles = ["default"] + sorted(d.name for d in (root / "profiles").iterdir()
@@ -340,6 +349,8 @@ def notify_status():
             "telegram": bool(core._telegram_target(cfg)), "telegram_setting": cfg["notify"].get("telegram"),
             "via": cfg["notify"].get("telegram_via") or "default", "profiles": profiles,
             "alert_all_above": cfg.get("alert_all_above", 80),
+            "daily": f"{at[0]:02d}:{at[1]:02d}" if at else None,
+            "daily_last": (core._load_json(core._state_path(), {}) or {}).get(f"daily:{p}"),
         }
 
 
@@ -366,12 +377,12 @@ def live(body: dict):
             "message": f"Usage n/a for {len(failed)} account(s): {failed[0]['note']}" if failed else ""}
 
 
-ACTIONS = {"park", "unpark", "remove", "balance", "check", "notify"}
+ACTIONS = {"park", "unpark", "remove", "balance", "check", "notify", "schedule", "unschedule"}
 
 
 @router.post("/action")
 def action(body: dict):
-    """park / unpark / remove / balance / check / notify, with the same rules as the CLI."""
+    """park / unpark / remove / balance / check / notify / schedule / unschedule, with the same rules as the CLI."""
     name = str(body.get("action") or "").strip().lower()
     if name not in ACTIONS:
         raise HTTPException(400, f"Action must be one of: {', '.join(sorted(ACTIONS))}.")
@@ -379,6 +390,10 @@ def action(body: dict):
     kw = {"provider": p, "action": name, "target": body.get("target") or None}
     if name == "park" and body.get("until"):
         kw["until"] = str(body["until"])
+    if name == "schedule":
+        if not kw["target"] or not body.get("every"):
+            raise HTTPException(400, "schedule needs a target and every (e.g. \"mon-fri 09:00-17:00\").")
+        kw["every"] = str(body["every"])
     if name == "balance":
         kw["dry_run"] = bool(body.get("dry_run"))
         if body.get("threshold") is not None:

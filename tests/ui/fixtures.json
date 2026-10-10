@@ -222,7 +222,11 @@
       "cache_read": 1000000,
       "cache_write": 130000,
       "requests": 251,
-      "total": 1200000
+      "total": 1200000,
+      "cost": 2.09,
+      "unpriced": 0,
+      "model": "claude-opus-5-5",
+      "accounts": 1
      },
      "window": {
       "input": 14445,
@@ -230,7 +234,11 @@
       "cache_read": 266255,
       "cache_write": 154193,
       "requests": 263,
-      "total": 464096
+      "total": 464096,
+      "cost": 1.4661,
+      "unpriced": 0,
+      "model": "claude-opus-5-5",
+      "accounts": 1
      }
     }
    },
@@ -427,7 +435,11 @@
       "cache_read": 2641919,
       "cache_write": 137071,
       "requests": 175,
-      "total": 2810527
+      "total": 2810527,
+      "cost": 1.6173,
+      "unpriced": 0,
+      "model": "claude-opus-5-5",
+      "accounts": 1
      },
      "window": {
       "input": 7942,
@@ -435,7 +447,11 @@
       "cache_read": 74341,
       "cache_write": 186317,
       "requests": 41,
-      "total": 344207
+      "total": 344207,
+      "cost": 2.4904,
+      "unpriced": 0,
+      "model": "claude-opus-5-5",
+      "accounts": 1
      }
     }
    },
@@ -638,7 +654,11 @@
       "cache_read": 2497441,
       "cache_write": 191421,
       "requests": 398,
-      "total": 2781198
+      "total": 2781198,
+      "cost": 2.8559,
+      "unpriced": 0,
+      "model": "claude-opus-5-5",
+      "accounts": 1
      },
      "window": {
       "input": 12321,
@@ -646,7 +666,11 @@
       "cache_read": 322732,
       "cache_write": 23932,
       "requests": 290,
-      "total": 445659
+      "total": 445659,
+      "cost": 1.967,
+      "unpriced": 0,
+      "model": "claude-opus-5-5",
+      "accounts": 1
      }
     }
    },
@@ -787,7 +811,11 @@
       "cache_read": 264932,
       "cache_write": 69861,
       "requests": 143,
-      "total": 350368
+      "total": 350368,
+      "cost": 0.6194,
+      "unpriced": 0,
+      "model": "claude-opus-5-5",
+      "accounts": 1
      },
      "window": {
       "input": 3971,
@@ -795,7 +823,11 @@
       "cache_read": 314372,
       "cache_write": 105535,
       "requests": 245,
-      "total": 489686
+      "total": 489686,
+      "cost": 1.9226,
+      "unpriced": 0,
+      "model": "claude-opus-5-5",
+      "accounts": 1
      }
     }
    },
@@ -988,7 +1020,11 @@
       "cache_read": 2478663,
       "cache_write": 81248,
       "requests": 347,
-      "total": 2647753
+      "total": 2647753,
+      "cost": 2.422,
+      "unpriced": 0,
+      "model": "claude-opus-5-5",
+      "accounts": 1
      },
      "window": {
       "input": 34753,
@@ -996,7 +1032,11 @@
       "cache_read": 154220,
       "cache_write": 193657,
       "requests": 63,
-      "total": 388232
+      "total": 388232,
+      "cost": 1.2502,
+      "unpriced": 0,
+      "model": "claude-opus-5-5",
+      "accounts": 1
      }
     }
    },
@@ -1204,7 +1244,11 @@
       "cache_read": 1918180,
       "cache_write": 164511,
       "requests": 62,
-      "total": 2161237
+      "total": 2161237,
+      "cost": 2.4534,
+      "unpriced": 0,
+      "model": "claude-opus-5-5",
+      "accounts": 1
      },
      "window": {
       "input": 18645,
@@ -1212,7 +1256,11 @@
       "cache_read": 371096,
       "cache_write": 80205,
       "requests": 282,
-      "total": 516270
+      "total": 516270,
+      "cost": 1.4763,
+      "unpriced": 0,
+      "model": "claude-opus-5-5",
+      "accounts": 1
      }
     }
    },
@@ -1419,7 +1467,11 @@
       "cache_read": 1212321,
       "cache_write": 167624,
       "requests": 75,
-      "total": 1398098
+      "total": 1398098,
+      "cost": 1.3805,
+      "unpriced": 0,
+      "model": "claude-opus-5-5",
+      "accounts": 1
      },
      "window": {
       "input": 9064,
@@ -1427,7 +1479,11 @@
       "cache_read": 209924,
       "cache_write": 121322,
       "requests": 54,
-      "total": 383439
+      "total": 383439,
+      "cost": 1.5474,
+      "unpriced": 0,
+      "model": "claude-opus-5-5",
+      "accounts": 1
      }
     }
    },
@@ -1572,7 +1628,11 @@
       "cache_read": 70843,
       "cache_write": 74976,
       "requests": 46,
-      "total": 180838
+      "total": 180838,
+      "cost": 1.0569,
+      "unpriced": 0,
+      "model": "claude-opus-5-5",
+      "accounts": 1
      },
      "window": {
       "input": 26606,
@@ -1580,7 +1640,11 @@
       "cache_read": 246408,
       "cache_write": 130045,
       "requests": 57,
-      "total": 460150
+      "total": 460150,
+      "cost": 1.9478,
+      "unpriced": 0,
+      "model": "claude-opus-5-5",
+      "accounts": 1
      }
     }
    }
@@ -1613,10 +1677,15 @@
       "cache_read": 0,
       "cache_write": 0,
       "requests": 0,
-      "total": 0
+      "total": 0,
+      "cost": 0.0,
+      "unpriced": 0,
+      "model": null,
+      "accounts": 0
      },
      "window": null
-    }
+    },
+    "by": null
    }
   ],
   "other_sessions": [],
@@ -1651,7 +1720,11 @@
     "cache_read": 12084299,
     "cache_write": 1016712,
     "requests": 1497,
-    "total": 13530019
+    "total": 13530019,
+    "cost": 14.4953,
+    "unpriced": 0,
+    "model": "claude-opus-5-5",
+    "accounts": 8
    }
   },
   "rotation_mode": {
@@ -1689,7 +1762,48 @@
     }
    ],
    "other": []
-  }
+  },
+  "schedules": [
+   {
+    "label": "bob@example.com",
+    "id": "25165e",
+    "every": "Mon-Fri 09:00-17:00",
+    "days": [
+     0,
+     1,
+     2,
+     3,
+     4
+    ],
+    "from": "09:00",
+    "to": "17:00",
+    "in_window": false,
+    "end": null,
+    "next": 1791650037.2891102,
+    "found": true,
+    "parked": false,
+    "parked_by_schedule": false,
+    "until": null
+   },
+   {
+    "label": "old@example.com",
+    "id": "0a0a0a",
+    "every": "Sat, Sun 10:00-14:00",
+    "days": [
+     5,
+     6
+    ],
+    "from": "10:00",
+    "to": "14:00",
+    "in_window": false,
+    "end": null,
+    "next": 1791725637.2891102,
+    "found": false,
+    "parked": false,
+    "parked_by_schedule": false,
+    "until": null
+   }
+  ]
  },
  "/status?provider=openai-codex": {
   "provider": "openai-codex",
@@ -1743,7 +1857,11 @@
     "cache_read": 0,
     "cache_write": 0,
     "requests": 0,
-    "total": 0
+    "total": 0,
+    "cost": 0.0,
+    "unpriced": 0,
+    "model": null,
+    "accounts": 0
    }
   },
   "rotation_mode": {
@@ -1781,7 +1899,8 @@
     }
    ],
    "other": []
-  }
+  },
+  "schedules": []
  },
  "/summary?provider=anthropic": {
   "provider": "anthropic",
@@ -1814,7 +1933,11 @@
      "cache_read": 2474990,
      "cache_write": 108314,
      "requests": 64,
-     "total": 2638672
+     "total": 2638672,
+     "cost": 1.9038,
+     "unpriced": 0,
+     "model": "claude-opus-5-5",
+     "accounts": 1
     }
    },
    {
@@ -1829,7 +1952,11 @@
      "cache_read": 1405307,
      "cache_write": 127492,
      "requests": 80,
-     "total": 1563580
+     "total": 1563580,
+     "cost": 1.1534,
+     "unpriced": 0,
+     "model": "claude-opus-5-5",
+     "accounts": 1
     }
    },
    {
@@ -1844,7 +1971,11 @@
      "cache_read": 664538,
      "cache_write": 22871,
      "requests": 50,
-     "total": 723800
+     "total": 723800,
+     "cost": 0.6847,
+     "unpriced": 0,
+     "model": "claude-opus-5-5",
+     "accounts": 1
     }
    },
    {
@@ -1859,7 +1990,11 @@
      "cache_read": 2050099,
      "cache_write": 198802,
      "requests": 306,
-     "total": 2311093
+     "total": 2311093,
+     "cost": 2.1054,
+     "unpriced": 0,
+     "model": "claude-opus-5-5",
+     "accounts": 1
     }
    },
    {
@@ -1874,7 +2009,11 @@
      "cache_read": 890145,
      "cache_write": 69986,
      "requests": 394,
-     "total": 1063151
+     "total": 1063151,
+     "cost": 2.0872,
+     "unpriced": 0,
+     "model": "claude-opus-5-5",
+     "accounts": 1
     }
    },
    {
@@ -1889,7 +2028,11 @@
      "cache_read": 3327609,
      "cache_write": 188746,
      "requests": 216,
-     "total": 3586887
+     "total": 3586887,
+     "cost": 2.8506,
+     "unpriced": 0,
+     "model": "claude-opus-5-5",
+     "accounts": 1
     }
    },
    {
@@ -1904,7 +2047,11 @@
      "cache_read": 588669,
      "cache_write": 75801,
      "requests": 20,
-     "total": 752496
+     "total": 752496,
+     "cost": 1.8112,
+     "unpriced": 0,
+     "model": "claude-opus-5-5",
+     "accounts": 1
     }
    },
    {
@@ -1919,7 +2066,11 @@
      "cache_read": 1231602,
      "cache_write": 75236,
      "requests": 115,
-     "total": 1336343
+     "total": 1336343,
+     "cost": 0.8617,
+     "unpriced": 0,
+     "model": "claude-opus-5-5",
+     "accounts": 1
     }
    },
    {
@@ -1934,7 +2085,11 @@
      "cache_read": 1753707,
      "cache_write": 31038,
      "requests": 94,
-     "total": 1842706
+     "total": 1842706,
+     "cost": 1.0282,
+     "unpriced": 0,
+     "model": "claude-opus-5-5",
+     "accounts": 1
     }
    }
   ],
@@ -1964,9 +2119,95 @@
    "cache_read": 14386666,
    "cache_write": 898286,
    "requests": 1339,
-   "total": 15818728
+   "total": 15818728,
+   "cost": 11.5889,
+   "unpriced": 3163745,
+   "model": "claude-opus-5-5",
+   "accounts": 8
   },
-  "tokens_since": 1791380037.2891102
+  "tokens_since": 1791380037.2891102,
+  "by_profile": [
+   {
+    "input": 111190,
+    "output": 155698,
+    "cache_read": 7193333,
+    "cache_write": 449143,
+    "requests": 669,
+    "total": 7909364,
+    "cost": 7.2431,
+    "unpriced": 0,
+    "model": "claude-opus-5-5",
+    "accounts": 3,
+    "name": "worker-1"
+   },
+   {
+    "input": 66714,
+    "output": 93418,
+    "cache_read": 4315999,
+    "cache_write": 269485,
+    "requests": 401,
+    "total": 4745616,
+    "cost": 4.3458,
+    "unpriced": 0,
+    "model": "claude-opus-5-5",
+    "accounts": 3,
+    "name": "default"
+   },
+   {
+    "input": 44476,
+    "output": 62279,
+    "cache_read": 2877333,
+    "cache_write": 179657,
+    "requests": 267,
+    "total": 3163745,
+    "cost": 0.0,
+    "unpriced": 3163745,
+    "model": "?",
+    "accounts": 3,
+    "name": "?"
+   }
+  ],
+  "by_model": [
+   {
+    "input": 133428,
+    "output": 186837,
+    "cache_read": 8631999,
+    "cache_write": 538971,
+    "requests": 803,
+    "total": 9491235,
+    "cost": 8.6917,
+    "unpriced": 0,
+    "model": "claude-opus-5-5",
+    "accounts": 3,
+    "name": "claude-opus-5-5"
+   },
+   {
+    "input": 44476,
+    "output": 62279,
+    "cache_read": 2877333,
+    "cache_write": 179657,
+    "requests": 267,
+    "total": 3163745,
+    "cost": 2.8972,
+    "unpriced": 0,
+    "model": "claude-sonnet-5-5",
+    "accounts": 3,
+    "name": "claude-sonnet-5-5"
+   },
+   {
+    "input": 44476,
+    "output": 62279,
+    "cache_read": 2877333,
+    "cache_write": 179657,
+    "requests": 267,
+    "total": 3163745,
+    "cost": 0.0,
+    "unpriced": 3163745,
+    "model": "?",
+    "accounts": 3,
+    "name": "?"
+   }
+  ]
  },
  "/report?provider=anthropic&hours=72": {
   "hours": 72.0,
@@ -1985,7 +2226,11 @@
      "cache_read": 994407,
      "cache_write": 22510,
      "requests": 332,
-     "total": 1086705
+     "total": 1086705,
+     "cost": 1.2122,
+     "unpriced": 0,
+     "model": "claude-opus-5-5",
+     "accounts": 1
     }
    },
    {
@@ -2000,7 +2245,11 @@
      "cache_read": 1479739,
      "cache_write": 39240,
      "requests": 58,
-     "total": 1596014
+     "total": 1596014,
+     "cost": 1.6901,
+     "unpriced": 0,
+     "model": "claude-opus-5-5",
+     "accounts": 1
     }
    },
    {
@@ -2015,7 +2264,11 @@
      "cache_read": 477978,
      "cache_write": 186877,
      "requests": 144,
-     "total": 761914
+     "total": 761914,
+     "cost": 2.7203,
+     "unpriced": 0,
+     "model": "claude-opus-5-5",
+     "accounts": 1
     }
    },
    {
@@ -2030,7 +2283,11 @@
      "cache_read": 165049,
      "cache_write": 183092,
      "requests": 252,
-     "total": 428021
+     "total": 428021,
+     "cost": 2.1275,
+     "unpriced": 0,
+     "model": "claude-opus-5-5",
+     "accounts": 1
     }
    },
    {
@@ -2045,7 +2302,11 @@
      "cache_read": 633603,
      "cache_write": 55582,
      "requests": 217,
-     "total": 803196
+     "total": 803196,
+     "cost": 2.1456,
+     "unpriced": 0,
+     "model": "claude-opus-5-5",
+     "accounts": 1
     }
    },
    {
@@ -2060,7 +2321,11 @@
      "cache_read": 866835,
      "cache_write": 79869,
      "requests": 332,
-     "total": 1004543
+     "total": 1004543,
+     "cost": 1.5359,
+     "unpriced": 0,
+     "model": "claude-opus-5-5",
+     "accounts": 1
     }
    },
    {
@@ -2075,7 +2340,11 @@
      "cache_read": 1146472,
      "cache_write": 184882,
      "requests": 303,
-     "total": 1371563
+     "total": 1371563,
+     "cost": 1.7269,
+     "unpriced": 0,
+     "model": "claude-opus-5-5",
+     "accounts": 1
     }
    },
    {
@@ -2090,7 +2359,11 @@
      "cache_read": 924557,
      "cache_write": 178212,
      "requests": 60,
-     "total": 1198454
+     "total": 1198454,
+     "cost": 2.5506,
+     "unpriced": 0,
+     "model": "claude-opus-5-5",
+     "accounts": 1
     }
    },
    {
@@ -2105,7 +2378,11 @@
      "cache_read": 1867719,
      "cache_write": 48586,
      "requests": 39,
-     "total": 1940021
+     "total": 1940021,
+     "cost": 1.0091,
+     "unpriced": 0,
+     "model": "claude-opus-5-5",
+     "accounts": 1
     }
    }
   ],
@@ -2135,9 +2412,95 @@
    "cache_read": 8556359,
    "cache_write": 978850,
    "requests": 1737,
-   "total": 10190431
+   "total": 10190431,
+   "cost": 13.3746,
+   "unpriced": 2038085,
+   "model": "claude-opus-5-5",
+   "accounts": 8
   },
-  "tokens_since": 1791380037.2891102
+  "tokens_since": 1791380037.2891102,
+  "by_profile": [
+   {
+    "input": 93491,
+    "output": 234120,
+    "cache_read": 4278179,
+    "cache_write": 489425,
+    "requests": 868,
+    "total": 5095215,
+    "cost": 8.3591,
+    "unpriced": 0,
+    "model": "claude-opus-5-5",
+    "accounts": 3,
+    "name": "worker-1"
+   },
+   {
+    "input": 56094,
+    "output": 140472,
+    "cache_read": 2566907,
+    "cache_write": 293655,
+    "requests": 521,
+    "total": 3057128,
+    "cost": 5.0155,
+    "unpriced": 0,
+    "model": "claude-opus-5-5",
+    "accounts": 3,
+    "name": "default"
+   },
+   {
+    "input": 37396,
+    "output": 93648,
+    "cache_read": 1711271,
+    "cache_write": 195770,
+    "requests": 347,
+    "total": 2038085,
+    "cost": 0.0,
+    "unpriced": 2038085,
+    "model": "?",
+    "accounts": 3,
+    "name": "?"
+   }
+  ],
+  "by_model": [
+   {
+    "input": 112189,
+    "output": 280944,
+    "cache_read": 5133815,
+    "cache_write": 587310,
+    "requests": 1042,
+    "total": 6114258,
+    "cost": 10.0309,
+    "unpriced": 0,
+    "model": "claude-opus-5-5",
+    "accounts": 3,
+    "name": "claude-opus-5-5"
+   },
+   {
+    "input": 37396,
+    "output": 93648,
+    "cache_read": 1711271,
+    "cache_write": 195770,
+    "requests": 347,
+    "total": 2038085,
+    "cost": 3.3436,
+    "unpriced": 0,
+    "model": "claude-sonnet-5-5",
+    "accounts": 3,
+    "name": "claude-sonnet-5-5"
+   },
+   {
+    "input": 37396,
+    "output": 93648,
+    "cache_read": 1711271,
+    "cache_write": 195770,
+    "requests": 347,
+    "total": 2038085,
+    "cost": 0.0,
+    "unpriced": 2038085,
+    "model": "?",
+    "accounts": 3,
+    "name": "?"
+   }
+  ]
  },
  "/report?provider=anthropic&hours=168": {
   "hours": 168.0,
@@ -2156,7 +2519,11 @@
      "cache_read": 2248976,
      "cache_write": 122658,
      "requests": 151,
-     "total": 2426605
+     "total": 2426605,
+     "cost": 1.8629,
+     "unpriced": 0,
+     "model": "claude-opus-5-5",
+     "accounts": 1
     }
    },
    {
@@ -2171,7 +2538,11 @@
      "cache_read": 1865027,
      "cache_write": 156334,
      "requests": 109,
-     "total": 2099000
+     "total": 2099000,
+     "cost": 2.1606,
+     "unpriced": 0,
+     "model": "claude-opus-5-5",
+     "accounts": 1
     }
    },
    {
@@ -2186,7 +2557,11 @@
      "cache_read": 3997499,
      "cache_write": 79872,
      "requests": 265,
-     "total": 4105445
+     "total": 4105445,
+     "cost": 1.6562,
+     "unpriced": 0,
+     "model": "claude-opus-5-5",
+     "accounts": 1
     }
    },
    {
@@ -2201,7 +2576,11 @@
      "cache_read": 2446152,
      "cache_write": 75679,
      "requests": 124,
-     "total": 2570417
+     "total": 2570417,
+     "cost": 1.7296,
+     "unpriced": 0,
+     "model": "claude-opus-5-5",
+     "accounts": 1
     }
    },
    {
@@ -2216,7 +2595,11 @@
      "cache_read": 3241471,
      "cache_write": 90567,
      "requests": 230,
-     "total": 3349188
+     "total": 3349188,
+     "cost": 1.3948,
+     "unpriced": 0,
+     "model": "claude-opus-5-5",
+     "accounts": 1
     }
    },
    {
@@ -2231,7 +2614,11 @@
      "cache_read": 1969424,
      "cache_write": 32215,
      "requests": 110,
-     "total": 2032885
+     "total": 2032885,
+     "cost": 0.8867,
+     "unpriced": 0,
+     "model": "claude-opus-5-5",
+     "accounts": 1
     }
    },
    {
@@ -2246,7 +2633,11 @@
      "cache_read": 1282633,
      "cache_write": 169990,
      "requests": 87,
-     "total": 1553390
+     "total": 1553390,
+     "cost": 2.7031,
+     "unpriced": 0,
+     "model": "claude-opus-5-5",
+     "accounts": 1
     }
    },
    {
@@ -2261,7 +2652,11 @@
      "cache_read": 486681,
      "cache_write": 138055,
      "requests": 189,
-     "total": 673610
+     "total": 673610,
+     "cost": 1.3534,
+     "unpriced": 0,
+     "model": "claude-opus-5-5",
+     "accounts": 1
     }
    },
    {
@@ -2276,7 +2671,11 @@
      "cache_read": 2855372,
      "cache_write": 56791,
      "requests": 322,
-     "total": 3029971
+     "total": 3029971,
+     "cost": 2.6319,
+     "unpriced": 0,
+     "model": "claude-opus-5-5",
+     "accounts": 1
     }
    }
   ],
@@ -2306,9 +2705,95 @@
    "cache_read": 20393235,
    "cache_write": 922161,
    "requests": 1587,
-   "total": 21840511
+   "total": 21840511,
+   "cost": 13.1034,
+   "unpriced": 4368102,
+   "model": "claude-opus-5-5",
+   "accounts": 8
   },
-  "tokens_since": 1791380037.2891102
+  "tokens_since": 1791380037.2891102,
+  "by_profile": [
+   {
+    "input": 87890,
+    "output": 174667,
+    "cache_read": 10196617,
+    "cache_write": 461080,
+    "requests": 793,
+    "total": 10920254,
+    "cost": 8.1896,
+    "unpriced": 0,
+    "model": "claude-opus-5-5",
+    "accounts": 3,
+    "name": "worker-1"
+   },
+   {
+    "input": 52734,
+    "output": 104800,
+    "cache_read": 6117970,
+    "cache_write": 276648,
+    "requests": 476,
+    "total": 6552152,
+    "cost": 4.9138,
+    "unpriced": 0,
+    "model": "claude-opus-5-5",
+    "accounts": 3,
+    "name": "default"
+   },
+   {
+    "input": 35156,
+    "output": 69867,
+    "cache_read": 4078647,
+    "cache_write": 184432,
+    "requests": 317,
+    "total": 4368102,
+    "cost": 0.0,
+    "unpriced": 4368102,
+    "model": "?",
+    "accounts": 3,
+    "name": "?"
+   }
+  ],
+  "by_model": [
+   {
+    "input": 105468,
+    "output": 209601,
+    "cache_read": 12235941,
+    "cache_write": 553296,
+    "requests": 952,
+    "total": 13104306,
+    "cost": 9.8276,
+    "unpriced": 0,
+    "model": "claude-opus-5-5",
+    "accounts": 3,
+    "name": "claude-opus-5-5"
+   },
+   {
+    "input": 35156,
+    "output": 69867,
+    "cache_read": 4078647,
+    "cache_write": 184432,
+    "requests": 317,
+    "total": 4368102,
+    "cost": 3.2759,
+    "unpriced": 0,
+    "model": "claude-sonnet-5-5",
+    "accounts": 3,
+    "name": "claude-sonnet-5-5"
+   },
+   {
+    "input": 35156,
+    "output": 69867,
+    "cache_read": 4078647,
+    "cache_write": 184432,
+    "requests": 317,
+    "total": 4368102,
+    "cost": 0.0,
+    "unpriced": 4368102,
+    "model": "?",
+    "accounts": 3,
+    "name": "?"
+   }
+  ]
  },
  "/report?provider=openai-codex&hours=24": {
   "hours": 24.0,
@@ -2328,10 +2813,17 @@
    "cache_read": 0,
    "cache_write": 0,
    "requests": 0,
-   "total": 0
-  }
+   "total": 0,
+   "cost": 0.0,
+   "unpriced": 0,
+   "model": null,
+   "accounts": 0
+  },
+  "tokens_since": null,
+  "by_profile": [],
+  "by_model": []
  },
- "/notify": {
+ "/notify?provider=anthropic": {
   "desktop": true,
   "notify_send": true,
   "telegram": true,
@@ -2345,6 +2837,8 @@
    "worker-4",
    "worker-5"
   ],
-  "alert_all_above": 80
+  "alert_all_above": 80,
+  "daily": null,
+  "daily_last": null
  }
 }

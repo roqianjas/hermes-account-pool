@@ -110,12 +110,12 @@ check({v["account"] for v in sessions.values()} == {"alice@example.com", "bob@ex
 # old buckets are dropped
 data = json.loads(raw)
 old = str(int((time.time() - 9 * 86400) // 900 * 900))
-data["buckets"]["anthropic"]["alice@example.com"][old] = [1, 1, 1, 1, 1]
-data["buckets"].setdefault("openai-codex", {})["gone@example.com"] = {old: [1, 1, 1, 1, 1]}
+data["counts"]["anthropic"]["alice@example.com"]["default"]["fake-model"][old] = [1, 1, 1, 1, 1]
+data["counts"].setdefault("openai-codex", {})["gone@example.com"] = {"default": {"fake-model": {old: [1, 1, 1, 1, 1]}}}
 path.write_text(json.dumps(data))
 call("alice@example.com", U)
 data = json.loads(path.read_text())
-check(old not in data["buckets"]["anthropic"]["alice@example.com"] and "openai-codex" not in data["buckets"],
+check(old not in data["counts"]["anthropic"]["alice@example.com"]["default"]["fake-model"] and "openai-codex" not in data["counts"],
       "buckets older than 8 days dropped, empty accounts and providers removed")
 
 # backend: per-account tokens on the Accounts page

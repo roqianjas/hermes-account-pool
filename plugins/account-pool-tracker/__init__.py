@@ -7,7 +7,8 @@ the live pool from the running agent after each API call and writes:
 - {profile, session, platform, model, account, since when on that account} to <hermes root>/account-pool-sessions.json.
   Throttled: once per session per minute, or immediately when the session's account changes.
 - the call's token counts (input, output, cache read, cache write, 1 request) added to a
-  15-minute bucket of that account in <hermes root>/account-pool-tokens.json. Every call.
+  15-minute bucket of that account, profile and model in <hermes root>/account-pool-tokens.json.
+  Every call.
 
 Both files are mode 600 and hold labels, ids and numbers only, never credentials.
 Any failure is swallowed so the hook can never break a turn.
@@ -106,11 +107,53 @@ def _replace_json(path: Path, data: dict) -> None:
     os.replace(tmp, path)
 
 
-def _add_tokens(root: Path, provider: str, label: str, usage, now: float) -> None:
-    """Add one call's tokens to its account: buckets[provider][label][bucket start] = [in, out, cache read, cache write, calls]."""
+def _upgrade_tokens(data, now: float) -> dict:
+    """Bring the token file to version 2. Buckets written by tracker 1.1.0 (top-level "buckets": no
+    profile, no model) are folded in under profile "?" and model "?"; a 1.1.0 tracker still running
+    in another process can add such buckets again until it restarts, so this runs on every write."""
+    if not isinstance(data, dict) or data.get("version") != 2:
+        old = data if isinstance(data, dict) else {}
+        data = {"version": 2, "bucket": TOKEN_BUCKET, "since": old.get("since") or now, "counts": {},
+                "buckets": old.get("buckets") or {}}
+    counts = data.setdefault("counts", {})
+    for prov, labels in (data.pop("buckets", None) or {}).items():
+        for label, slots in (labels or {}).items():
+            dest = counts.setdefault(prov, {}).setdefault(label, {}).setdefault("?", {}).setdefault("?", {})
+            for slot, v in (slots or {}).items():
+                row = dest.setdefault(slot, [0, 0, 0, 0, 0])
+                for i in range(5):
+                    row[i] += int(v[i]) if i < len(v) else 0
+    return data
+
+
+def _prune(node: dict, cutoff: float, depth: int = 0) -> None:
+    """Drop buckets older than `cutoff` and the levels they leave empty (provider > label > profile > model)."""
+    if depth == 4:
+        for k in list(node):
+            try:
+                if int(k) < cutoff:
+                    del node[k]
+            except ValueError:
+                del node[k]
+        return
+    for k in list(node):
+        if isinstance(node[k], dict):
+            _prune(node[k], cutoff, depth + 1)
+        if not node[k]:
+            del node[k]
+
+
+def _add_tokens(root: Path, provider: str, label: str, profile: str, model: str, usage, now: float) -> None:
+    """Add one call's tokens: counts[provider][label][profile][model][bucket start] = [in, out, cache read,
+    cache write, calls]."""
     if not isinstance(usage, dict) or not provider or not label:
         return
-    vals = [int(usage.get(k) or 0) for k in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens")]
+    vals = []
+    for k in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens"):
+        try:
+            vals.append(int(usage.get(k) or 0))
+        except (TypeError, ValueError):
+            vals.append(0)
     if not any(vals):
         return
     import fcntl
@@ -120,21 +163,15 @@ def _add_tokens(root: Path, provider: str, label: str, usage, now: float) -> Non
         try:
             data = json.loads(path.read_text())
         except Exception:
-            data = {"version": 1, "bucket": TOKEN_BUCKET, "since": now, "buckets": {}}
-        buckets = data.setdefault("buckets", {})
+            data = {"version": 2, "bucket": TOKEN_BUCKET, "since": now, "counts": {}}
+        data = _upgrade_tokens(data, now)
         slot = str(int(now // TOKEN_BUCKET * TOKEN_BUCKET))
-        row = buckets.setdefault(provider, {}).setdefault(label, {}).setdefault(slot, [0, 0, 0, 0, 0])
+        row = (data["counts"].setdefault(provider, {}).setdefault(label, {}).setdefault(profile or "?", {})
+               .setdefault(model or "?", {}).setdefault(slot, [0, 0, 0, 0, 0]))
         for i, v in enumerate(vals):
             row[i] += v
         row[4] += 1
-        cutoff = now - TOKEN_KEEP
-        for prov in list(buckets):
-            for lab in list(buckets[prov]):
-                buckets[prov][lab] = {k: v for k, v in buckets[prov][lab].items() if int(k) >= cutoff}
-                if not buckets[prov][lab]:
-                    del buckets[prov][lab]
-            if not buckets[prov]:
-                del buckets[prov]
+        _prune(data["counts"], now - TOKEN_KEEP)
         _replace_json(path, data)
 
 
@@ -157,7 +194,8 @@ def _on_api_request(**kw) -> None:
         # A call that went to another provider (a fallback) did not use this pool's account.
         if pool_provider and (not call_provider or call_provider == pool_provider):
             try:
-                _add_tokens(root, pool_provider, label, kw.get("usage"), now)
+                model = str(kw.get("model") or getattr(agent, "model", "") or "?").split("/")[-1]
+                _add_tokens(root, pool_provider, label, profile, model, kw.get("usage"), now)
             except Exception:
                 pass
         prev = _last.get(key)

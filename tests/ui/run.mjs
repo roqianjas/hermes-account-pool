@@ -38,6 +38,24 @@ const plugin = (await import(new URL('.plugin.under-test.mjs', HERE).href)).defa
 fs.unlinkSync(UNDER_TEST)
 
 const fx = JSON.parse(fs.readFileSync(new URL('fixtures.json', HERE), 'utf8'))
+// The hour chart of the Report tab: 7 days x 24 hours, busy from 09:00 to 21:00.
+function chart(window, busy) {
+  const days = []
+  for (let back = 6; back >= 0; back--) {
+    const d = new Date()
+    d.setHours(0, 0, 0, 0)
+    d.setDate(d.getDate() - back)
+    const used = Array.from({ length: 24 }, (_, hr) => (busy && hr >= 9 && hr < 21 ? ((hr * 7 + back * 13) % 40) + 5 : 0))
+    days.push({
+      start: d.getTime() / 1000, date: `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
+      dow: d.toLocaleDateString('en-US', { weekday: 'short' }), used, tokens: used.map(v => v * 90000), requests: used.map(v => v)
+    })
+  }
+  return { window, has_usage: true, days }
+}
+for (const [path, rep] of Object.entries(fx)) {
+  if (path.startsWith('/report?')) rep.chart = chart(rep.window, rep.snapshots > 0)
+}
 const calls = []
 let failNext = null
 const store = {}
@@ -113,6 +131,11 @@ ok(rows[0].textContent.includes('1.2M'), 'tokens of the first account shown comp
 ok(screen.getByText('rotation: fill_first'), 'rotation mode shown in the header')
 ok(screen.getByText(/New sessions start on #1/), 'rotation table explains where new sessions start')
 ok(!screen.queryByText(/Hermes rotation is not fill_first/), 'no rotation banner while every profile uses fill_first')
+ok(screen.getByText(/at API prices · \d+ requests/), 'tokens card shows the API price')
+ok(within(rows[1]).getByText(/Mon-Fri 09:00-17:00/), 'schedule chip on the scheduled account')
+const schedTable = document.querySelector('[data-table="schedules"]')
+ok(schedTable && schedTable.querySelectorAll('tbody tr').length === status.schedules.length, 'schedules table lists every schedule')
+ok(within(schedTable).getByText('not in the pool'), 'a schedule for an account no longer in the pool is flagged')
 
 // live usage
 await click(screen.getByText('Live usage').closest('button'))
@@ -132,6 +155,31 @@ const until = document.querySelector('input[placeholder^="17:00"]')
 await act(async () => { fireEvent.change(until, { target: { value: '+90m' } }) })
 await click(screen.getAllByText('Park').find(b => b.tagName === 'BUTTON'))
 await waitFor(() => ok(lastPost('/action')?.body.until === '+90m', 'custom until sent'))
+
+// park schedule: a new one, with Saturday added and a window past midnight
+await click(within(rows[0]).getByLabelText('Park on a schedule'))
+ok(screen.getByText(`Park ${status.rotation[0].label} on a schedule`), 'schedule dialog opens')
+await click(screen.getByText('Sat'))
+await act(async () => { fireEvent.change(document.querySelector('input[aria-label="Parked from"]'), { target: { value: '22:00' } }) })
+await act(async () => { fireEvent.change(document.querySelector('input[aria-label="Parked until"]'), { target: { value: '06:00' } }) })
+await click(screen.getByText('Add schedule'))
+await waitFor(() => {
+  const b = lastPost('/action')?.body
+  ok(b.action === 'schedule' && b.target === status.rotation[0].id && b.every === 'mon,tue,wed,thu,fri,sat 22:00-06:00', 'schedule posts the id, days and hours')
+})
+// an existing schedule opens for editing; a bad time is flagged and not sent
+await click(within(rows[1]).getByLabelText('Park on a schedule'))
+ok(screen.getByText('Save schedule'), 'an existing schedule opens for editing')
+const before = calls.length
+await act(async () => { fireEvent.change(document.querySelector('input[aria-label="Parked from"]'), { target: { value: '25:00' } }) })
+ok(screen.getAllByText(/Pick at least one day and two different times/).length, 'an invalid time is flagged')
+await click(screen.getByText('Save schedule'))
+ok(calls.length === before, 'an invalid schedule is not posted')
+await click(screen.getByText('Cancel'))
+// remove a schedule
+await click(within(document.querySelector('[data-table="schedules"] tbody tr')).getByLabelText('Remove schedule'))
+await click(screen.getAllByText('Remove schedule').find(b => b.tagName === 'BUTTON' && !b.getAttribute('aria-label')))
+await waitFor(() => ok(lastPost('/action')?.body.action === 'unschedule' && lastPost('/action').body.target === status.schedules[0].label, 'unschedule posts the label'))
 
 // remove
 await click(within(rows[2]).getByLabelText('Remove'))
@@ -192,7 +240,18 @@ ok(lastPost('/signin/cancel')?.body.flow === 'F1', 'cancel posts /signin/cancel'
 // report
 await click(screen.getByText('Report'))
 await screen.findByText('Busiest hours')
-ok(document.querySelectorAll('.hap-table tbody tr').length === fx['/report?provider=anthropic&hours=24'].accounts.length, 'report rows match')
+const rep24 = fx['/report?provider=anthropic&hours=24']
+ok(document.querySelectorAll('[data-table="accounts"] tbody tr').length === rep24.accounts.length, 'report rows match')
+ok(document.querySelectorAll('[data-table="bots"] tbody tr').length === rep24.by_profile.filter(r => r.requests).length, 'tokens per profile (bot) listed')
+ok(document.querySelectorAll('[data-table="models"] tbody tr').length === rep24.by_model.filter(r => r.requests).length, 'tokens per model listed')
+ok(screen.getAllByText('not split yet').length === 2, 'tokens counted before tracker 1.3.0 are labelled')
+ok(screen.getByText('At API list prices') && screen.getByText(/^\$[\d,.]+\+$/), 'API price card with the unpriced marker')
+const cells = document.querySelectorAll('.hap-heat > i')
+ok(cells.length === 7 * 24, 'hour chart has 7 x 24 cells')
+await act(async () => { fireEvent.mouseEnter(cells[6 * 24 + 9]) })
+ok(document.querySelector('.hap-heat-read').textContent.includes('09:00-10:00: quota used'), 'hovering a cell shows its numbers')
+await click(screen.getByText('Tokens', { selector: 'button' }))
+ok(document.querySelector('[data-chart="tokens"]'), 'chart switches to tokens')
 await click(screen.getByText('7 days'))
 await waitFor(() => ok(calls.some(c => c.path === '/report?provider=anthropic&hours=168'), 'report 7 days fetched'))
 
@@ -215,6 +274,12 @@ await act(async () => { fireEvent.change(document.querySelector('[data-sdk-selec
 await waitFor(() => ok(lastPost('/action')?.body.target === 'telegram-via=worker-2', 'telegram via posts'))
 await click(screen.getByText('Send a test alert').closest('button'))
 await screen.findByText('Test sent: desktop ok')
+await click(screen.getByText('Close'))
+ok(screen.getByText('Daily summary'), 'daily summary setting shown')
+await click(screen.getAllByRole('switch')[2])
+await waitFor(() => ok(lastPost('/action')?.body.target === 'daily=08:00', 'daily summary switch posts daily=08:00'))
+await click(screen.getByText('Send the summary now').closest('button'))
+await waitFor(() => ok(lastPost('/action')?.body.target === 'summary', 'send the summary now posts summary'))
 await click(screen.getByText('Close'))
 
 // provider switch -> empty state

@@ -12,7 +12,7 @@ Bug reports, fixes and adapters for more providers are welcome. This page covers
 | `plugins/account-pool/desktop/plugin.js` | The Accounts page in Hermes Desktop (one ES module, no build step) |
 | `plugins/account-pool/dashboard/plugin_api.py` | The page's backend: FastAPI routes under `/api/plugins/account-pool/` |
 | `plugins/account-pool/dashboard/manifest.json` | Tells Hermes to mount `plugin_api.py`; `dist/index.js` is a stub for the browser dashboard |
-| `tests/api_sandbox.py`, `tests/profile_backend.py`, `tests/tokens_sandbox.py`, `tests/ui/` | Backend tests in a sandbox (actions and sign-in; backend launched under a profile; token counting), and the page in jsdom |
+| `tests/api_sandbox.py`, `tests/profile_backend.py`, `tests/tokens_sandbox.py`, `tests/features_sandbox.py`, `tests/ui/` | Backend tests in a sandbox (actions and sign-in; backend launched under a profile; token counting; tokens per bot and model, API prices, the hour chart, the daily summary and park schedules), and the page in jsdom |
 | `plugins/account-pool-tracker/` | The `post_api_request` hook behind `who` |
 | `systemd/` | Service and timer templates, filled in by `install.sh` |
 | `install.sh`, `uninstall.sh` | Install and remove everything |
@@ -118,6 +118,11 @@ rm -rf "$SB"
 # token counting: tracker hook, report, page backend (own sandbox)
 SB=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" hap-sandbox.XXXX)
 HERMES_HOME=$SB ~/.hermes/hermes-agent/venv/bin/python tests/tokens_sandbox.py
+rm -rf "$SB"
+
+# tokens per bot and model, prices, chart, daily summary, schedules (own sandbox; nothing is sent)
+SB=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" hap-sandbox.XXXX)
+HERMES_HOME=$SB ~/.hermes/hermes-agent/venv/bin/python tests/features_sandbox.py
 rm -rf "$SB"
 
 # the page in jsdom, every tab, dialog and button, answered from tests/ui/fixtures.json

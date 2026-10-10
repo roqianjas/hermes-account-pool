@@ -264,13 +264,13 @@ def _telegram_target(cfg: dict):
     return None
 
 
-def _notify(title: str, body: str) -> list[str]:
+def _notify(title: str, body: str, icon: str = "dialog-warning") -> list[str]:
     """Send to every configured channel; return the channels that succeeded."""
     cfg = _config()
     sent = []
     if cfg["notify"].get("desktop") and shutil.which("notify-send"):
         try:
-            r = subprocess.run(["notify-send", "-a", "Hermes", "-i", "dialog-warning", title, body],
+            r = subprocess.run(["notify-send", "-a", "Hermes", "-i", icon, title, body],
                                capture_output=True, timeout=10)
             if r.returncode == 0:
                 sent.append("desktop")
@@ -331,6 +331,197 @@ def _run_alerts(provider: str, pool, known) -> list[str]:
     now = time.time()
     other.update({k: mine.get(k, now) for k in current})
     _atomic_json(_alerts_path(), other)
+    return actions
+
+
+def _state_path() -> Path:
+    """Timer bookkeeping that is not a setting: last daily summary, schedule windows already applied."""
+    return _root() / "account-pool-state.json"
+
+
+def _short(label: str) -> str:
+    return str(label or "?").split("@")[0]
+
+
+def _summary(provider: str, hours: float = 24) -> tuple:
+    """(title, body) of the daily summary: tokens, bots, load per account, the pool now. Files only."""
+    data = _report_data(provider, hours)
+    tt = data["tokens_total"]
+    lines = []
+    if tt["requests"]:
+        cost = _fmt_cost(tt)
+        lines.append(f"Tokens: {_fmt_tokens(tt['total'])} in {tt['requests']} requests"
+                     + (f", {cost} at API list prices." if cost != "-" else "."))
+        bots = [g for g in data["by_profile"] if g["requests"]]
+        if bots:
+            lines.append("Bots: " + ", ".join(
+                f"{'(older)' if g['name'] == '?' else g['name']} {_fmt_tokens(g['total'])}" for g in bots[:4])
+                + (f", +{len(bots) - 4} more" if len(bots) > 4 else "") + ".")
+    else:
+        lines.append("Tokens: none counted through Hermes.")
+    used = [a for a in data["accounts"] if a["used"] > 0]
+    if used:
+        top = max(data["accounts"], key=lambda a: a["peak"])
+        lines.append("Share of the load: " + ", ".join(f"{_short(a['label'])} {a['share']:.0f}%" for a in used[:3])
+                     + (f" and {len(used) - 3} more" if len(used) > 3 else "") + f". Highest {data['window']} usage: {top['peak']:.0f}% "
+                     f"({_short(top['label'])}). Every account >= 90% at once: {data['full_min']:.0f} min.")
+    if data["busiest"]:
+        h = data["busiest"][0][0]
+        lines.append(f"Busiest hour: {h:02d}:00-{(h + 1) % 24:02d}:00.")
+    entries = sorted(_entries(provider), key=lambda e: e.priority)
+    parked = [p for p in _read_parked() if p["_provider"] == provider]
+    last = (_read_history(provider, time.time() - 1800) or [{}])[-1].get("usage") or {}
+    usable = [e for e in entries if _entry_state(e) == "active"]
+    now = f"Now: {len(entries)} in rotation, {len(parked)} parked"
+    if usable:
+        nxt = usable[0]
+        pct = last.get(nxt.label)
+        now += f"; new sessions start on {_short(nxt.label)}" + (f" ({pct:.0f}%)" if pct is not None else "")
+    lines.append(now + ".")
+    dead = [e.label for e in entries if getattr(e, "last_status", None) == "dead"]
+    if dead:
+        lines.append(f"Needs sign-in: {', '.join(_short(x) for x in dead)}. Fix: hermes account {provider} relogin <account>")
+    if data["advice"] and not data["advice"].startswith("Too little"):
+        lines.append(data["advice"])
+    return f"Hermes {provider}: last {hours:.0f} h", "\n".join(lines)
+
+
+def _daily_at(cfg: dict):
+    """The daily summary time as (hour, minute), or None when it is off."""
+    m = re.fullmatch(r"(\d{1,2}):(\d{2})", str((cfg.get("notify") or {}).get("daily") or ""))
+    return (int(m[1]), int(m[2])) if m and int(m[1]) < 24 and int(m[2]) < 60 else None
+
+
+def _run_daily(provider: str) -> list[str]:
+    """Send the daily summary on the first balance run at or after its time, once a day."""
+    at = _daily_at(_config())
+    if not at:
+        return []
+    now = datetime.now()
+    if (now.hour, now.minute) < at:
+        return []
+    state = _load_json(_state_path(), {}) or {}
+    key, today = f"daily:{provider}", now.strftime("%Y-%m-%d")
+    if state.get(key) == today:
+        return []
+    title, body = _summary(provider)
+    sent = _notify(title, body, icon="dialog-information")
+    state[key] = today
+    _atomic_json(_state_path(), state)
+    return [f"daily summary -> {', '.join(sent) or 'no channel delivered'}"]
+
+
+DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
+
+def _parse_every(text: str) -> dict:
+    """'mon-fri 09:00-17:00' -> {"days": [0..4], "from": "09:00", "to": "17:00"}. Days: daily, weekdays,
+    weekend, names (mon..sun) and ranges, comma-separated. A window that ends before it starts runs past
+    midnight."""
+    bad = (f"Cannot read --every '{text}'. Use days and a time range, e.g. \"mon-fri 09:00-17:00\", "
+           f"\"daily 22:00-06:00\" or \"sat,sun 10:00-14:00\".")
+    m = re.fullmatch(r"\s*(.+?)\s+(\d{1,2})[:.](\d{2})\s*-\s*(\d{1,2})[:.](\d{2})\s*", str(text or "").lower())
+    if not m:
+        raise SystemExit(bad)
+    h1, m1, h2, m2 = (int(x) for x in m.groups()[1:])
+    if h1 > 23 or h2 > 23 or m1 > 59 or m2 > 59 or (h1, m1) == (h2, m2):
+        raise SystemExit(bad)
+    days = set()
+    for part in re.split(r"\s*,\s*", m[1].strip()):
+        part = part.strip()
+        if part in ("daily", "every day", "everyday", "all"):
+            days |= set(range(7))
+        elif part in ("weekdays", "workdays"):
+            days |= set(range(5))
+        elif part in ("weekend", "weekends"):
+            days |= {5, 6}
+        else:
+            r = re.fullmatch(r"([a-z]{3})[a-z]*(?:\s*-\s*([a-z]{3})[a-z]*)?", part)
+            if not r or r[1] not in DAYS or (r[2] and r[2] not in DAYS):
+                raise SystemExit(bad)
+            a, b = DAYS.index(r[1]), DAYS.index(r[2] or r[1])
+            days |= {(a + i) % 7 for i in range((b - a) % 7 + 1)}
+    return {"days": sorted(days), "from": f"{h1:02d}:{m1:02d}", "to": f"{h2:02d}:{m2:02d}"}
+
+
+def _every_text(s: dict) -> str:
+    days = sorted(s.get("days") or [])
+    if len(days) == 7:
+        d = "Every day"
+    else:
+        runs, run = [], [days[0]] if days else []
+        for x in days[1:]:
+            if x == run[-1] + 1:
+                run.append(x)
+            else:
+                runs.append(run)
+                run = [x]
+        if run:
+            runs.append(run)
+        d = ", ".join(DAYS[r[0]].title() + (f"-{DAYS[r[-1]].title()}" if len(r) > 2 else
+                                             f", {DAYS[r[-1]].title()}" if len(r) == 2 else "") for r in runs)
+    return f"{d} {s.get('from')}-{s.get('to')}"
+
+
+def _schedule_window(s: dict, now: float, ahead: bool = False):
+    """(start, end) of the window that contains `now`; with ahead=True the next one that starts after it."""
+    h1, m1 = (int(x) for x in s["from"].split(":"))
+    h2, m2 = (int(x) for x in s["to"].split(":"))
+    base = datetime.fromtimestamp(now).replace(hour=0, minute=0, second=0, microsecond=0)
+    for d in (range(0, 8) if ahead else (0, -1)):
+        day = base + timedelta(days=d)
+        if day.weekday() not in s.get("days", []):
+            continue
+        start = day.replace(hour=h1, minute=m1).timestamp()
+        end = (day + timedelta(days=1 if (h2, m2) <= (h1, m1) else 0)).replace(hour=h2, minute=m2).timestamp()
+        if (start > now) if ahead else (start <= now < end):
+            return start, end
+    return None
+
+
+def _schedules(provider: str) -> list:
+    return [s for s in ((_config().get("schedules") or {}).get(provider) or []) if s.get("label")]
+
+
+def _run_schedules(provider: str, dry: bool = False) -> list[str]:
+    """Park scheduled accounts at the start of their window, until its end (the timed-park return brings
+    them back). Each window is applied once: unparking by hand inside it is not undone."""
+    from types import SimpleNamespace
+    scheds = _schedules(provider)
+    state = _load_json(_state_path(), {}) or {}
+    applied = state.get("schedule") or {}
+    keep = {k: v for k, v in applied.items() if not k.startswith(provider + ":")}
+    now = time.time()
+    actions = []
+    for s in scheds:
+        key = f"{provider}:{s['label'].lower()}"
+        win = _schedule_window(s, now)
+        if not win:
+            continue
+        start, end = win
+        if applied.get(key) == start:
+            keep[key] = start
+            continue
+        entry = next((e for e in _entries(provider) if e.label.lower() == s["label"].lower()), None) \
+            or next((e for e in _entries(provider) if s.get("id") and e.id == s["id"]), None)
+        if entry is None:
+            if _find_parked(provider, s["label"]):
+                keep[key] = start                     # parked already: leave it as it is
+            continue
+        until = time.strftime("%Y-%m-%d %H:%M", time.localtime(end))
+        if dry:
+            actions.append(f"schedule: park {entry.label} until {_hhmm(end)}")
+            continue
+        with _capture():
+            try:
+                _cmd_park(SimpleNamespace(provider=provider, target=entry.id, until=until, by="schedule"))
+                actions.append(f"schedule: parked {entry.label} until {_hhmm(end)} ({_every_text(s)})")
+                keep[key] = start
+            except SystemExit as x:
+                actions.append(f"schedule: could not park {entry.label}: {x}")
+    if not dry and keep != applied:
+        state["schedule"] = keep
+        _atomic_json(_state_path(), state)
     return actions
 
 
@@ -522,7 +713,13 @@ def _cmd_list(args) -> int:
     _p(f"[{provider}] parked ({len(parked)}):" + ("" if parked else " -"))
     for p in parked:
         until = f"  until {p['_until_h']}" if p.get("_until") else ""
-        _p(f"  -   {p.get('label', '?'):34s} id={p.get('id')}  since {p.get('_parked_at_h', '?')}{until}")
+        by = " (schedule)" if p.get("_by") == "schedule" else ""
+        _p(f"  -   {p.get('label', '?'):34s} id={p.get('id')}  since {p.get('_parked_at_h', '?')}{until}{by}")
+    rows = _schedule_rows(provider)
+    if rows:
+        _p(f"[{provider}] park schedules ({len(rows)}):")
+        for r in rows:
+            _p(f"  -   {r['label']:34s} {r['every']}" + ("" if r["found"] else "  (not in the pool)"))
     return 0
 
 
@@ -741,6 +938,8 @@ def _cmd_park(args) -> int:
     payload.update(_provider=provider, _parked_at=time.time(), _parked_at_h=time.strftime("%Y-%m-%d %H:%M"))
     if until:
         payload.update(_until=until, _until_h=time.strftime("%Y-%m-%d %H:%M", time.localtime(until)))
+    if getattr(args, "by", None):
+        payload["_by"] = args.by
     parked = [p for p in _read_parked() if not (p["_provider"] == provider and p.get("id") == matched.id)]
     parked.append(payload)
     _write_parked(parked)                       # save first, then remove from the pool
@@ -812,6 +1011,12 @@ def _cmd_balance(args) -> int:
                     except SystemExit as x:
                         actions[-1] += f" FAILED: {x}"
 
+    # 1b. park schedules whose window has started
+    try:
+        actions += _run_schedules(provider, dry)
+    except Exception as x:
+        actions.append(f"schedules failed: {x}")
+
     pool = _pool(provider)
 
     # 2. accounts cooling down after a failed token refresh: retry the refresh
@@ -835,6 +1040,10 @@ def _cmd_balance(args) -> int:
                 actions += _run_alerts(provider, pool, [])
             except Exception as x:
                 actions.append(f"alerts failed: {x}")
+            try:
+                actions += _run_daily(provider)
+            except Exception as x:
+                actions.append(f"daily summary failed: {x}")
         _p(f"{stamp} [{provider}] balance{' (dry run)' if dry else ''}: no usage adapter, order unchanged.")
         for a in actions:
             _p("  - " + a)
@@ -856,6 +1065,10 @@ def _cmd_balance(args) -> int:
                 actions += _run_alerts(provider, pool, [])
             except Exception as x:
                 actions.append(f"alerts failed: {x}")
+            try:
+                actions += _run_daily(provider)
+            except Exception as x:
+                actions.append(f"daily summary failed: {x}")
         _p(f"{stamp} [{provider}] balance: usage unavailable for every account; order unchanged.")
         for a in actions:
             _p("  - " + a)
@@ -914,6 +1127,10 @@ def _cmd_balance(args) -> int:
             actions += _run_alerts(provider, pool, known)
         except Exception as x:
             actions.append(f"alerts failed: {x}")
+        try:
+            actions += _run_daily(provider)
+        except Exception as x:
+            actions.append(f"daily summary failed: {x}")
 
     head = f"{stamp} [{provider}] balance{' (dry run)' if dry else ''}:"
     _p(head + (" no change." if not actions else ""))
@@ -1112,6 +1329,17 @@ def _doctor_checks(provider: str) -> list:
         chans.append(f"telegram via {cfg['notify'].get('telegram_via') or 'default'}")
     add("ok" if chans else "warn", f"alert channels: {', '.join(chans) or 'none'} "
         f"(delivery is tested with: hermes account {provider} notify test)")
+    at = _daily_at(cfg)
+    if at:
+        add("ok" if chans else "warn", f"daily summary at {at[0]:02d}:{at[1]:02d}"
+            + ("" if chans else ", but no alert channel is on to deliver it"))
+    rows = _schedule_rows(provider)
+    lost = [r["label"] for r in rows if not r["found"]]
+    if lost:
+        add("warn", f"park schedule for an account that is not in the pool: {', '.join(lost)}. "
+                    f"Fix: hermes account {provider} unschedule <account>")
+    elif rows:
+        add("ok", f"park schedules: {', '.join(r['label'] + ' ' + r['every'] for r in rows)}")
     return checks
 
 
@@ -1235,26 +1463,44 @@ TOKEN_KEYS = ("input", "output", "cache_read", "cache_write", "requests")
 TOKEN_BUCKET = 900         # seconds per bucket, as written by the session tracker
 
 
-def _token_buckets(provider: str) -> tuple:
-    """({label: {bucket_start: [in, out, cache_read, cache_write, requests]}}, counting_since or None).
+def _token_rows(provider: str) -> tuple:
+    """([(label, profile, model, bucket_start, [in, out, cache_read, cache_write, requests])], counting_since).
 
-    Written by the session tracker (account-pool-tracker >= 1.1.0) after every API call through the pool."""
+    Written by the session tracker after every API call through the pool: per account, profile and model
+    from tracker 1.3.0 on; 1.1.0 buckets (account only) read as profile "?" and model "?"."""
     data = _load_json(_root() / "account-pool-tokens.json", {}) or {}
-    raw = ((data.get("buckets") or {}).get(provider)) or {}
-    out = {}
-    for label, slots in raw.items():
-        rows = {}
+    out = []
+
+    def take(slots, label, profile, model):
         for k, v in (slots or {}).items():
             try:
-                rows[float(k)] = [int(x) for x in v[:5]]
+                vals = [int(x) for x in list(v)[:5]]
+                out.append((label, profile, model, float(k), vals + [0] * (5 - len(vals))))
             except (TypeError, ValueError):
                 continue
-        out[label] = rows
+
+    for label, profiles in ((data.get("counts") or {}).get(provider) or {}).items():
+        for profile, models in (profiles or {}).items():
+            for model, slots in (models or {}).items():
+                take(slots, label, profile, model)
+    for label, slots in ((data.get("buckets") or {}).get(provider) or {}).items():
+        take(slots, label, "?", "?")
     return out, data.get("since")
 
 
+def _token_buckets(provider: str) -> tuple:
+    """({label: {bucket_start: [in, out, cache_read, cache_write, requests]}}, counting_since or None)."""
+    rows, since = _token_rows(provider)
+    out = {}
+    for label, _profile, _model, start, v in rows:
+        acc = out.setdefault(label, {}).setdefault(start, [0, 0, 0, 0, 0])
+        for i in range(5):
+            acc[i] += v[i]
+    return out, since
+
+
 def _token_sum(rows: dict, since: float, until: float = None) -> dict:
-    """Totals of the buckets that start at or after `since` (and before `until`)."""
+    """Totals of {bucket_start: [in, out, cache_read, cache_write, requests]} from `since` (to `until`)."""
     acc = [0, 0, 0, 0, 0]
     for start, v in rows.items():
         if start >= since and (until is None or start < until):
@@ -1265,6 +1511,80 @@ def _token_sum(rows: dict, since: float, until: float = None) -> dict:
     return out
 
 
+_PRICES = {}
+
+
+def _model_price(provider: str, model: str):
+    """API list price per million tokens (input, output, cache read, cache write) for a model, or None.
+
+    From Hermes' bundled price snapshot, else its models.dev disk cache. Never a network request."""
+    key = (provider, model)
+    if key in _PRICES:
+        return _PRICES[key]
+    api = {"openai-codex": "openai"}.get(provider, provider)
+    bare = str(model or "").split("/")[-1]
+    price = None
+    if bare and bare != "?":
+        try:
+            from agent.usage_pricing import _lookup_official_docs_pricing, resolve_billing_route
+            e = _lookup_official_docs_pricing(resolve_billing_route(bare, provider=api))
+            if e and e.input_cost_per_million is not None and e.output_cost_per_million is not None:
+                inp = float(e.input_cost_per_million)
+                cr, cw = e.cache_read_cost_per_million, e.cache_write_cost_per_million
+                price = (inp, float(e.output_cost_per_million), float(cr) if cr is not None else inp,
+                         float(cw) if cw is not None else inp)
+        except Exception:
+            price = None
+        if price is None:
+            try:
+                from agent.models_dev import _load_disk_cache
+                cost = ((((_load_disk_cache() or {}).get(api) or {}).get("models") or {}).get(bare) or {}).get("cost") or {}
+                if cost.get("input") is not None and cost.get("output") is not None:
+                    inp = float(cost["input"])
+                    price = (inp, float(cost["output"]), float(cost.get("cache_read", inp)),
+                             float(cost.get("cache_write", inp)))
+            except Exception:
+                price = None
+    _PRICES[key] = price
+    return price
+
+
+def _token_group(provider: str, rows: list, since: float, until: float = None, by: str = "label") -> dict:
+    """Token totals of the buckets in [since, until), grouped by "label", "profile", "model" or "all".
+
+    Each value: input, output, cache_read, cache_write, requests, total, cost (USD at API list prices,
+    for the tokens whose model has a known price), unpriced (tokens without a price), model (largest)."""
+    idx = {"label": 0, "profile": 1, "model": 2}
+    groups = {}
+    for row in rows:
+        start, v = row[3], row[4]
+        if start < since or (until is not None and start >= until):
+            continue
+        key = "all" if by == "all" else row[idx[by]]
+        g = groups.setdefault(key, {"v": [0, 0, 0, 0, 0], "cost": 0.0, "unpriced": 0, "models": defaultdict(int),
+                                    "labels": set()})
+        g["labels"].add(row[0])
+        for i in range(5):
+            g["v"][i] += v[i]
+        price = _model_price(provider, row[2])
+        if price:
+            g["cost"] += sum(v[i] * price[i] for i in range(4)) / 1e6
+        else:
+            g["unpriced"] += sum(v[:4])
+        g["models"][row[2]] += sum(v[:4])
+    out = {}
+    for key, g in groups.items():
+        d = dict(zip(TOKEN_KEYS, g["v"]))
+        d.update(total=sum(g["v"][:4]), cost=round(g["cost"], 4), unpriced=g["unpriced"],
+                 model=max(g["models"], key=g["models"].get) if g["models"] else None, accounts=len(g["labels"]))
+        out[key] = d
+    return out
+
+
+def _empty_tokens() -> dict:
+    return dict(dict.fromkeys(TOKEN_KEYS, 0), total=0, cost=0.0, unpriced=0, model=None, accounts=0)
+
+
 def _fmt_tokens(n) -> str:
     n = float(n or 0)
     for unit, size in (("B", 1e9), ("M", 1e6), ("k", 1e3)):
@@ -1273,18 +1593,31 @@ def _fmt_tokens(n) -> str:
     return f"{n:.0f}"
 
 
+def _fmt_cost(t) -> str:
+    """API list price of a token group: "$12.34", "$12.34+" when part of it has no known price, "-" when none."""
+    if not t or not t.get("requests"):
+        return "-"
+    if t.get("cost", 0) <= 0 and t.get("unpriced"):
+        return "-"
+    return f"${t['cost']:,.2f}" + ("+" if t.get("unpriced") else "")
+
+
 def _report_data(provider: str, hours: float) -> dict:
     """Load per account from the usage history. Keys: snapshots, span_h, start, accounts (label, used,
     share, peak, hot_min; heaviest first), total, busiest [(hour, used)], full_min, advice."""
     since_ts = time.time() - hours * 3600
     hist = _read_history(provider, since_ts)
-    buckets, counting = _token_buckets(provider)
-    tokens = {label: _token_sum(rows, since_ts) for label, rows in buckets.items()}
-    tokens = {label: t for label, t in tokens.items() if t["requests"]}
-    tokens_total = _token_sum({0: [sum(t[k] for t in tokens.values()) for k in TOKEN_KEYS]}, 0)
+    rows, counting = _token_rows(provider)
+    tokens = {k: t for k, t in _token_group(provider, rows, since_ts).items() if t["requests"]}
+    tokens_total = _token_group(provider, rows, since_ts, by="all").get("all") or _empty_tokens()
+
+    def ranked(by):
+        return [dict(t, name=k) for k, t in sorted(_token_group(provider, rows, since_ts, by=by).items(),
+                                                     key=lambda kv: -kv[1]["total"])]
     out = {"hours": hours, "snapshots": len(hist), "window": _window(provider), "accounts": [], "total": 0.0,
            "busiest": [], "full_min": 0.0, "span_h": 0.0, "start": None, "advice": "",
-           "tokens_total": tokens_total, "tokens_since": counting}
+           "tokens_total": tokens_total, "tokens_since": counting,
+           "by_profile": ranked("profile"), "by_model": ranked("model")}
     if len(hist) < 2:
         return out
     series = defaultdict(list)
@@ -1331,9 +1664,65 @@ def _report_data(provider: str, hours: float) -> dict:
     return out
 
 
+def _chart_data(provider: str, days: int = 7) -> dict:
+    """Load per local hour for the last `days` days (today last): quota used (sum of usage-window percent
+    increases, from the balance timer's history) and tokens through Hermes (from the session tracker)."""
+    import bisect
+    now = time.time()
+    lt = time.localtime(now)
+    starts = [time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday - d, 0, 0, 0, 0, 0, -1)) for d in range(days - 1, -1, -1)]
+    used = [[0.0] * 24 for _ in starts]
+    tok = [[0] * 24 for _ in starts]
+    req = [[0] * 24 for _ in starts]
+
+    def cell(ts):
+        i = bisect.bisect_right(starts, ts) - 1
+        return (i, time.localtime(ts).tm_hour) if 0 <= i < len(starts) and ts <= now + 60 else (None, None)
+
+    series = defaultdict(list)
+    for rec in _read_history(provider, starts[0] - 1200):
+        for label, util in (rec.get("usage") or {}).items():
+            series[label].append((rec["ts"], float(util)))
+    for pts in series.values():
+        for (t1, u1), (t2, u2) in zip(pts, pts[1:]):
+            if t2 - t1 <= 1200 and u2 > u1:
+                i, hr = cell(t2)
+                if i is not None:
+                    used[i][hr] += u2 - u1
+    rows, _ = _token_rows(provider)
+    for _label, _profile, _model, start, v in rows:
+        i, hr = cell(start)
+        if i is not None:
+            tok[i][hr] += sum(v[:4])
+            req[i][hr] += v[4]
+    return {"window": _window(provider), "has_usage": _has_usage(provider), "days": [
+        {"start": st, "date": time.strftime("%m-%d", time.localtime(st)), "dow": time.strftime("%a", time.localtime(st)),
+         "used": [round(x, 1) for x in used[i]], "tokens": tok[i], "requests": req[i]}
+        for i, st in enumerate(starts)]}
+
+
+def _print_chart(provider: str) -> None:
+    data = _chart_data(provider)
+    shades = "░▒▓█"
+    blocks = [("used", f"quota used ({data['window']}-window percent)")] if data["has_usage"] else []
+    blocks.append(("tokens", "tokens through Hermes"))
+    for key, title in blocks:
+        top = max((x for d in data["days"] for x in d[key]), default=0)
+        _p(f"  Load by hour, last {len(data['days'])} days: {title}. "
+           + (f"Darkest = {_fmt_tokens(top) if key == 'tokens' else f'{top:.0f}'} in one hour." if top else "None yet."))
+        _p(f"  {'':10s} " + " ".join(f"{h:02d}" for h in range(0, 24, 3)))
+        for d in data["days"]:
+            line = "".join("·" if not x else shades[min(3, int(x / top * 4)) if top else 0] for x in d[key])
+            _p(f"  {d['dow']} {d['date']}  {line}")
+
+
 def _cmd_report(args) -> int:
     provider = _norm(args.provider)
     hours = float(args.hours or 24)
+    if getattr(args, "chart", False):
+        _p(f"[{provider}] load by hour (local time; one row per day, one column per hour)")
+        _print_chart(provider)
+        return 0
     if not _has_usage(provider):
         _p(f"[{provider}] report needs usage history. {_no_usage_text(provider)}")
         return 0
@@ -1349,18 +1738,31 @@ def _cmd_report(args) -> int:
           f"from {time.strftime('%m-%d %H:%M', time.localtime(data['start']))})")
     w = data["window"]
     _p(f"  'used' adds up {w}-window percent: 100 = one full {w} window.")
-    _p(f"  {'account':34s} {'used':>6s} {'share':>6s} {'peak':>5s}  {'time >= 90%':>11s}  {'tokens':>8s}")
+    _p(f"  {'account':34s} {'used':>6s} {'share':>6s} {'peak':>5s}  {'time >= 90%':>11s}  {'tokens':>8s} {'API $':>9s}")
     for a in data["accounts"]:
         tok = _fmt_tokens(a["tokens"]["total"]) if a.get("tokens") else "-"
-        _p(f"  {a['label']:34s} {a['used']:6.0f} {a['share']:5.0f}% {a['peak']:4.0f}%  {a['hot_min']:8.0f} min  {tok:>7s}")
+        _p(f"  {a['label']:34s} {a['used']:6.0f} {a['share']:5.0f}% {a['peak']:4.0f}%  {a['hot_min']:8.0f} min  {tok:>7s} "
+           f"{_fmt_cost(a.get('tokens')):>9s}")
     tt = data["tokens_total"]
-    _p(f"  {'total':34s} {data['total']:6.0f}{'':29s}{_fmt_tokens(tt['total']) if tt['requests'] else '-':>7s}")
+    _p(f"  {'total':34s} {data['total']:6.0f}{'':29s}{_fmt_tokens(tt['total']) if tt['requests'] else '-':>7s} "
+       f"{_fmt_cost(tt):>9s}")
     if tt["requests"]:
         since = data.get("tokens_since")
         _p(f"  Tokens through Hermes: {_fmt_tokens(tt['input'])} input, {_fmt_tokens(tt['output'])} output, "
            f"{_fmt_tokens(tt['cache_read'])} cache read, {_fmt_tokens(tt['cache_write'])} cache write")
         _p(f"  {tt['requests']} requests"
            + (f", counted since {time.strftime('%m-%d %H:%M', time.localtime(since))}." if since and since > data['start'] else "."))
+        _p("  API $ = these tokens at the provider's API list prices (a subscription is billed flat)."
+           + (" '+': some tokens have no known price." if tt.get("unpriced") else ""))
+        for key, title in (("by_profile", "By profile (bot)"), ("by_model", "By model")):
+            groups = [g for g in data[key] if g["requests"]]
+            if not groups:
+                continue
+            _p(f"  {title:32s} {'tokens':>7s} {'requests':>9s} {'API $':>9s} {'share':>6s}")
+            for g in groups:
+                name = "(before tracker 1.3.0)" if g["name"] == "?" else g["name"]
+                share = g["total"] / tt["total"] * 100 if tt["total"] else 0
+                _p(f"    {name:30s} {_fmt_tokens(g['total']):>7s} {g['requests']:>9d} {_fmt_cost(g):>9s} {share:5.0f}%")
     else:
         _p("  Tokens: none counted yet. The session tracker counts them from version 1.1.0 on.")
     if data["busiest"]:
@@ -1368,6 +1770,7 @@ def _cmd_report(args) -> int:
     _p(f"  Time with EVERY account >= 90%: {data['full_min']:.0f} min")
     if data["advice"]:
         _p(("  (" + data["advice"] + ")") if data["advice"].startswith("Too little") else "  -> " + data["advice"])
+    _p(f"  Load by hour for the last 7 days: hermes account {provider} report --chart")
     return 0
 
 
@@ -1417,14 +1820,52 @@ def _cmd_notify(args) -> int:
               + (f", sent with the bot of profile '{via}'" if tgt else ""))
         _p(f"  alert when every account is above {cfg.get('alert_all_above', 80)}%, "
               f"and when an account needs sign-in (DEAD).")
+        at = _daily_at(cfg)
+        last = (_load_json(_state_path(), {}) or {}).get(f"daily:{_norm(args.provider)}")
+        _p(f"  daily summary: {f'{at[0]:02d}:{at[1]:02d}, the first balance run after it' if at else 'off'}"
+           + (f" (last sent {last})" if at and last else ""))
         _p(f"Settings: {_config_path()}  (created with defaults on first change)")
         _p("Change: hermes account <provider> notify desktop-on|desktop-off|telegram-on|telegram-off")
         _p("        hermes account <provider> notify telegram-via=<profile>   (which bot sends)")
+        _p("        hermes account <provider> notify daily=08:00|daily-off|summary   (summary: send it now)")
         return 0
     if sub == "test":
         sent = _notify("Hermes account-pool: test", "Alerts from `hermes account` reach this channel.")
         _p(f"Test alert delivered to: {', '.join(sent) or 'no channel'}")
         return 0 if sent else 1
+    if sub == "summary":
+        title, body = _summary(_norm(args.provider))
+        sent = _notify(title, body, icon="dialog-information")
+        _p(title)
+        _p(body)
+        _p(f"Delivered to: {', '.join(sent) or 'no channel'}")
+        return 0 if sent else 1
+    if sub.startswith("daily=") or sub == "daily-off":
+        user = _load_json(_config_path(), {})
+        if sub == "daily-off":
+            user.setdefault("notify", {})["daily"] = None
+            _atomic_json(_config_path(), user)
+            _p("Daily summary off.")
+            return 0
+        m = re.fullmatch(r"(\d{1,2})[:.](\d{2})", sub.split("=", 1)[1].strip())
+        if not m or int(m[1]) > 23 or int(m[2]) > 59:
+            _p("daily= takes a time of day, e.g. daily=08:00")
+            return 2
+        at = f"{int(m[1]):02d}:{int(m[2]):02d}"
+        user.setdefault("notify", {})["daily"] = at
+        _atomic_json(_config_path(), user)
+        now = datetime.now()
+        if (now.hour, now.minute) >= (int(m[1]), int(m[2])):     # past today's time: start tomorrow
+            state = _load_json(_state_path(), {}) or {}
+            for p in set(_pool_providers()) | {_norm(args.provider)}:
+                state[f"daily:{p}"] = now.strftime("%Y-%m-%d")
+            _atomic_json(_state_path(), state)
+        _p(f"Daily summary on: at {at}, sent by the first balance run after it"
+           + (", first one tomorrow." if (now.hour, now.minute) >= (int(m[1]), int(m[2])) else ", first one today."))
+        _p(f"Preview it now: hermes account {_norm(args.provider)} notify summary")
+        if not _timer_active():
+            _p("WARNING: the balance timer is not active, so no summary will be sent.")
+        return 0
     if sub.startswith("telegram-via="):
         via = sub.split("=", 1)[1].strip() or "default"
         if via != "default" and not (_root() / "profiles" / via).is_dir():
@@ -1438,13 +1879,113 @@ def _cmd_notify(args) -> int:
     toggles = {"desktop-on": ("desktop", True), "desktop-off": ("desktop", False),
                "telegram-on": ("telegram", "auto"), "telegram-off": ("telegram", None)}
     if sub not in toggles:
-        _p("notify accepts: status, test, desktop-on, desktop-off, telegram-on, telegram-off, telegram-via=<profile>")
+        _p("notify accepts: status, test, summary, desktop-on, desktop-off, telegram-on, telegram-off, "
+           "telegram-via=<profile>, daily=<HH:MM>, daily-off")
         return 2
     user = _load_json(_config_path(), {})
     key, val = toggles[sub]
     user.setdefault("notify", {})[key] = val
     _atomic_json(_config_path(), user)
     _p(f"{key} alerts {'on' if val else 'off'}.")
+    return 0
+
+
+def _schedule_rows(provider: str) -> list[dict]:
+    """Park schedules with their state now: in_window, parked (by the schedule or by hand), next start."""
+    now = time.time()
+    labels = {e.label.lower() for e in _entries(provider)}
+    parked = {(p.get("label") or "").lower(): p for p in _read_parked() if p["_provider"] == provider}
+    out = []
+    for s in _schedules(provider):
+        win = _schedule_window(s, now)
+        nxt = _schedule_window(s, now, ahead=True)
+        p = parked.get(s["label"].lower())
+        out.append({"label": s["label"], "id": s.get("id"), "every": _every_text(s), "days": s.get("days"),
+                    "from": s.get("from"), "to": s.get("to"), "in_window": bool(win), "end": win[1] if win else None,
+                    "next": nxt[0] if nxt else None, "found": s["label"].lower() in labels or p is not None,
+                    "parked": bool(p), "parked_by_schedule": bool(p and p.get("_by") == "schedule"),
+                    "until": p.get("_until") if p else None})
+    return out
+
+
+def _cmd_schedule(args) -> int:
+    provider = _norm(args.provider)
+    every = getattr(args, "every", None)
+    if not args.target:
+        if every:
+            _p(f"Which account? Usage: hermes account {provider} schedule <target> --every \"mon-fri 09:00-17:00\"")
+            return 2
+        rows = _schedule_rows(provider)
+        if not rows:
+            _p(f"[{provider}] no park schedules. Add one: "
+               f"hermes account {provider} schedule <target> --every \"mon-fri 09:00-17:00\"")
+            return 0
+        _p(f"[{provider}] park schedules: the balance timer parks the account when a window starts and returns it "
+           f"when it ends.")
+        for r in rows:
+            if not r["found"]:
+                state = "not in the pool"
+            elif r["in_window"] and r["parked"]:
+                state = f"parked now, back {_hhmm(r['until'])}" if r["until"] else "parked now (by hand, no return time)"
+            elif r["in_window"]:
+                state = "in its window but in rotation (unparked by hand, or parking was refused)"
+            else:
+                state = "next " + time.strftime("%a %m-%d %H:%M", time.localtime(r["next"])) if r["next"] else "-"
+            _p(f"  {r['label']:34s} {r['every']:28s} {state}")
+        _p(f"Remove: hermes account {provider} unschedule <target>")
+        if not _timer_active():
+            _p("WARNING: the balance timer is not active, so schedules are not applied.")
+        return 0
+    if not every:
+        _p(f"Add --every, e.g. hermes account {provider} schedule {args.target} --every \"mon-fri 09:00-17:00\". "
+           f"Remove a schedule: hermes account {provider} unschedule {args.target}")
+        return 2
+    spec = _parse_every(every)
+    pool = _pool(provider)
+    index, matched, error = pool.resolve_target(args.target)
+    if matched is None:
+        item = _find_parked(provider, args.target)
+        if not item:
+            raise SystemExit(f"{error} See: hermes account {provider} list")
+        label, cid = item.get("label"), item.get("id")
+    else:
+        label, cid = matched.label, matched.id
+    user = _load_json(_config_path(), {})
+    mine = [s for s in ((user.get("schedules") or {}).get(provider) or []) if (s.get("label") or "").lower() != label.lower()]
+    mine.append(dict(spec, label=label, id=cid))
+    user.setdefault("schedules", {})[provider] = mine
+    _atomic_json(_config_path(), user)
+    s = mine[-1]
+    _p(f"Schedule saved [{provider}]: {label} is parked {_every_text(s)}.")
+    if _schedule_window(s, time.time()):
+        _p("The current window has started: the next balance run (within 5 minutes) parks it.")
+    else:
+        nxt = _schedule_window(s, time.time(), ahead=True)
+        if nxt:
+            _p(f"Next: {time.strftime('%a %m-%d %H:%M', time.localtime(nxt[0]))}.")
+    _p("Unparking it by hand inside a window keeps it in rotation until the next window.")
+    if not _timer_active():
+        _p("WARNING: the balance timer is not active, so the schedule will NOT be applied.")
+    _p(f"Undo: hermes account {provider} unschedule {label}")
+    return 0
+
+
+def _cmd_unschedule(args) -> int:
+    provider = _norm(args.provider)
+    raw = str(args.target).strip().lower()
+    user = _load_json(_config_path(), {})
+    mine = (user.get("schedules") or {}).get(provider) or []
+    hits = [s for s in mine if (s.get("label") or "").lower() == raw or (s.get("id") or "").lower() == raw]
+    if not hits:
+        names = ", ".join(s.get("label", "?") for s in mine) or "(none)"
+        raise SystemExit(f'No park schedule for "{args.target}". Schedules: {names}')
+    user["schedules"][provider] = [s for s in mine if s not in hits]
+    _atomic_json(_config_path(), user)
+    label = hits[0].get("label")
+    _p(f"Schedule removed [{provider}]: {label}.")
+    p = _find_parked(provider, label)
+    if p and p.get("_by") == "schedule":
+        _p(f"It stays parked until {_hhmm(p.get('_until'))}. Return it now: hermes account {provider} unpark {label}")
     return 0
 
 
@@ -1686,15 +2227,17 @@ ACTIONS = [
     ("check", "", "Health: dead, rate-limited, wrong label, duplicate, real email"),
     ("usage", "", "Live usage per account, parked included (usage adapter needed)"),
     ("who", "[--minutes N]", "Which session is on which account (default: last 30 min)"),
-    ("report", "[--hours N]", "Usage history: load per account, busiest hours (usage adapter needed)"),
+    ("report", "[--hours N] [--chart]", "Load and tokens per account, bot and model; --chart: by hour, 7 days"),
     ("add", "<email> [--key] [--yes]", "Sign in a new account, verified, no duplicates (--key: API key)"),
     ("remove", "<target> [--yes]", "Delete an account's login (also works for parked accounts)"),
     ("park", "<target> [--until T]", "Take an account out of rotation; T = 17:00, +2h, 90m"),
     ("unpark", "<target>", "Return a parked account to rotation"),
+    ("schedule", "[<target> --every SPEC]", 'Park on a weekly schedule; SPEC = "mon-fri 09:00-17:00"'),
+    ("unschedule", "<target>", "Remove an account's park schedule"),
     ("relogin", "<target> [--yes]", "Sign an account in again, verified, same label and position"),
     ("balance", "[--dry-run] [--threshold N]", "Order by usage, bench >= N% (90), auto-recover, alerts"),
     ("doctor", "", "Check the whole setup: strategy, timer, files, pools, alerts"),
-    ("notify", "[status|test|...]", "Alert channels: desktop and Telegram"),
+    ("notify", "[status|test|summary|...]", "Alert channels (desktop, Telegram) and the daily summary"),
     ("help", "", "Show this help"),
 ]
 
@@ -1705,7 +2248,7 @@ HELP = "\n".join([
     "  hermes account <provider> <action> [target] [options]",
     "",
     "Actions:",
-    *[f"  {a:8s} {arg:28s} {d}" for a, arg, d in ACTIONS],
+    *[f"  {a:10s} {arg:28s} {d}" for a, arg, d in ACTIONS],
     "",
     "Targets: account label (email), list number, or id. unpark accepts label or id.",
     "",
@@ -1716,11 +2259,13 @@ HELP = "\n".join([
     "  hermes account anthropic park alice@example.com --until 17:00",
     "  hermes account anthropic relogin bob@example.com",
     "  hermes account anthropic report --hours 72",
+    "  hermes account anthropic schedule alice@example.com --every \"mon-fri 09:00-17:00\"",
+    "  hermes account anthropic notify daily=08:00",
     "  hermes account anthropic doctor",
     "  hermes account anthropic notify test",
     "",
-    "Every provider in the credential pool: list, check, add, remove, park, unpark, relogin, who, doctor, alerts,",
-    "  timed parks and refresh recovery.",
+    "Every provider in the credential pool: list, check, add, remove, park, unpark, schedule, relogin, who, doctor,",
+    "  alerts, timed parks and refresh recovery.",
     f"Usage adapter (usage, report, balance ordering, real email): {', '.join(providers.with_usage())}.",
 ])
 
@@ -1732,13 +2277,14 @@ def _print_help(_args=None) -> int:
 
 HANDLERS = {"add": _cmd_add, "remove": _cmd_remove, "list": _cmd_list, "check": _cmd_check, "usage": _cmd_usage, "who": _cmd_who,
             "report": _cmd_report, "park": _cmd_park, "unpark": _cmd_unpark, "relogin": _cmd_relogin,
-            "balance": _cmd_balance, "doctor": _cmd_doctor, "notify": _cmd_notify}
-NEEDS_TARGET = {"park", "unpark", "relogin", "add", "remove"}
-OPTIONAL_TARGET = {"notify"}
+            "balance": _cmd_balance, "doctor": _cmd_doctor, "notify": _cmd_notify, "schedule": _cmd_schedule,
+            "unschedule": _cmd_unschedule}
+NEEDS_TARGET = {"park", "unpark", "relogin", "add", "remove", "unschedule"}
+OPTIONAL_TARGET = {"notify", "schedule"}
 OPTIONS = {"threshold": ("--threshold", {"balance"}), "dry_run": ("--dry-run", {"balance"}),
            "until": ("--until", {"park"}), "hours": ("--hours", {"report"}),
            "minutes": ("--minutes", {"who"}), "yes": ("--yes", {"relogin", "add", "remove"}),
-           "key": ("--key", {"add"})}
+           "key": ("--key", {"add"}), "every": ("--every", {"schedule"}), "chart": ("--chart", {"report"})}
 
 
 def _dispatch(args) -> int:
@@ -1805,6 +2351,8 @@ def _setup(parser) -> None:
     parser.add_argument("--minutes", type=float, default=None, help="who: activity window (default 30)")
     parser.add_argument("--yes", action="store_true", help="add/remove/relogin: skip the confirmation prompt")
     parser.add_argument("--key", action="store_true", help="add: add an API key instead of a sign-in")
+    parser.add_argument("--every", default=None, help='schedule: days and hours, e.g. "mon-fri 09:00-17:00"')
+    parser.add_argument("--chart", action="store_true", help="report: load by hour for the last 7 days")
     parser.set_defaults(func=_dispatch)
 
 

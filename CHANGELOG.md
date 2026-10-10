@@ -1,6 +1,17 @@
 # Changelog
 
-All releases of the `account-pool` plugin and its session tracker `account-pool-tracker` (now 1.2.0).
+All releases of the `account-pool` plugin and its session tracker `account-pool-tracker` (now 1.3.0).
+
+## 3.7.0
+
+- Tokens per bot and per model. The session tracker (1.3.0) adds each call's tokens to its account, profile and model. `report` and the Report tab list tokens by profile (bot) and by model. Tokens counted by tracker 1.1.0 or 1.2.0 have no profile or model; they show as `(before tracker 1.3.0)` / `not split yet` and leave the report within 8 days. The token file moves to version 2; a 1.1.0 or 1.2.0 tracker still running in a bot until its restart keeps writing the old layout, which is folded in on the next write.
+- API price. `report` gains an `API $` column and price lines per bot and model; the Accounts page shows the price in the tokens card and tooltips, the Report tab in a card and its tables. Each model's input, output, cache read and cache write tokens are priced at the provider's API list price, from Hermes' bundled price list or its models.dev cache, with no request. Tokens with no known price are counted as unpriced (`+`), not guessed.
+- Daily summary. `notify daily=08:00` sends tokens, API price, bots, load per account, busiest hour and the state of the pool once a day, on the first timer run after that time, to the alert channels. `notify summary` sends it now; `notify daily-off` stops it. The Alerts tab has a switch, the time and **Send the summary now**.
+- Load by hour. `report --chart` draws the last 7 days, one row per day and one column per hour, for quota used and for tokens. The Report tab shows the same as a chart; hover a cell for its numbers.
+- Park schedules. `schedule <target> --every "mon-fri 09:00-17:00"` parks an account on set days and hours every week; `schedule` lists them, `unschedule <target>` removes one. The timer parks the account when a window starts, until its end, once per window: unparking by hand inside a window is respected. The last working account is never parked. The Accounts page has **Park on a schedule** on every row, a calendar chip on scheduled accounts and a table of schedules. `list` and `doctor` show them.
+- New file `account-pool-state.json` (when the daily summary was last sent, which schedule windows were applied). `uninstall.sh` lists it with the other files it keeps.
+- CLI output changes, on purpose: `report` has the `API $` column, an `API $` note, the `By profile (bot)` and `By model` blocks and a closing `--chart` hint; `notify` status has a `daily summary` line; `list` adds `(schedule)` and a schedules block when there are schedules; `doctor` adds a daily-summary line and a schedules line only when those are in use. The help lists `schedule`, `unschedule` and `report --chart`.
+- Tests: `tests/features_sandbox.py` (tracker upgrade, grouping, prices, chart, daily summary, schedules, page actions); `tests/ui/run.mjs` covers the new tables, chart, schedule dialog and daily summary.
 
 ## 3.6.1
 
