@@ -231,7 +231,7 @@ hermes account <provider> <action> [target] [options]
 
 A **target** is an account label (email), its number in `list`, or its id. `unpark` takes a label or id. `hermes account`, `hermes account help`, `hermes account --help` and `hermes account <provider> help` all show the help.
 
-The examples below are based on a real pool, with the accounts renamed and some times shortened for the page.
+The examples below are based on a real pool, with the accounts renamed. Clock times are illustrative.
 
 ### list
 
