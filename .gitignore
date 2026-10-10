@@ -1,0 +1,10 @@
+# runtime state: never commit (parked file holds OAuth tokens)
+*.json
+*.jsonl
+*.lock
+*.tmp
+*.bak*
+.env
+auth.json
+__pycache__/
+*.pyc

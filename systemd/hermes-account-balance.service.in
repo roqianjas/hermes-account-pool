@@ -1,0 +1,7 @@
+[Unit]
+Description=Hermes account pool: balance @PROVIDER@ accounts by live 5-hour usage
+
+[Service]
+Type=oneshot
+ExecStart=@HERMES_BIN@ account @PROVIDER@ balance
+TimeoutStartSec=120
