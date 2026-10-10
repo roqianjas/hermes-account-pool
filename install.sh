@@ -1,29 +1,31 @@
 #!/usr/bin/env bash
 # Install the account-pool plugins for Hermes Agent.
 #
-#   ./install.sh [--provider anthropic] [--set-strategy] [--no-tracker] [--no-timer]
+#   ./install.sh [--provider NAME]... [--set-strategy] [--no-tracker] [--no-timer]
 #
+# --provider      provider(s) the timer balances; repeat for several (default: anthropic)
 # --set-strategy  set credential_pool_strategies.<provider>=fill_first in the default
 #                 profile and every profile under $HERMES_HOME/profiles (needed by balance)
 # --no-tracker    skip the session tracker (`hermes account <provider> who` stays empty)
 # --no-timer      skip the systemd user timer that runs `balance` every 5 minutes
 set -euo pipefail
 
-PROVIDER="anthropic"
+PROVIDERS=()
 SET_STRATEGY=0
 TRACKER=1
 TIMER=1
 while [ $# -gt 0 ]; do
   case "$1" in
-    --provider) PROVIDER="${2:?--provider needs a value}"; shift 2 ;;
+    --provider) PROVIDERS+=("${2:?--provider needs a value}"); shift 2 ;;
     --set-strategy) SET_STRATEGY=1; shift ;;
     --no-tracker) TRACKER=0; shift ;;
     --no-timer) TIMER=0; shift ;;
-    -h|--help) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
 done
 
+[ ${#PROVIDERS[@]} -gt 0 ] || PROVIDERS=(anthropic)
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="${HERMES_HOME:-$HOME/.hermes}"
 HERMES_BIN="$(command -v hermes || true)"
@@ -62,25 +64,32 @@ if [ "$TRACKER" = 1 ]; then
   done
 fi
 
-say "Pool strategy for $PROVIDER"
-if [ "$SET_STRATEGY" = 1 ]; then
-  "$HERMES_BIN" config set "credential_pool_strategies.$PROVIDER" fill_first >/dev/null && echo "  default: fill_first"
-  for prof in $(profiles); do
-    "$HERMES_BIN" -p "$prof" config set "credential_pool_strategies.$PROVIDER" fill_first >/dev/null && echo "  $prof: fill_first"
-  done
-else
-  echo "  unchanged. balance needs fill_first; re-run with --set-strategy, or set it yourself:"
-  echo "  hermes [-p <profile>] config set credential_pool_strategies.$PROVIDER fill_first"
-fi
+for PROVIDER in "${PROVIDERS[@]}"; do
+  say "Pool strategy for $PROVIDER"
+  if [ "$SET_STRATEGY" = 1 ]; then
+    "$HERMES_BIN" config set "credential_pool_strategies.$PROVIDER" fill_first >/dev/null && echo "  default: fill_first"
+    for prof in $(profiles); do
+      "$HERMES_BIN" -p "$prof" config set "credential_pool_strategies.$PROVIDER" fill_first >/dev/null && echo "  $prof: fill_first"
+    done
+  else
+    echo "  unchanged. balance needs fill_first; re-run with --set-strategy, or set it yourself:"
+    echo "  hermes [-p <profile>] config set credential_pool_strategies.$PROVIDER fill_first"
+  fi
+done
 
 if [ "$TIMER" = 1 ]; then
   say "systemd user timer (balance every 5 minutes)"
   UNIT_DIR="$HOME/.config/systemd/user"
   mkdir -p "$UNIT_DIR"
-  sed -e "s#@HERMES_BIN@#$HERMES_BIN#g" -e "s#@PROVIDER@#$PROVIDER#g" \
-    "$HERE/systemd/hermes-account-balance.service.in" > "$UNIT_DIR/hermes-account-balance.service"
+  UNIT="$UNIT_DIR/hermes-account-balance.service"
+  grep -v '^ExecStart=' "$HERE/systemd/hermes-account-balance.service.in" \
+    | sed -e "s#@PROVIDER@#${PROVIDERS[*]}#g" > "$UNIT"
+  LINE="$(grep '^ExecStart=' "$HERE/systemd/hermes-account-balance.service.in")"
+  for PROVIDER in "${PROVIDERS[@]}"; do      # oneshot: one ExecStart per provider, run in order
+    printf '%s\n' "$LINE" | sed -e "s#@HERMES_BIN@#$HERMES_BIN#g" -e "s#@PROVIDER@#$PROVIDER#g" >> "$UNIT"
+  done
   if [ "$ROOT" != "$HOME/.hermes" ]; then
-    sed -i "/^\[Service\]/a Environment=HERMES_HOME=$ROOT" "$UNIT_DIR/hermes-account-balance.service"
+    sed -i "/^\[Service\]/a Environment=HERMES_HOME=$ROOT" "$UNIT"
   fi
   cp "$HERE/systemd/hermes-account-balance.timer" "$UNIT_DIR/"
   systemctl --user daemon-reload
@@ -90,7 +99,7 @@ if [ "$TIMER" = 1 ]; then
 fi
 
 say "Check"
-"$HERMES_BIN" account "$PROVIDER" doctor || true
+for PROVIDER in "${PROVIDERS[@]}"; do "$HERMES_BIN" account "$PROVIDER" doctor || true; done
 echo
 echo "Done. Start with: hermes account help"
 echo "Running sessions pick up the tracker after /reset or a gateway/desktop restart."

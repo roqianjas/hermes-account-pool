@@ -6,7 +6,7 @@ Every command follows one pattern:
 
     hermes account <provider> list             accounts in rotation + parked accounts
     hermes account <provider> check            health: dead, rate-limited, wrong label, duplicate
-    hermes account <provider> usage            live 5-hour usage per account (anthropic)
+    hermes account <provider> usage            live usage per account (providers with a usage adapter)
     hermes account <provider> park <target>    take an account out of rotation, keep its login
     hermes account <provider> unpark <target>  put a parked account back into rotation
     hermes account <provider> balance          order accounts by live usage, bench nearly-full ones
@@ -15,7 +15,10 @@ Every command follows one pattern:
 
 `balance` is meant to run on a timer with `credential_pool_strategies.<provider>:
 fill_first`: new sessions then always start on the least-used account, and an
-account above the threshold is benched until its 5-hour window resets.
+account above the threshold is benched until its usage window resets.
+
+Provider-specific code (usage, real identity, parked-token refresh) lives in
+providers.py as adapters; everything else works for every pool provider.
 
 Pool changes go through the credential pool API (remove_index, add_entry,
 move_entry, mark_exhausted_and_rotate, reset_status), so locking and the
@@ -36,6 +39,22 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 MARK = "[account-pool]"
+
+
+def _load_providers():
+    import importlib.util
+    import sys
+    name = "account_pool_providers"
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name("providers.py"))
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+providers = _load_providers()
 
 
 # ── storage ──────────────────────────────────────────────────────────────────
@@ -283,52 +302,9 @@ def _run_alerts(provider: str, pool, known) -> list[str]:
     return actions
 
 
-# ── provider probes (anthropic) ──────────────────────────────────────────────
+# ── provider adapters (providers.py) ─────────────────────────────────────────
 
-def _anthropic_get(entry, path: str):
-    req = urllib.request.Request(f"https://api.anthropic.com{path}", headers={
-        "Authorization": f"Bearer {getattr(entry, 'access_token', '') or ''}",
-        "anthropic-beta": "oauth-2025-04-20",
-    })
-    with urllib.request.urlopen(req, timeout=20) as r:
-        return json.loads(r.read())
-
-
-def _token_expired(entry) -> bool:
-    return (getattr(entry, "expires_at_ms", None) or 0) / 1000 < time.time() + 60
-
-
-def _anthropic_identity(entry) -> str:
-    try:
-        acc = _anthropic_get(entry, "/api/oauth/profile").get("account") or {}
-        return acc.get("email") or acc.get("email_address") or "?"
-    except urllib.error.HTTPError as x:
-        if x.code == 401 and _token_expired(entry):
-            return "(access token expired: normal, refreshed automatically on next use)"
-        return f"(HTTP {x.code})"
-    except Exception as x:
-        return f"(lookup failed: {type(x).__name__})"
-
-
-def _anthropic_usage(entry):
-    """(five_hour_percent, resets_at_epoch) or None when unavailable."""
-    try:
-        five = _anthropic_get(entry, "/api/oauth/usage").get("five_hour") or {}
-    except Exception:
-        return None
-    util = five.get("utilization")
-    if util is None:
-        return None
-    reset = five.get("resets_at")
-    try:
-        reset = datetime.fromisoformat(reset).timestamp() if reset else None
-    except Exception:
-        reset = None
-    return float(util), reset
-
-
-IDENTITY = {"anthropic": _anthropic_identity}
-USAGE = {"anthropic": _anthropic_usage}
+_token_expired = providers.token_expired
 
 
 def _oauth(entry) -> bool:
@@ -336,13 +312,34 @@ def _oauth(entry) -> bool:
 
 
 def _identity(provider, entry):
-    fn = IDENTITY.get(provider)
-    return fn(entry) if fn and _oauth(entry) else None
+    ad = providers.get(provider)
+    if not ad.has_identity or (ad.oauth_only and not _oauth(entry)):
+        return None
+    return ad.identity(entry)
 
 
 def _usage(provider, entry):
-    fn = USAGE.get(provider)
-    return fn(entry) if fn and _oauth(entry) else None
+    ad = providers.get(provider)
+    if not ad.has_usage or (ad.oauth_only and not _oauth(entry)):
+        return None
+    try:
+        return ad.usage(entry)
+    except Exception:
+        return None
+
+
+def _has_usage(provider) -> bool:
+    return providers.get(provider).has_usage
+
+
+def _window(provider) -> str:
+    return providers.get(provider).window
+
+
+def _no_usage_text(provider) -> str:
+    avail = ", ".join(providers.with_usage()) or "none"
+    return (f"No usage adapter for '{provider}' yet (available: {avail}). "
+            f"Adapters live in {Path(__file__).with_name('providers.py')}.")
 
 
 def _refresh_if_expired(provider: str, pool, entry):
@@ -356,8 +353,8 @@ def _refresh_if_expired(provider: str, pool, entry):
 
 
 def _require_usage(provider: str) -> None:
-    if provider not in USAGE:
-        raise SystemExit(f"Live usage is not available for provider '{provider}'. Supported: {', '.join(USAGE)}")
+    if not _has_usage(provider):
+        raise SystemExit(_no_usage_text(provider))
 
 
 # ── status text ──────────────────────────────────────────────────────────────
@@ -412,7 +409,7 @@ def _cmd_check(args) -> int:
     provider = _norm(args.provider)
     entries = _entries(provider)
     parked = [p for p in _read_parked() if p["_provider"] == provider]
-    note = "" if provider in IDENTITY else "   (real-identity lookup not available for this provider)"
+    note = "" if providers.get(provider).has_identity else "   (real-identity lookup not available for this provider)"
     print(f"[{provider}] in rotation: {len(entries)}   parked: {len(parked)}{note}")
     rows = []
     for e in entries:
@@ -441,14 +438,17 @@ def _cmd_check(args) -> int:
 
 
 def _refresh_parked(provider: str, item: dict) -> dict:
-    """Refresh an expired access token of a PARKED anthropic account.
+    """Refresh an expired access token of a PARKED OAuth account via its adapter.
 
-    Anthropic refresh tokens are single-use, so the rotated pair is written back
+    OAuth refresh tokens are often single-use (Anthropic's are), so the rotated pair is written back
     to the parked file under a lock straight after the POST. On invalid_grant the
     record is flagged so `usage` shows it as needing a new sign-in.
     """
     from types import SimpleNamespace
-    if provider != "anthropic" or item.get("auth_type") != "oauth" or item.get("_dead"):
+    ad = providers.get(provider)
+    if type(ad).refresh_parked is providers.Adapter.refresh_parked:
+        return item
+    if item.get("auth_type") != "oauth" or item.get("_dead"):
         return item
     if not _token_expired(SimpleNamespace(**{"expires_at_ms": item.get("expires_at_ms")})):
         return item
@@ -463,11 +463,10 @@ def _refresh_parked(provider: str, item: dict) -> dict:
         if not _token_expired(SimpleNamespace(expires_at_ms=cur.get("expires_at_ms"))):
             return cur
         try:
-            from agent.anthropic_credentials import refresh_anthropic_oauth_pure
-            new = refresh_anthropic_oauth_pure(cur.get("refresh_token") or "",
-                                               use_json=str(cur.get("source", "")).endswith("hermes_pkce"))
-            cur.update(access_token=new["access_token"], refresh_token=new["refresh_token"],
-                       expires_at_ms=new["expires_at_ms"])
+            new = ad.refresh_parked(cur)
+            if not new:
+                return cur
+            cur.update(new)
             cur.pop("_dead", None)
         except Exception as x:
             text = str(x)
@@ -503,7 +502,7 @@ def _cmd_usage(args) -> int:
 
     order = {"active": 0, "BENCHED": 1, "LIMITED": 1, "PARKED": 2, "DEAD": 3}
     rows.sort(key=lambda r: (order[r[1]], r[2][0] if isinstance(r[2], tuple) else 999))
-    print(f"[{provider}] 5-hour usage")
+    print(f"[{provider}] {_window(provider)} usage")
     print(f"  {'account':34s} {'state':8s} {'used':>5s}  {'':22s}  resets")
     last = None
     for label, state, u in rows:
@@ -615,7 +614,6 @@ def _cmd_unpark(args) -> int:
 
 def _cmd_balance(args) -> int:
     provider = _norm(args.provider)
-    _require_usage(provider)
     threshold = float(args.threshold)
     dry = bool(args.dry_run)
     stamp = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -651,6 +649,18 @@ def _cmd_balance(args) -> int:
             ok = fixed is not None and after is not None and getattr(after, "last_status", None) not in ("exhausted", "dead")
             actions.append(f"{'recovered' if ok else 'still cooling down'}: {e.label} (token refresh retried)")
 
+    if not _has_usage(provider):
+        # No usage adapter: timed parks, refresh recovery and sign-in alerts still run.
+        if not dry:
+            try:
+                actions += _run_alerts(provider, pool, [])
+            except Exception as x:
+                actions.append(f"alerts failed: {x}")
+        print(f"{stamp} [{provider}] balance{' (dry run)' if dry else ''}: no usage adapter, order unchanged.")
+        for a in actions:
+            print("  - " + a)
+        return 0
+
     rows = []
     for e in sorted(pool.entries(), key=lambda x: x.priority):
         if getattr(e, "last_status", None) == "dead":
@@ -662,6 +672,11 @@ def _cmd_balance(args) -> int:
 
     known = [(e, u) for e, u, flag in rows if u is not None]
     if not known:
+        if not dry:
+            try:
+                actions += _run_alerts(provider, pool, [])
+            except Exception as x:
+                actions.append(f"alerts failed: {x}")
         print(f"{stamp} [{provider}] balance: usage unavailable for every account; order unchanged.")
         for a in actions:
             print("  - " + a)
@@ -675,7 +690,7 @@ def _cmd_balance(args) -> int:
 
     full_ids = {e.id for e, _ in full}
     for e, (util, reset) in full:
-        msg = f"{MARK} 5h usage {util:.0f}% >= {threshold:.0f}%"
+        msg = f"{MARK} {providers.get(provider).window_short} usage {util:.0f}% >= {threshold:.0f}%"
         prev = getattr(e, "last_error_reset_at", None)
         if getattr(e, "last_status", None) == "exhausted" and prev and reset and abs(prev - reset) < 300:
             continue
@@ -807,8 +822,10 @@ def _cmd_doctor(args) -> int:
         add("warn", f"could not query systemd: {x}")
 
     # history freshness
-    hist = _read_history(provider, time.time() - 3600)
-    if hist:
+    hist = _read_history(provider, time.time() - 3600) if _has_usage(provider) else None
+    if hist is None:
+        pass
+    elif hist:
         age = (time.time() - hist[-1]["ts"]) / 60
         add("ok" if age < 15 else "warn", f"usage history last written {age:.0f} min ago")
     else:
@@ -826,13 +843,18 @@ def _cmd_doctor(args) -> int:
         add("warn", f"cooling down (auto-retried by balance): {', '.join(cooling)}")
 
     # usage endpoint
-    if provider in USAGE:
+    if not _has_usage(provider):
+        add("ok", f"no usage adapter for {provider}: usage/balance ordering/report are off; "
+                  f"list, check, park, unpark, who, alerts and relogin (OAuth) work")
+    else:
         probe = next((e for e in entries if getattr(e, "last_status", None) != "dead" and not _token_expired(e)), None)
         if probe is None:
             add("warn", "usage endpoint not probed (no account with a fresh token)")
         else:
-            add("ok" if _usage(provider, probe) else "fail",
-                "usage endpoint reachable" if _usage(provider, probe) else
+            ok = probe is not None and _usage(provider, probe)
+        if probe is not None:
+            add("ok" if ok else "fail",
+                "usage endpoint reachable" if ok else
                 "usage endpoint unreachable or changed: balance cannot order accounts")
 
     # notifications
@@ -868,12 +890,19 @@ def _cmd_relogin(args) -> int:
                              f"hermes account {provider} unpark {parked[0].get('label')}")
         raise SystemExit(f"{error} See: hermes account {provider} list")
     label, old_id, old_priority = matched.label, matched.id, matched.priority
+    if not _oauth(matched):
+        raise SystemExit(f"{label} uses an API key, not a sign-in. Replace the key with:\n"
+                         f"  hermes auth remove {provider} {old_id}\n"
+                         f"  hermes auth add {provider} --label {label}")
+    verify = providers.get(provider).has_identity
     print(f"Re-login {label} ({provider}, id={old_id})")
     print("  1. A browser sign-in link opens. Use a PRIVATE / INCOGNITO window,")
     print(f"     otherwise the browser may sign in as a different account.")
     print(f"  2. Sign in as: {label}")
     print("  3. Paste the code back here.")
-    print("The old entry is replaced only if the new sign-in really is that account.")
+    print("The old entry is replaced only if the new sign-in really is that account."
+          if verify else
+          f"NOTE: {provider} has no identity adapter, so the account cannot be verified. Sign in carefully.")
     if not args.yes:
         try:
             answer = input("Continue? [y/N] ").strip().lower()
@@ -910,6 +939,9 @@ def _cmd_report(args) -> int:
     provider = _norm(args.provider)
     hours = float(args.hours or 24)
     since = time.time() - hours * 3600
+    if not _has_usage(provider):
+        print(f"[{provider}] report needs usage history. {_no_usage_text(provider)}")
+        return 0
     hist = _read_history(provider, since)
     if len(hist) < 2:
         print(f"[{provider}] Not enough history yet ({len(hist)} snapshot). "
@@ -942,7 +974,8 @@ def _cmd_report(args) -> int:
     total = sum(burn.values())
     print(f"[{provider}] usage report: last {hours:.0f}h ({len(hist)} snapshots, {span:.1f}h covered, "
           f"from {time.strftime('%m-%d %H:%M', time.localtime(hist[0]['ts']))})")
-    print("  'used' adds up 5-hour-window percent: 100 = one full 5-hour window.")
+    w = _window(provider)
+    print(f"  'used' adds up {w}-window percent: 100 = one full {w} window.")
     print(f"  {'account':34s} {'used':>6s} {'share':>6s} {'peak':>5s}  {'time >= 90%':>11s}")
     for label in sorted(series, key=lambda l: -burn[l]):
         share = burn[label] / total * 100 if total else 0
@@ -1035,9 +1068,9 @@ def _cmd_notify(args) -> int:
 ACTIONS = [
     ("list", "", "Accounts in rotation and parked accounts"),
     ("check", "", "Health: dead, rate-limited, wrong label, duplicate, real email"),
-    ("usage", "", "Live 5-hour usage per account, parked included (anthropic)"),
+    ("usage", "", "Live usage per account, parked included (usage adapter needed)"),
     ("who", "[--minutes N]", "Which session is on which account (default: last 30 min)"),
-    ("report", "[--hours N]", "Usage history: load per account, busiest hours (default 24h)"),
+    ("report", "[--hours N]", "Usage history: load per account, busiest hours (usage adapter needed)"),
     ("park", "<target> [--until T]", "Take an account out of rotation; T = 17:00, +2h, 90m"),
     ("unpark", "<target>", "Return a parked account to rotation"),
     ("relogin", "<target> [--yes]", "Sign an account in again, verified, same label and position"),
@@ -1067,8 +1100,9 @@ HELP = "\n".join([
     "  hermes account anthropic doctor",
     "  hermes account anthropic notify test",
     "",
-    "usage, balance, report and real-email lookup: anthropic only.",
-    "list, check, park, unpark, relogin, who: every provider in the credential pool.",
+    "Every provider in the credential pool: list, check, park, unpark, relogin, who, doctor, alerts,",
+    "  timed parks and refresh recovery.",
+    f"Usage adapter (usage, report, balance ordering, real email): {', '.join(providers.with_usage())}.",
 ])
 
 
@@ -1127,7 +1161,7 @@ def _setup(parser) -> None:
     parser.add_argument("provider", nargs="?", help=argparse.SUPPRESS)
     parser.add_argument("action", nargs="?", help=argparse.SUPPRESS)
     parser.add_argument("target", nargs="?", help=argparse.SUPPRESS)
-    parser.add_argument("--threshold", type=float, default=None, help="balance: bench at/above this 5-hour %%")
+    parser.add_argument("--threshold", type=float, default=None, help="balance: bench at/above this usage %%")
     parser.add_argument("--dry-run", action="store_true", help="balance: show changes without applying them")
     parser.add_argument("--until", default=None, help="park: return automatically (17:00, +2h, 90m)")
     parser.add_argument("--hours", type=float, default=None, help="report: period in hours (default 24)")

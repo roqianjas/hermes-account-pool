@@ -1,5 +1,5 @@
 [Unit]
-Description=Hermes account pool: balance @PROVIDER@ accounts by live 5-hour usage
+Description=Hermes account pool: balance @PROVIDER@ accounts by live usage
 
 [Service]
 Type=oneshot

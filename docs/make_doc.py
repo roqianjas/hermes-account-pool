@@ -69,7 +69,7 @@ def footer(c, doc):
     c.saveState()
     c.setFont("Sans", 7.5)
     c.setFillColor(MUTED)
-    c.drawString(18 * mm, 10 * mm, "Hermes plugin account-pool 3.0.0 · github.com/roqianjas/hermes-account-pool")
+    c.drawString(18 * mm, 10 * mm, "Hermes plugin account-pool 3.1.0 · github.com/roqianjas/hermes-account-pool")
     c.drawRightString(A4[0] - 18 * mm, 10 * mm, f"Halaman {doc.page}")
     c.setStrokeColor(LINE)
     c.line(18 * mm, 14 * mm, A4[0] - 18 * mm, 14 * mm)
@@ -78,7 +78,7 @@ def footer(c, doc):
 
 # ── content ──────────────────────────────────────────────────────────────────
 st += [Paragraph("Plugin account-pool: perintah <font name='Mono'>hermes account</font>", s_title),
-       Paragraph("Dokumentasi lengkap versi 3.0.0: kelola akun di credential pool Hermes, bagi pemakaian akun "
+       Paragraph("Dokumentasi lengkap versi 3.1.0: kelola akun di credential pool Hermes, bagi pemakaian akun "
                  "Claude secara merata, pantau sesi, pulihkan masalah otomatis, dan terima peringatan.", s_sub)]
 
 H1("1. Ringkasan")
@@ -100,6 +100,18 @@ table([
     [C("help"), "Bantuan lengkap", "Tidak"],
 ], [0.15, 0.67, 0.18])
 P("* " + C("usage") + " memperbarui access token yang kedaluwarsa, sama seperti yang Hermes lakukan saat akun dipakai.")
+H2("Dukungan provider")
+table([
+    ["Fitur", "Provider"],
+    [C("list") + ", " + C("check") + ", " + C("park") + "/" + C("unpark") + " (+ " + C("--until") + "), " + C("who") + ", "
+     + C("doctor") + ", peringatan login, pemulihan cooling down", "<b>Semua provider</b> di credential pool (OAuth dan API key)"],
+    [C("relogin"), "Provider dengan login OAuth. Verifikasi email butuh adapter identity."],
+    [C("usage") + ", " + C("report") + ", urutan " + C("balance") + ", peringatan \"semua akun tinggi\", email asli",
+     "Provider yang punya <b>adapter</b>. Bawaan: <b>anthropic</b>."],
+], [0.55, 0.45])
+P("Kode khusus provider ada di " + C("providers.py") + " (adapter). Tanpa adapter, " + C("usage") + " dan " + C("report")
+  + " menampilkan pesan jelas, dan " + C("balance") + " tetap menjalankan unpark terjadwal, pemulihan, dan "
+  "peringatan login, tetapi urutan akun tidak diubah. Provider lain bisa ditambahkan dengan menulis satu adapter.")
 
 H1("2. Setup yang disarankan")
 table([
@@ -124,7 +136,7 @@ P("Dengan " + C("fill_first") + ", setiap sesi baru mengambil akun teratas, yait
 H1("3. Lokasi file")
 table([
     ["File", "Isi"],
-    [C("~/.hermes/plugins/account-pool/"), "Plugin utama (perintah " + C("hermes account") + "), versi 3.0.0"],
+    [C("~/.hermes/plugins/account-pool/"), "Plugin utama (perintah " + C("hermes account") + "), versi 3.1.0; adapter di " + C("providers.py")],
     [C("~/.hermes/plugins/account-pool-tracker/"), "Pelacak sesi; di-symlink ke " + C("profiles/*/plugins/")],
     [C("~/.hermes/auth.json"), "Credential pool bersama semua profil"],
     [C("~/.hermes/account-pool-parked.json"), "Akun yang diparkir (berisi token)"],
@@ -373,7 +385,7 @@ LI(["<b>Sesi yang berjalan tidak dipindah</b> sebelum akunnya kena limit. Pindah
     C("who") + " mencari sesi lewat stack thread yang sedang berjalan. Jika suatu update Hermes mengubah "
     "struktur internalnya, " + C("who") + " kosong tetapi bot tidak terganggu (pelacak menelan semua error).",
     C("relogin") + " membutuhkan terminal interaktif untuk menempel kode login.",
-    "Usage, balance, report, dan cek email asli baru tersedia untuk anthropic."])
+    "Adapter usage baru ada untuk anthropic. Perintah umum untuk provider lain baru dites dengan akun API key."])
 
 H1("12. Troubleshooting")
 table([
