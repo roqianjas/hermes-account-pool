@@ -147,10 +147,44 @@ w.mkdir(parents=True)
 mode = c.get("/x/status").json()["rotation_mode"]
 check([(r["profile"], r["strategy"]) for r in mode["other"]] == [("worker-1", "round_robin")],
       "rotation mode: a round_robin profile is reported, an unknown value counts as fill_first (as in Hermes)")
-doc = [t for _, t in core._doctor_checks("anthropic") if t.startswith("strategy")]
-check(doc == ["strategy is not fill_first: worker-1=Round_Robin, worker-2=bogus (balance order is ignored there). "
-              "Fix: hermes -p <profile> config set credential_pool_strategies.anthropic fill_first"],
-      "doctor strategy line unchanged")
+doc = [(lvl, t) for lvl, t in core._doctor_checks("anthropic") if "strateg" in t]
+check(doc == [("fail", "strategy is not fill_first: worker-1=Round_Robin (balance order is ignored there). "
+                       "Fix: hermes account anthropic strategy fill_first"),
+              ("warn", "unknown strategy value: worker-2=bogus (Hermes uses fill_first). "
+                       "Fix: hermes account anthropic strategy fill_first")],
+      "doctor: round_robin fails, an unknown value only warns (Hermes reads it as fill_first)")
+
+# ── changing the strategy from the page (Hermes' own config writer) ─────────
+import hashlib  # noqa: E402
+real = [p for p in [Path.home() / ".hermes" / "config.yaml", *sorted((Path.home() / ".hermes" / "profiles").glob("*/config.yaml"))]
+        if p.exists()]
+real_before = {p: hashlib.sha256(p.read_bytes()).hexdigest() for p in real}
+(w / "config.yaml").write_text("# kept comment\ncredential_pool_strategies:\n  anthropic: Round_Robin\n")
+
+
+def strat(name):
+    return dict(core._strategies("anthropic")).get(name)
+
+
+check(post("/action", {"action": "strategy", "provider": "anthropic"})[0] == 400, "strategy without a value refused")
+r = act("strategy", "sideways")
+check(not r["ok"] and r["rc"] == 2 and "not a strategy" in r["output"], "unknown strategy refused")
+r = act("strategy", "fill_first", only=["nobody"])
+check(not r["ok"] and "No profile named nobody" in r["output"], "unknown profile refused")
+r = act("strategy", "fill_first", only=["worker-1"])
+check(r["ok"] and "fill_first in worker-1 (was Round_Robin)" in r["output"] and strat("worker-1") == "fill_first"
+      and strat("worker-2") == "bogus", "fill_first for one profile; the others untouched")
+check((w / "config.yaml").read_text().startswith("# kept comment"), "Hermes' writer keeps the rest of config.yaml")
+check(not c.get("/x/status").json()["rotation_mode"]["other"], "status: no profile off fill_first any more")
+r = act("strategy", "fill_first", only="worker-1")
+check(r["ok"] and "Nothing to change" in r["output"], "setting the same value again changes nothing")
+r = act("strategy", "least_used")
+check(r["ok"] and all(strat(n) == "least_used" for n in ("default", "worker-1", "worker-2")) and "WARNING" in r["output"]
+      and "strategy fill_first" in r["output"], "page sets every profile without a prompt, with the warning and the way back")
+mode = c.get("/x/status").json()["rotation_mode"]
+check(mode["default"] == "least_used" and len(mode["other"]) == 3, "status follows the new strategy")
+check(act("strategy", "fill_first")["ok"] and not c.get("/x/status").json()["rotation_mode"]["other"], "back to fill_first everywhere")
+check(real_before == {p: hashlib.sha256(p.read_bytes()).hexdigest() for p in real}, "the real Hermes configs were not touched")
 
 print(f"\n{len(failures)} failure(s)")
 sys.exit(1 if failures else 0)

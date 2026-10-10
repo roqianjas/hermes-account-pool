@@ -103,10 +103,10 @@ def _exit_text(x: SystemExit) -> str:
 
 def _run(handler, **kw) -> dict:
     """Run a CLI handler with its output captured. Caller holds _exclusive()."""
-    # The page asks for confirmation itself, so `remove` runs with --yes (_dispatch rejects it elsewhere).
+    # The page asks for confirmation itself, so `remove` and `strategy` run with --yes (_dispatch rejects it elsewhere).
     args = SimpleNamespace(provider=None, action=None, target=None, until=None, threshold=None, dry_run=False,
-                           hours=None, minutes=None, yes=kw.get("action") == "remove", key=False, every=None,
-                           chart=False)
+                           hours=None, minutes=None, yes=kw.get("action") in ("remove", "strategy"), key=False,
+                           every=None, chart=False, only=None)
     for k, v in kw.items():
         setattr(args, k, v)
     with core._capture() as buf:
@@ -377,12 +377,12 @@ def live(body: dict):
             "message": f"Usage n/a for {len(failed)} account(s): {failed[0]['note']}" if failed else ""}
 
 
-ACTIONS = {"park", "unpark", "remove", "balance", "check", "notify", "schedule", "unschedule"}
+ACTIONS = {"park", "unpark", "remove", "balance", "check", "notify", "schedule", "unschedule", "strategy"}
 
 
 @router.post("/action")
 def action(body: dict):
-    """park / unpark / remove / balance / check / notify / schedule / unschedule, with the same rules as the CLI."""
+    """park / unpark / remove / balance / check / notify / schedule / unschedule / strategy, with the CLI's rules."""
     name = str(body.get("action") or "").strip().lower()
     if name not in ACTIONS:
         raise HTTPException(400, f"Action must be one of: {', '.join(sorted(ACTIONS))}.")
@@ -394,6 +394,13 @@ def action(body: dict):
         if not kw["target"] or not body.get("every"):
             raise HTTPException(400, "schedule needs a target and every (e.g. \"mon-fri 09:00-17:00\").")
         kw["every"] = str(body["every"])
+    if name == "strategy":
+        if not kw["target"]:
+            raise HTTPException(400, "strategy needs a value: fill_first, round_robin, least_used or random.")
+        only = body.get("only")
+        if isinstance(only, (list, tuple)):
+            only = ",".join(str(x) for x in only)
+        kw["only"] = str(only) if only else None
     if name == "balance":
         kw["dry_run"] = bool(body.get("dry_run"))
         if body.get("threshold") is not None:

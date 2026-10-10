@@ -2,7 +2,7 @@
 
 Run several accounts of one provider in [Hermes Agent](https://hermes-agent.nousresearch.com/docs) and manage them from one command, `hermes account`, or from an Accounts page in Hermes Desktop. Add accounts with a verified email, see live usage per account, spread the load before an account runs out, park accounts for a while or on a weekly schedule, see which bot is on which account and how many tokens each bot uses, and get an alert or a daily summary.
 
-Version 3.7.0 · MIT · Hermes Agent ≥ 0.21 · Linux with systemd · Indonesian PDF guide in [`docs/`](docs/hermes-account-pool.pdf)
+Version 3.8.0 · MIT · Hermes Agent ≥ 0.21 · Linux with systemd · Indonesian PDF guide in [`docs/`](docs/hermes-account-pool.pdf)
 
 ## Contents
 
@@ -123,7 +123,7 @@ It removes the timer, both plugins (the Accounts page included), the tracker sym
 
 **Credential pool.** Hermes keeps the accounts of each provider in one list in `~/.hermes/auth.json`. Every profile shares it, unless a profile was given its own pool by running `hermes -p <profile> auth add` (`doctor` warns about that).
 
-**Rotation strategy.** Which account a new session takes is a Hermes setting, per profile and provider: `credential_pool_strategies.<provider>`. The plugin reads it (the Accounts page shows it, `doctor` checks it) and leaves it to you.
+**Rotation strategy.** Which account a new session takes is a Hermes setting, per profile and provider: `credential_pool_strategies.<provider>`. Hermes owns it. The plugin shows it (`strategy`, the Accounts page header), `doctor` checks it, and it changes it only when you ask: with [`strategy`](#strategy) or from the page. Both write through Hermes' own `hermes config set`.
 
 | Strategy | A new session takes | With this plugin |
 |---|---|---|
@@ -132,7 +132,7 @@ It removes the timer, both plugins (the Accounts page included), the tracker sym
 | `least_used` | the account this computer picked least often | Counts picks, not quota: use in claude.ai or Claude Code is not seen. |
 | `random` | any usable account | The order `balance` sets is ignored. |
 
-`fill_first` plus the balance timer is a rotation by quota: the top spot moves to whichever account has the most room, every 5 minutes. `install.sh --set-strategy` sets `fill_first` in every profile.
+`fill_first` plus the balance timer is a rotation by quota: the top spot moves to whichever account has the most room, every 5 minutes. `hermes account <provider> strategy fill_first` and `install.sh --set-strategy` set `fill_first` in every profile.
 
 **Running sessions keep their account.** The order decides where a *new* session starts. A running session stays on its account until that account hits a limit; then Hermes moves it to the next usable account, which `balance` keeps the least used. So the accounts with sessions on them drift down the list as their usage grows, and the top account is usually idle: it is waiting for the next session. A session picks its account again after `/reset`, in a new chat, or after a gateway or Hermes Desktop restart. Moving running sessions earlier would throw away their prompt cache, and resending a long context costs more quota than it saves.
 
@@ -244,6 +244,7 @@ hermes account <provider> <action> [target] [options]
   unschedule <target>                   remove an account's park schedule
   relogin  <target> [--yes]             sign an account in again, verified, same label and position
   balance  [--dry-run] [--threshold N]  order by usage, bench >= N% (90), auto-recover, alerts
+  strategy [<name>] [--only P,...]      Hermes' rotation strategy per profile: show it, or set it
   doctor                                check strategy, timer, files, pools, alerts
   notify   [status|test|summary|...]    alert channels (desktop, Telegram) and the daily summary
   help                                  show the help
@@ -434,6 +435,34 @@ hermes account anthropic relogin alice@example.com
 
 Signs an OAuth account in again, for example after `DEAD` or `WRONG LABEL`. The new login is added first and its real email checked. If it matches, it replaces the old entry in the same position with the same label. If it does not, the new login is discarded and the old entry is left as it was. Parked accounts must be unparked first. Needs an interactive terminal to paste the code. Ctrl+C cancels cleanly.
 
+### strategy
+
+```
+$ hermes account anthropic strategy
+[anthropic] rotation strategy per profile (Hermes: credential_pool_strategies.anthropic):
+  default                      fill_first
+  worker-1                     fill_first
+  worker-2                     round_robin
+  ...
+Balance is built for fill_first: the order it sets decides where new sessions start.
+Change: hermes account anthropic strategy <fill_first|round_robin|random|least_used> [--only <profile>,...]
+
+$ hermes account anthropic strategy fill_first
+Rotation strategy [anthropic]: fill_first in worker-2 (was round_robin).
+New sessions there use it from now; running sessions keep their account.
+
+$ hermes account anthropic strategy round_robin --only worker-2
+WARNING: round_robin ignores the order balance sets, so a new session can start on a nearly full account.
+Set round_robin in worker-2? [y/N]
+```
+
+Shows or sets `credential_pool_strategies.<provider>` in every profile, or only in the profiles given with `--only` (comma-separated). The list also explains the four strategies.
+
+- The value is written with Hermes' own `hermes config set`, one profile at a time, then read back. The rest of each `config.yaml` is left as it was. Profiles that already have the value are not touched; a profile without the setting already uses `fill_first`, so `strategy fill_first` leaves it alone.
+- New sessions use the new strategy at once, with no restart: Hermes reads it each time it loads the pool. Running sessions keep their account.
+- Anything other than `fill_first` asks for confirmation (`--yes` skips it), because those strategies ignore the order `balance` sets. The output then gives the command that goes back.
+- The page does the same from the `rotation: ...` link in its header; see [What the page shows](#what-the-page-shows).
+
 ### doctor
 
 ```
@@ -453,7 +482,7 @@ $ hermes account anthropic doctor
   0 failure(s), 0 warning(s).
 ```
 
-Run it after installing, after a Hermes update, or when bots behave oddly. Every FAIL or WARN line includes the fix. Exit code 1 when there is a FAIL. For a provider with no accounts it says `not in use, nothing to check`.
+Run it after installing, after a Hermes update, or when bots behave oddly. Every FAIL or WARN line includes the fix. A profile on another strategy is a FAIL (`Fix: hermes account <provider> strategy fill_first`); a value Hermes does not know is only a WARN, because Hermes then uses `fill_first`. Exit code 1 when there is a FAIL. For a provider with no accounts it says `not in use, nothing to check`.
 
 ### notify
 
@@ -487,7 +516,7 @@ Unknown provider 'anthorpic'. Providers in your pool: anthropic. All providers: 
 | Exit code | Meaning |
 |---|---|
 | 0 | Done |
-| 1 | The command ran and found a problem: `check` or `doctor` failures, a discarded or failed sign-in, a refused remove, a confirmation answered with no (or Ctrl+D), `notify test` or `notify summary` reached no channel, `unschedule` of an account without a schedule |
+| 1 | The command ran and found a problem: `check` or `doctor` failures, a discarded or failed sign-in, a refused remove, a confirmation answered with no (or Ctrl+D), `notify test` or `notify summary` reached no channel, `unschedule` of an account without a schedule, a `strategy` that could not be written to a profile |
 | 2 | Wrong usage: missing or unknown action, provider, target or option |
 | 130 | Cancelled with Ctrl+C |
 
@@ -521,12 +550,14 @@ The header has a provider switch (providers with accounts in the pool, plus the 
 
 | Tab | Content |
 |---|---|
-| Accounts | The header line shows Hermes' rotation strategy (hover for what each one does); a banner names any profile that does not use `fill_first`, with the command that fixes it. Five cards: accounts in rotation, parked accounts, the account the next session starts on with its usage, sessions in the last 30 minutes, tokens in the last 24 hours with their API price. Then the rotation table in pool order: status, 5-hour usage bar, trend over the last 5 hours, reset time (or `back HH:MM` while benched), tokens in the last 24 hours (hover for input, output, cache, requests, API price, the main model and the current 5-hour window), the profiles using the account (hover for session, platform, model, since when the session is on this account, and the account it moved from) and the row buttons **Sign in again**, **Park**, **Park on a schedule** and **Remove**. A calendar chip next to an account shows its schedule. Parked accounts follow with their last known usage, since when they are parked, when they return (`(schedule)` when a schedule parked them), and **Unpark**, **Park on a schedule** and **Remove**. Then the park schedules, with what each one does now (parked until, next window, or `not in the pool`) and buttons to change or remove it. Active alerts show as a banner on top, a dead account with a **Sign in again** button. |
+| Accounts | The header line shows Hermes' rotation strategy (hover for what each one does, click to change it); a banner names any profile that does not use `fill_first`, with a **Use fill_first** button. Five cards: accounts in rotation, parked accounts, the account the next session starts on with its usage, sessions in the last 30 minutes, tokens in the last 24 hours with their API price. Then the rotation table in pool order: status, 5-hour usage bar, trend over the last 5 hours, reset time (or `back HH:MM` while benched), tokens in the last 24 hours (hover for input, output, cache, requests, API price, the main model and the current 5-hour window), the profiles using the account (hover for session, platform, model, since when the session is on this account, and the account it moved from) and the row buttons **Sign in again**, **Park**, **Park on a schedule** and **Remove**. A calendar chip next to an account shows its schedule. Parked accounts follow with their last known usage, since when they are parked, when they return (`(schedule)` when a schedule parked them), and **Unpark**, **Park on a schedule** and **Remove**. Then the park schedules, with what each one does now (parked until, next window, or `not in the pool`) and buttons to change or remove it. Active alerts show as a banner on top, a dead account with a **Sign in again** button. |
 | Report | The `report` numbers for 24 hours, 3 days or 7 days: load per account, share, peak, time at 90% or more, tokens and their API price, busiest hours and the advice line. Then tokens by profile (bot) and by model, and a chart of the load per hour for the last 7 days (quota used or tokens; hover a cell for its numbers). |
 | Health | Timer state, age of the usage history, active alerts. **Run doctor** runs the `doctor` checks; **Check accounts** runs `check` and shows its output. |
 | Alerts | Desktop and Telegram switches, the profile whose bot sends Telegram alerts, the daily summary (switch and time), **Send a test alert**, **Send the summary now**, and the alerts active now. |
 
 **Park** asks when the account comes back: when you unpark it, in 1 hour, in 2 hours, or at a time you type (`17:00`, `+90m`, `2026-10-12 08:00`, the same formats as `--until`). **Park on a schedule** asks for the days and the hours (`09:00` to `17:00`), the same as `schedule --every`. **Remove** and **Balance now** ask before they act. Every action reports the same message as the command.
+
+**rotation: …** in the header opens the rotation dialog: one picker per profile with its current strategy, an **Every profile** row that sets them all, and what each strategy does. While any profile is off `fill_first` the dialog says why that fights `balance`. **Save** writes only the profiles you changed, the same as `strategy --only`. The banner's **Use fill_first** does the same for the profiles it names, after a confirmation.
 
 The **status-bar chip** reads `8/8 · 12%`: 8 of 8 accounts in rotation are usable, and the account the next session starts on is at 12%. A dot appears when an alert is active (amber) or no account is usable (red). The chip hides while the provider has no accounts or the backend is not loaded.
 
@@ -700,7 +731,7 @@ How tokens are handled:
 | A schedule did not park its account | The timer is off, it is the last working account, or you unparked it by hand inside the window | `hermes account <provider> schedule` shows the state of each schedule |
 | No daily summary | The timer is off, no alert channel is on, or it was turned on after its time today | `notify` shows the time and the last day it was sent; `notify summary` tests delivery |
 | `report`: `API $` shows `-` or ends in `+` | The model has no price in Hermes' price list, or the tokens were counted before tracker 1.3.0 | Nothing to fix; those tokens are left out of the price |
-| `doctor`: strategy is not fill_first | A profile uses `round_robin` or another strategy | `hermes -p <profile> config set credential_pool_strategies.<provider> fill_first` |
+| `doctor`: strategy is not fill_first | A profile uses `round_robin` or another strategy | `hermes account <provider> strategy fill_first`, or **Use fill_first** on the page |
 | `doctor`: profiles with their OWN pool | Someone ran `hermes -p <profile> auth add` | Remove those entries in that profile (`hermes -p <profile> auth remove ...`) and add the accounts from the default profile |
 | `doctor`: last run failed | The timer's last `balance` failed | `journalctl --user -u hermes-account-balance.service -n 20` |
 | `hermes account`: unknown command | Run with `-p <profile>`; the plugin is in the default profile only | Run it without `-p` |
@@ -724,10 +755,10 @@ No. A running session keeps its account until it hits a limit; moving it would d
 That is balance working. A session started on the account that was #1 at the time. Its usage grew, so the next runs moved fresher accounts above it. #1 is where the next new session starts. See [Running sessions keep their account](#concepts).
 
 **Is there a round-robin mode?**
-Hermes has one (`round_robin`), next to `fill_first`, `least_used` and `random`; the plugin has no mode of its own. With this plugin, keep `fill_first`: balance then rotates by quota left instead of by turn. The table under [Concepts](#concepts) compares the four.
+Hermes has one (`round_robin`), next to `fill_first`, `least_used` and `random`; the plugin has no mode of its own. You can switch with `strategy` or on the page, but with this plugin keep `fill_first`: balance then rotates by quota left instead of by turn. The table under [Concepts](#concepts) compares the four.
 
 **Does the plugin change my fallback provider or models?**
-No. Fallback, models and which provider a profile uses stay in your Hermes configuration. The only setting the project writes is `credential_pool_strategies`, and only when you pass `install.sh --set-strategy`.
+No. Fallback, models and which provider a profile uses stay in your Hermes configuration. The only setting the project writes is `credential_pool_strategies`, and only when you ask: `install.sh --set-strategy`, `hermes account <provider> strategy`, or the page's rotation dialog.
 
 **Can I use the same account in claude.ai, Claude Code or Codex CLI at the same time?**
 Yes, with a separate sign-in there. The quota is shared, so that use shows up in `usage`. Never copy Hermes' tokens to another app or machine.

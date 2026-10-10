@@ -16,7 +16,7 @@ from reportlab.platypus import (CondPageBreak, KeepTogether, PageBreak, Paragrap
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 from reportlab.platypus.tableofcontents import TableOfContents
 
-VERSION = "3.7.0"
+VERSION = "3.8.0"
 REPO = "github.com/roqianjas/hermes-account-pool"
 FOOTER = f"Hermes plugin account-pool {VERSION} · {REPO}"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hermes-account-pool.pdf")
@@ -226,8 +226,10 @@ P("Hermes menyimpan akun tiap provider dalam satu daftar di " + C("~/.hermes/aut
   "semua profil. Pengecualian: profil yang pernah menjalankan " + C("hermes -p &lt;profil&gt; auth add") + " punya "
   "pool sendiri (" + C("doctor") + " memperingatkannya).")
 P("Akun mana yang diambil sesi baru adalah pengaturan Hermes, per profil dan provider: "
-  + C("credential_pool_strategies.&lt;provider&gt;") + ". Plugin hanya membacanya (halaman Accounts menampilkannya, "
-  + C("doctor") + " memeriksanya); pengaturannya tetap milik Anda.")
+  + C("credential_pool_strategies.&lt;provider&gt;") + ". Pengaturan ini milik Hermes. Plugin menampilkannya ("
+  + C("strategy") + ", header halaman Accounts), " + C("doctor") + " memeriksanya, dan plugin hanya mengubahnya "
+  "jika Anda minta: lewat " + C("strategy") + " (7.10) atau dari halaman. Keduanya menulis lewat "
+  + C("hermes config set") + " milik Hermes sendiri.")
 table([
     ["Strategi", "Sesi baru mengambil", "Dengan plugin ini"],
     [C("fill_first") + " (bawaan Hermes)", "Akun pertama yang bisa dipakai di daftar",
@@ -240,7 +242,8 @@ table([
     [C("random"), "Akun acak yang bisa dipakai", "Urutan dari " + C("balance") + " diabaikan."],
 ], [0.17, 0.33, 0.50])
 P(C("fill_first") + " ditambah timer balance adalah rotasi berdasarkan kuota: posisi teratas berpindah ke akun yang "
-  "paling longgar setiap 5 menit. " + C("install.sh --set-strategy") + " memasang " + C("fill_first") + " di semua profil.")
+  "paling longgar setiap 5 menit. " + C("hermes account &lt;provider&gt; strategy fill_first") + " dan "
+  + C("install.sh --set-strategy") + " memasang " + C("fill_first") + " di semua profil.")
 H2("Sesi yang berjalan tetap di akunnya")
 P("Urutan menentukan tempat <b>sesi baru</b> mulai. Sesi yang sedang berjalan tetap di akunnya sampai akun itu kena "
   "limit; setelah itu Hermes memindahkannya ke akun berikutnya yang bisa dipakai, yang dijaga " + C("balance")
@@ -355,6 +358,7 @@ hermes account <provider> <action> [target] [options]
   unschedule <target>                   hapus jadwal parkir akun
   relogin  <target> [--yes]             login ulang, terverifikasi, label dan posisi tetap
   balance  [--dry-run] [--threshold N]  urutkan, istirahatkan >= N% (90), pulihkan, alert
+  strategy [<nama>] [--only P,...]      strategi rotasi Hermes per profil: lihat atau ubah
   doctor                                periksa strategi, timer, file, pool, peringatan
   notify   [status|test|summary|...]    peringatan (desktop, Telegram), ringkasan harian
   help                                  bantuan
@@ -366,7 +370,7 @@ table([
     [C("list") + ", " + C("check") + ", " + C("who") + ", " + C("report") + ", " + C("doctor") + ", " + C("help"),
      "Tidak", C("add") + ", " + C("remove") + ", " + C("park") + ", " + C("unpark") + ", " + C("relogin") + ", "
      + C("balance"), "Ya"],
-    ["", "", C("schedule") + ", " + C("unschedule"), "Pengaturan"],
+    ["", "", C("schedule") + ", " + C("unschedule") + ", " + C("strategy &lt;nama&gt;"), "Pengaturan"],
     [C("usage"), "Tidak*", C("notify"), "Pengaturan"],
 ], [0.36, 0.14, 0.36, 0.14])
 P("* " + C("usage") + " memperbarui access token yang kedaluwarsa, sama seperti yang Hermes lakukan saat akun dipakai.")
@@ -578,7 +582,33 @@ LI(["Dipakai setelah " + C("DEAD") + " atau " + C("WRONG LABEL") + ". Login baru
     "login baru dibuang dan entri lama tidak disentuh.",
     "Akun yang sedang diparkir harus di-" + C("unpark") + " dulu. " + C("--yes") + " melewati konfirmasi. "
     "Ctrl+C membatalkan dengan bersih."])
-H2("7.10 doctor", need=85)
+H2("7.10 strategy", need=80)
+code("""
+$ hermes account anthropic strategy
+[anthropic] rotation strategy per profile (Hermes: credential_pool_strategies.anthropic):
+  default                      fill_first
+  worker-1                     fill_first
+  worker-2                     round_robin
+  ...
+$ hermes account anthropic strategy fill_first
+Rotation strategy [anthropic]: fill_first in worker-2 (was round_robin).
+New sessions there use it from now; running sessions keep their account.
+$ hermes account anthropic strategy round_robin --only worker-2
+WARNING: round_robin ignores the order balance sets, so a new session can start on a nearly
+full account.
+Set round_robin in worker-2? [y/N]
+""")
+LI(["Menampilkan atau mengubah " + C("credential_pool_strategies.&lt;provider&gt;") + " di semua profil, atau hanya "
+    "di profil yang disebut dengan " + C("--only") + " (dipisah koma). Daftarnya juga menjelaskan keempat strategi.",
+    "Nilai ditulis dengan " + C("hermes config set") + " milik Hermes, satu profil demi satu profil, lalu dibaca "
+    "ulang. Isi " + C("config.yaml") + " yang lain tidak berubah. Profil yang nilainya sudah sama tidak disentuh; profil "
+    "tanpa pengaturan ini sudah memakai " + C("fill_first") + ", jadi " + C("strategy fill_first") + " membiarkannya.",
+    "Sesi baru langsung memakai strategi baru tanpa restart, karena Hermes membacanya setiap kali memuat pool. Sesi "
+    "yang berjalan tetap di akunnya.",
+    "Selain " + C("fill_first") + " ada konfirmasi (" + C("--yes") + " melewatinya), karena strategi lain "
+    "mengabaikan urutan dari " + C("balance") + ". Output-nya lalu menyebut perintah untuk kembali.",
+    "Halaman melakukan hal yang sama dari tautan " + C("rotation: ...") + " di header (bagian 8.3)."])
+H2("7.11 doctor", need=85)
 code("""
 $ hermes account anthropic doctor
 [anthropic] doctor
@@ -596,9 +626,11 @@ $ hermes account anthropic doctor
   0 failure(s), 0 warning(s).
 """)
 P("Jalankan setelah instalasi, setelah update Hermes, atau saat bot berperilaku aneh. Setiap baris FAIL atau WARN "
-  "menyertakan perbaikannya. Exit code 1 jika ada FAIL. Untuk provider tanpa akun: "
+  "menyertakan perbaikannya. Profil dengan strategi lain adalah FAIL (perbaikan: " + C("strategy fill_first")
+  + "); nilai yang tidak dikenal Hermes hanya WARN, karena Hermes lalu memakai " + C("fill_first") + "."
+  " Exit code 1 jika ada FAIL. Untuk provider tanpa akun: "
   + C("not in use, nothing to check") + ".")
-H2("7.11 notify")
+H2("7.12 notify")
 code("""
 hermes account anthropic notify                         # status
 hermes account anthropic notify test                    # kirim pesan tes ke semua saluran
@@ -609,7 +641,7 @@ hermes account anthropic notify daily=08:00             # ringkasan harian; dail
 hermes account anthropic notify summary                 # kirim ringkasan sekarang
 """)
 P("Penjelasan lengkap di bagian 9.")
-H2("7.12 help, pesan salah, dan exit code")
+H2("7.13 help, pesan salah, dan exit code")
 code("""
 hermes account                 # semua cara ini menampilkan bantuan yang sama
 hermes account help
@@ -629,7 +661,7 @@ table([
     ["Exit code", "Arti"],
     ["0", "Selesai"],
     ["1", "Perintah jalan dan menemukan masalah: " + C("check") + "/" + C("doctor") + " gagal, login dibuang atau "
-     "gagal, remove ditolak, konfirmasi dijawab tidak (atau Ctrl+D), " + C("notify test") + " atau " + C("notify summary") + " tidak sampai ke saluran mana pun, " + C("unschedule") + " untuk akun tanpa jadwal"],
+     "gagal, remove ditolak, konfirmasi dijawab tidak (atau Ctrl+D), " + C("notify test") + " atau " + C("notify summary") + " tidak sampai ke saluran mana pun, " + C("unschedule") + " untuk akun tanpa jadwal, " + C("strategy") + " yang gagal ditulis ke suatu profil"],
     ["2", "Cara pakai salah: aksi, provider, target, atau opsi tidak ada atau tidak dikenal"],
     ["130", "Dibatalkan dengan Ctrl+C"],
 ], [0.14, 0.86], keep=True)
@@ -668,7 +700,8 @@ P("Header berisi pilihan provider, tombol <b>Live usage</b>, <b>Balance now</b>,
 table([
     ["Tab", "Isi"],
     ["Accounts", "Baris di bawah header menampilkan strategi rotasi Hermes (arahkan kursor untuk penjelasan tiap "
-     "strategi); banner menyebut profil yang tidak memakai " + C("fill_first") + " beserta perintah perbaikannya. Lima kartu: akun dalam rotasi, akun parkir, akun tempat sesi berikutnya mulai beserta pemakaiannya, "
+     "strategi, klik untuk mengubahnya); banner menyebut profil yang tidak memakai " + C("fill_first") + " beserta "
+     "tombol <b>Use fill_first</b>. Lima kartu: akun dalam rotasi, akun parkir, akun tempat sesi berikutnya mulai beserta pemakaiannya, "
      "jumlah sesi 30 menit terakhir, dan token 24 jam terakhir beserta harga API-nya. Lalu tabel rotasi sesuai urutan pool: status, bar "
      "pemakaian 5 jam, garis tren 5 jam terakhir, jam reset (atau " + C("back HH:MM") + " saat diistirahatkan), "
      "token 24 jam terakhir (arahkan kursor untuk rincian input, output, cache, jumlah request, harga API, model utama, dan "
@@ -691,6 +724,11 @@ P("<b>Park</b> menanyakan kapan akun kembali: saat di-unpark, 1 jam lagi, 2 jam 
   + "). <b>Park on a schedule</b> menanyakan hari dan jamnya (" + C("09:00") + " sampai " + C("17:00")
   + "), sama dengan " + C("schedule --every") + ". <b>Remove</b> dan <b>Balance now</b> minta konfirmasi dulu. Setiap aksi menampilkan pesan yang sama dengan "
   "perintahnya.")
+P("<b>rotation: ...</b> di header membuka dialog rotasi: satu pilihan per profil dengan strateginya sekarang, baris "
+  "<b>Every profile</b> untuk mengubah semuanya, dan penjelasan tiap strategi. Selama ada profil yang tidak memakai "
+  + C("fill_first") + ", dialog menjelaskan kenapa itu bentrok dengan " + C("balance") + ". <b>Save</b> hanya menulis "
+  "profil yang Anda ubah, sama dengan " + C("strategy --only") + ". Tombol <b>Use fill_first</b> di banner melakukan hal "
+  "yang sama untuk profil yang disebutnya, setelah konfirmasi.")
 P("<b>Chip status bar</b> " + C("8/8 · 12%") + " artinya 8 dari 8 akun dalam rotasi bisa dipakai, dan akun tempat "
   "sesi berikutnya mulai ada di 12%. Muncul titik kuning saat ada peringatan aktif, merah saat tidak ada akun yang "
   "bisa dipakai. Chip disembunyikan selama provider belum punya akun atau backend belum dimuat.")
@@ -913,7 +951,7 @@ table([
     [C("report") + ": API $ " + C("-") + " atau berakhiran " + C("+"), "Model tanpa harga di daftar Hermes, atau token "
      "dari sebelum pelacak 1.3.0", "Tidak perlu diperbaiki; token itu tidak dihargai"],
     ["doctor: strategy is not fill_first", "Profil memakai " + C("round_robin") + " atau strategi lain",
-     C("hermes -p &lt;profil&gt; config set") + "<br/>" + C("credential_pool_strategies.&lt;provider&gt;") + "<br/>" + C("fill_first")],
+     C("hermes account &lt;provider&gt;") + "<br/>" + C("strategy fill_first") + ", atau <b>Use fill_first</b> di halaman"],
     ["doctor: profiles with their OWN pool", "Pernah menjalankan " + C("hermes -p &lt;profil&gt; auth add"),
      "Hapus entri di profil itu, lalu tambah akun dari profil default"],
     ["doctor: last run failed", C("balance") + " terakhir gagal", C("journalctl --user -u") + "<br/>" + C("hermes-account-balance.service -n 20")],
@@ -943,12 +981,14 @@ qa = [
      "menaruh akun yang lebih longgar di atasnya. #1 adalah tempat sesi baru berikutnya mulai (lihat bagian 5)."),
     ("Apakah ada mode round robin?",
      "Hermes punya (" + C("round_robin") + "), selain " + C("fill_first") + ", " + C("least_used") + ", dan "
-     + C("random") + "; plugin tidak punya mode sendiri. Dengan plugin ini, tetap pakai " + C("fill_first")
+     + C("random") + "; plugin tidak punya mode sendiri. Anda bisa menggantinya dengan " + C("strategy") + " atau dari "
+     "halaman, tetapi dengan plugin ini tetap pakai " + C("fill_first")
      + ": balance lalu merotasi berdasarkan sisa kuota, bukan giliran. Perbandingan keempatnya ada di bagian 5."),
     ("Apakah plugin mengubah fallback atau model?",
      "Tidak. Fallback, model, dan provider yang dipakai profil tetap di pengaturan Hermes. Satu-satunya pengaturan yang "
-     "ditulis proyek ini adalah " + C("credential_pool_strategies") + ", dan hanya jika Anda memakai "
-     + C("install.sh --set-strategy") + "."),
+     "ditulis proyek ini adalah " + C("credential_pool_strategies") + ", dan hanya jika Anda minta: "
+     + C("install.sh --set-strategy") + ", " + C("hermes account &lt;provider&gt; strategy") + ", atau dialog rotasi "
+     "di halaman."),
     ("Bolehkah akun yang sama dipakai di claude.ai, Claude Code, atau Codex CLI bersamaan?",
      "Boleh, dengan login terpisah di aplikasi itu. Kuotanya berbagi, jadi pemakaian itu ikut terlihat di "
      + C("usage") + ". Jangan menyalin token Hermes ke aplikasi atau perangkat lain."),
@@ -1014,6 +1054,7 @@ table([
     ["Seimbangkan sekarang", C("hermes account anthropic balance")],
     ["Tes peringatan", C("hermes account anthropic notify test")],
     ["Ringkasan harian jam 08:00", C("hermes account anthropic notify daily=08:00")],
+    ["Strategi rotasi tiap profil", C("hermes account anthropic strategy")],
     ["Log timer", C("journalctl --user -u hermes-account-balance.service -n 20 -o cat")],
     ["Halaman di Desktop", "Sidebar <b>Accounts</b>, atau Ctrl+K " + C("Accounts: open the account pool")],
     ["Update plugin", C("git pull && ./install.sh")],
@@ -1022,6 +1063,9 @@ table([
 H1("19. Riwayat versi")
 table([
     ["Versi", "Perubahan"],
+    ["3.8.0", "Strategi rotasi dari plugin: " + C("strategy") + " (lihat atau ubah per profil, lewat "
+     + C("hermes config set") + " milik Hermes) dan dialog rotasi di halaman; tombol <b>Use fill_first</b> di banner. "
+     + C("doctor") + ": nilai strategi yang tidak dikenal kini WARN. Kartu token tidak lagi terpotong."],
     ["3.7.0", "Token per bot dan per model (pelacak 1.3.0), harga API di " + C("report") + " dan halaman, "
      "ringkasan harian (" + C("notify daily=HH:MM") + "), grafik beban per jam 7 hari (" + C("report --chart")
      + " dan tab Report), jadwal parkir mingguan (" + C("schedule") + "/" + C("unschedule") + " dan tombol di halaman)."],

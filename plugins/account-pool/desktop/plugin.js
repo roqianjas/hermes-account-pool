@@ -145,15 +145,19 @@ function TokensCell({ tokens, window }) {
 
 // The bot picker for Telegram alerts. The SDK Select follows the Hermes theme;
 // a native <select> (older Hermes) is styled as far as Chromium allows.
-function ProfileSelect({ value, profiles, disabled, onChange }) {
+function Pick({ value, options, disabled, onChange, label }) {
   if (sdk.Select && sdk.SelectTrigger && sdk.SelectContent && sdk.SelectItem && sdk.SelectValue) {
     return h(sdk.Select, { value, disabled, onValueChange: onChange },
-      h(sdk.SelectTrigger, { size: 'sm', className: 'hap-select-trigger', 'aria-label': 'Profile whose Telegram bot sends the alerts' },
+      h(sdk.SelectTrigger, { size: 'sm', className: 'hap-select-trigger', 'aria-label': label },
         h(sdk.SelectValue, null)),
-      h(sdk.SelectContent, null, profiles.map(p => h(sdk.SelectItem, { key: p, value: p }, p))))
+      h(sdk.SelectContent, null, options.map(p => h(sdk.SelectItem, { key: p, value: p }, p))))
   }
-  return h('select', { className: 'hap-select', value, disabled, onChange: e => onChange(e.target.value) },
-    profiles.map(p => h('option', { key: p, value: p }, p)))
+  return h('select', { className: 'hap-select', value, disabled, 'aria-label': label, onChange: e => onChange(e.target.value) },
+    options.map(p => h('option', { key: p, value: p }, p)))
+}
+
+function ProfileSelect({ value, profiles, disabled, onChange }) {
+  return h(Pick, { value, options: profiles, disabled, onChange, label: 'Profile whose Telegram bot sends the alerts' })
 }
 
 const STATE = {
@@ -233,6 +237,8 @@ const CSS = `
 .hap-select-trigger{width:auto;min-width:170px}
 .hap-ml{white-space:pre-line;display:block}
 .hap-mode{border-bottom:1px dotted currentColor;cursor:help}
+.hap-modebtn{display:inline-flex;align-items:center;gap:4px;background:none;border:0;border-bottom:1px dotted currentColor;padding:0;font:inherit;color:inherit;cursor:pointer}
+.hap-modebtn:hover{color:var(--ui-text-primary)}
 .hap-sharebar{display:inline-block;width:80px;height:5px;border-radius:3px;background:var(--ui-bg-quaternary);overflow:hidden;vertical-align:middle;margin-right:6px}
 .hap-sharebar>i{display:block;height:100%;background:var(--ui-accent)}
 .hap-heat{display:grid;grid-template-columns:76px repeat(24,minmax(9px,1fr));gap:2px;align-items:center;max-width:760px;margin-top:4px}
@@ -280,11 +286,12 @@ function IconButton({ icon, label, onClick, disabled }) {
       h(Codicon, { name: icon, size: '0.85rem' })))
 }
 
-function Card({ k, v, s }) {
+function Card({ k, v, s, s2 }) {
   return h('div', { className: 'hap-card' },
     h('div', { className: 'hap-card-k' }, k),
     h('div', { className: 'hap-card-v' }, v),
-    s ? h('div', { className: 'hap-card-s', title: typeof s === 'string' ? s : undefined }, s) : null)
+    s ? h('div', { className: 'hap-card-s', title: typeof s === 'string' ? s : undefined }, s) : null,
+    s2 ? h('div', { className: 'hap-card-s', title: s2 }, s2) : null)
 }
 
 function Sessions({ sessions }) {
@@ -302,6 +309,58 @@ function Sessions({ sessions }) {
 }
 
 // ── dialogs ──────────────────────────────────────────────────────────────────
+
+// Hermes' rotation strategy per profile (credential_pool_strategies.<provider>). Hermes owns the
+// setting; the backend writes it with Hermes' own `config set`, like the CLI's `strategy` action.
+const STRATEGIES = ['fill_first', 'round_robin', 'least_used', 'random']
+
+function StrategyDialog({ provider, mode, onClose, onDone }) {
+  const [pick, setPick] = useState(() => Object.fromEntries(mode.profiles.map(r => [r.profile, r.strategy])))
+  const values = Object.values(pick)
+  const all = values.every(v => v === values[0]) ? values[0] : null
+  const changed = mode.profiles.filter(r => pick[r.profile] !== r.strategy)
+  const risky = values.some(v => v !== 'fill_first')
+  return h(ConfirmDialog, {
+    open: true,
+    onClose,
+    title: 'Rotation strategy',
+    description: `Which account a new session takes, per profile. This is Hermes' own setting (credential_pool_strategies.${provider} in each profile's config.yaml), saved with Hermes' config writer. New sessions use it at once; running sessions keep their account.`,
+    confirmLabel: changed.length ? `Save (${changed.length} profile${changed.length === 1 ? '' : 's'})` : 'Close',
+    busyLabel: 'Saving…',
+    onConfirm: async () => {
+      if (!changed.length) return onClose()
+      const groups = {}
+      changed.forEach(r => { (groups[pick[r.profile]] = groups[pick[r.profile]] || []).push(r.profile) })
+      const out = []
+      for (const [value, only] of Object.entries(groups)) {
+        const r = await post('/action', { action: 'strategy', provider, target: value, only })
+        if (!r.ok) throw new Error(r.output || 'Saving the strategy failed')
+        out.push(firstLine(r.output))
+      }
+      onDone(out.join(' '))
+    }
+  },
+  h('div', { className: 'hap-field' },
+    h('span', { className: 'hap-muted' }, 'Every profile'),
+    h('div', { className: 'hap-days' }, STRATEGIES.map(s => h(Button, {
+      key: s, size: 'sm', variant: all === s ? 'default' : 'outline', 'aria-pressed': all === s,
+      onClick: () => setPick(Object.fromEntries(mode.profiles.map(r => [r.profile, s])))
+    }, s)))),
+  h('table', { className: 'hap-table' },
+    h('thead', null, h('tr', null, h('th', null, 'Profile'), h('th', null, 'Now'), h('th', null, 'New sessions take'))),
+    h('tbody', null, mode.profiles.map(r => h('tr', { key: r.profile },
+      h('td', null, r.profile),
+      h('td', { className: 'hap-muted' }, r.strategy),
+      h('td', null, h(Pick, {
+        value: pick[r.profile], options: STRATEGIES, label: `Rotation strategy of ${r.profile}`,
+        onChange: v => setPick({ ...pick, [r.profile]: v })
+      })))))),
+  h('div', { className: 'hap-small hap-muted hap-ml', style: { marginTop: 8 } }, Object.values(MODES).join('\n')),
+  risky
+    ? h('div', { className: 'hap-banner', style: { marginTop: 8 } }, h(Codicon, { name: 'warning' }),
+      h('span', null, 'round_robin, least_used and random ignore the order balance sets: a new session can start on a nearly full account and wait up to 600 s on a rate limit. Balance is built for fill_first.'))
+    : null)
+}
 
 function ResultDialog({ title, text, onClose }) {
   return h(Dialog, { open: true, onOpenChange: open => !open && onClose() },
@@ -590,10 +649,9 @@ function AccountsView({ data, provider, openDialog }) {
         k: 'Tokens, last 24 h',
         v: data.tokens && data.tokens.day.requests ? fmtTok(data.tokens.day.total) : '–',
         s: data.tokens && data.tokens.day.requests
-          ? (data.tokens.day.cost > 0
-              ? `${fmtCost(data.tokens.day)} at API prices · ${data.tokens.day.requests} requests`
-              : `${fmtTok(data.tokens.day.output)} output · ${data.tokens.day.requests} requests`)
-          : data.tokens && data.tokens.since ? 'none in 24 h' : 'counting starts with the next request'
+          ? (data.tokens.day.cost > 0 ? `${fmtCost(data.tokens.day)} at API prices` : `${fmtTok(data.tokens.day.output)} output`)
+          : data.tokens && data.tokens.since ? 'none in 24 h' : 'counting starts with the next request',
+        s2: data.tokens && data.tokens.day.requests ? `${data.tokens.day.requests} requests` : null
       })),
 
     h('div', { className: 'hap-section' }, 'In rotation',
@@ -1004,6 +1062,19 @@ function AccountsPage() {
     const close = () => setDialog(null)
     if (dialog.type === 'park') modal = h(ParkDialog, { provider, row: dialog.row, onClose: close, onDone: done })
     else if (dialog.type === 'schedule') modal = h(ScheduleDialog, { provider, row: dialog.row, current: dialog.current, onClose: close, onDone: done })
+    else if (dialog.type === 'strategy' && data.rotation_mode) modal = h(StrategyDialog, { provider, mode: data.rotation_mode, onClose: close, onDone: done })
+    else if (dialog.type === 'strategyfix' && data.rotation_mode) {
+      const names = data.rotation_mode.other.map(r => r.profile)
+      modal = h(ConfirmDialog, {
+        open: true, onClose: close, title: `Use fill_first in ${names.join(', ')}?`, confirmLabel: 'Use fill_first', busyLabel: 'Saving…',
+        description: `Sets credential_pool_strategies.${provider} to fill_first there with Hermes' config writer, so new sessions start on the account balance puts first. Running sessions keep their account.`,
+        onConfirm: async () => {
+          const r = await post('/action', { action: 'strategy', provider, target: 'fill_first', only: names })
+          if (!r.ok) throw new Error(r.output || 'Saving the strategy failed')
+          done(firstLine(r.output))
+        }
+      })
+    }
     else if (dialog.type === 'unschedule') {
       modal = h(ConfirmDialog, {
         open: true, onClose: close, title: `Remove the schedule of ${dialog.row.label}?`, confirmLabel: 'Remove schedule', busyLabel: 'Removing…',
@@ -1095,15 +1166,15 @@ function AccountsPage() {
           age != null ? `usage from the balance timer, ${ago(age)}` : 'no usage history yet',
           t && t.active ? ` · next run ${t.running ? 'now' : t.next || '–'}` : ' · balance timer off',
           data.rotation_mode ? ' · ' : null,
-          data.rotation_mode ? h(RotationMode, { mode: data.rotation_mode, provider: data.provider }) : null)
+          data.rotation_mode ? h(RotationMode, { mode: data.rotation_mode, provider: data.provider, onEdit: () => setDialog({ type: 'strategy' }) }) : null)
         : null),
     h('div', { className: 'hap-body' },
       data && data.rotation_mode && data.rotation_mode.other.length && view === 'accounts'
         ? h('div', { className: 'hap-banner' }, h(Codicon, { name: 'warning' }),
           h('span', { className: 'hap-grow' },
             `Hermes rotation is not fill_first in ${data.rotation_mode.other.map(r => `${r.profile} (${r.strategy})`).join(', ')}. `
-            + 'Sessions there ignore the balance order. Fix: ',
-            h('code', null, `hermes -p <profile> config set credential_pool_strategies.${data.provider} fill_first`)))
+            + 'Sessions there ignore the balance order.'),
+          h(Button, { size: 'xs', variant: 'outline', disabled: !!busy, onClick: () => setDialog({ type: 'strategyfix' }) }, 'Use fill_first'))
         : null,
       data && data.alerts.length && view === 'accounts'
         ? data.alerts.map(a => h('div', { className: 'hap-banner', key: a.key }, h(Codicon, { name: 'warning' }),
@@ -1119,7 +1190,8 @@ function AccountsPage() {
     modal)
 }
 
-// Hermes' own rotation setting (credential_pool_strategies). The page shows it; Hermes owns it.
+// Hermes' own rotation setting (credential_pool_strategies). Hermes owns it; the page shows it and
+// changes it through the backend, which uses Hermes' `config set`.
 const MODES = {
   fill_first: 'fill_first: every new session takes the first usable account. With the balance timer that is the least-used one.',
   round_robin: 'round_robin: each new session takes the next account in turn and moves it to the end. Rewrites the order balance sets.',
@@ -1127,7 +1199,7 @@ const MODES = {
   random: 'random: each new session takes a random usable account.'
 }
 
-function RotationMode({ mode, provider }) {
+function RotationMode({ mode, provider, onEdit }) {
   const mixed = mode.other.length > 0
   const label = [
     `Rotation is a Hermes setting, per profile: credential_pool_strategies.${provider}.`,
@@ -1135,11 +1207,17 @@ function RotationMode({ mode, provider }) {
     ...Object.values(MODES),
     '',
     'fill_first is the one balance is built for: the order it sets decides where new sessions start.',
-    mixed ? `Not fill_first: ${mode.other.map(r => `${r.profile} (${r.strategy})`).join(', ')}.` : `All ${mode.profiles.length} profiles use fill_first.`
+    mixed ? `Not fill_first: ${mode.other.map(r => `${r.profile} (${r.strategy})`).join(', ')}.` : `All ${mode.profiles.length} profiles use fill_first.`,
+    '',
+    'Click to change it per profile.'
   ].join('\n')
   return h(MTip, { label },
-    h('span', { className: 'hap-mode', style: mixed ? { color: 'var(--ui-orange)' } : undefined },
-      mixed ? `rotation: ${mode.default}, ${mode.other.length} profile(s) differ` : `rotation: ${mode.default}`))
+    h('button', {
+      type: 'button', className: 'hap-modebtn', onClick: onEdit, 'aria-label': 'Change the rotation strategy',
+      style: mixed ? { color: 'var(--ui-orange)' } : undefined
+    },
+    mixed ? `rotation: ${mode.default}, ${mode.other.length} profile(s) differ` : `rotation: ${mode.default}`,
+    h(Codicon, { name: 'edit', size: '0.7rem' })))
 }
 
 // ── status bar ───────────────────────────────────────────────────────────────

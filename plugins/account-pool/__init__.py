@@ -28,6 +28,7 @@ $HERMES_HOME/account-pool-parked.json (mode 600).
 from __future__ import annotations
 
 import builtins
+import contextlib
 import io
 import json
 import os
@@ -1194,6 +1195,98 @@ def _effective_strategy(value) -> str:
     return v if v in POOL_STRATEGIES else "fill_first"
 
 
+STRATEGY_TEXT = {
+    "fill_first": "every new session takes the first usable account. With the balance timer that is the least-used one.",
+    "round_robin": "each new session takes the next account in turn and moves it to the end. Rewrites the order balance sets.",
+    "least_used": "each new session takes the account picked least often by this computer, not the one with the most quota left.",
+    "random": "each new session takes a random usable account.",
+}
+
+
+def _set_strategy(home: Path, provider: str, value: str) -> None:
+    """Write credential_pool_strategies.<provider> into one profile's config.yaml with Hermes' own writer
+    (`hermes config set`), so the file keeps Hermes' format and checks. Raises RuntimeError on failure."""
+    key = f"credential_pool_strategies.{provider}"
+    try:
+        from hermes_cli.config import set_config_value
+        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+    except ImportError:                                  # older Hermes: same command in a subprocess
+        r = subprocess.run([_hermes_bin(), "config", "set", key, value], env=dict(os.environ, HERMES_HOME=str(home)),
+                           capture_output=True, text=True, timeout=120)
+        if r.returncode:
+            raise RuntimeError(((r.stderr or r.stdout).strip().splitlines() or [f"exit code {r.returncode}"])[-1])
+        return
+    out = io.StringIO()
+    token = set_hermes_home_override(str(home))        # context-local: other threads keep their home
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            set_config_value(key, value)
+    except SystemExit as x:
+        lines = [ln for ln in out.getvalue().splitlines() if ln.strip()]
+        raise RuntimeError(lines[-1] if lines else str(x.code))
+    finally:
+        reset_hermes_home_override(token)
+
+
+def _cmd_strategy(args) -> int:
+    """Show or set Hermes' rotation strategy (credential_pool_strategies.<provider>) per profile."""
+    provider = _norm(args.provider)
+    homes = dict(_profile_homes())
+    only = [p.strip() for p in str(getattr(args, "only", None) or "").split(",") if p.strip()]
+    unknown = [p for p in only if p not in homes]
+    if unknown:
+        raise SystemExit(f"No profile named {', '.join(unknown)}. Profiles: {', '.join(homes)}")
+    rows = _strategies(provider)
+    if not args.target:
+        if only:
+            _p(f"--only needs a strategy: hermes account {provider} strategy <{'|'.join(POOL_STRATEGIES)}> --only {','.join(only)}")
+            return 2
+        _p(f"[{provider}] rotation strategy per profile (Hermes: credential_pool_strategies.{provider}):")
+        for name, value in rows:
+            eff = _effective_strategy(value)
+            note = ("  (not set: Hermes uses fill_first)" if not value else
+                    f"  (unknown value '{value}': Hermes uses fill_first)" if value.strip().lower() != eff else "")
+            _p(f"  {name:28s} {eff}{note}")
+        _p("")
+        for name, text in STRATEGY_TEXT.items():
+            _p(f"  {name:12s} {text}")
+        _p("Balance is built for fill_first: the order it sets decides where new sessions start.")
+        _p(f"Change: hermes account {provider} strategy <{'|'.join(POOL_STRATEGIES)}> [--only <profile>,...]")
+        return 0
+    value = str(args.target).strip().lower()
+    if value not in POOL_STRATEGIES:
+        _p(f"'{args.target}' is not a strategy. Strategies: {', '.join(POOL_STRATEGIES)}")
+        return 2
+    targets = [(n, v) for n, v in rows if not only or n in only]
+    change = [(n, v) for n, v in targets if (v or "").strip().lower() != value and (v or value != "fill_first")]
+    if not change:
+        _p(f"Nothing to change: {', '.join(n for n, _ in targets)} already use{'s' if len(targets) == 1 else ''} {value}.")
+        return 0
+    if value != "fill_first":
+        _p(f"WARNING: {value} ignores the order balance sets, so a new session can start on a nearly full account.")
+        if not _confirm(f"Set {value} in {', '.join(n for n, _ in change)}?", args.yes):
+            _p("Nothing changed.")
+            return 1
+    done, failed = [], []
+    for name, old in change:
+        try:
+            _set_strategy(homes[name], provider, value)
+            now = dict(_strategies(provider)).get(name)
+            if (now or "").strip().lower() != value:
+                raise RuntimeError(f"config.yaml still says {now or 'nothing'}")
+            done.append(f"{name} (was {old or 'not set'})")
+        except Exception as e:  # noqa: BLE001  (report per profile, keep going)
+            failed.append(f"{name}: {e}")
+    if done:
+        _p(f"Rotation strategy [{provider}]: {value} in {', '.join(done)}.")
+        _p("New sessions there use it from now; running sessions keep their account.")
+    for f in failed:
+        _p(f"FAILED {f}")
+    if done and value != "fill_first":
+        _p(f"Back to the strategy balance needs: hermes account {provider} strategy fill_first")
+    return 1 if failed else 0
+
+
 def _doctor_checks(provider: str) -> list:
     """[(level, text)] with level ok / warn / fail. Probes the usage endpoint once."""
     import yaml
@@ -1206,12 +1299,17 @@ def _doctor_checks(provider: str) -> list:
     profiles = _profile_homes()
 
     # strategy per profile
-    bad = [f"{name}={value}" for name, value in _strategies(provider)
-           if value and not value.startswith("fill_first")]
+    strategies = _strategies(provider)
+    bad = [f"{name}={value}" for name, value in strategies if _effective_strategy(value) != "fill_first"]
+    odd = [f"{name}={value}" for name, value in strategies
+           if value and _effective_strategy(value) == "fill_first" and value.strip().lower() != "fill_first"]
     add("ok" if not bad else "fail",
         f"strategy fill_first in {len(profiles)} profile{'' if len(profiles) == 1 else 's'}" if not bad else
         f"strategy is not fill_first: {', '.join(bad)} (balance order is ignored there). "
-        f"Fix: hermes -p <profile> config set credential_pool_strategies.{provider} fill_first")
+        f"Fix: hermes account {provider} strategy fill_first")
+    if odd:
+        add("warn", f"unknown strategy value: {', '.join(odd)} (Hermes uses fill_first). "
+                    f"Fix: hermes account {provider} strategy fill_first")
 
     # profile-local pools shadowing the shared pool
     local = []
@@ -2236,6 +2334,7 @@ ACTIONS = [
     ("unschedule", "<target>", "Remove an account's park schedule"),
     ("relogin", "<target> [--yes]", "Sign an account in again, verified, same label and position"),
     ("balance", "[--dry-run] [--threshold N]", "Order by usage, bench >= N% (90), auto-recover, alerts"),
+    ("strategy", "[<name>] [--only P,...]", "Hermes' rotation strategy per profile; set it (balance needs fill_first)"),
     ("doctor", "", "Check the whole setup: strategy, timer, files, pools, alerts"),
     ("notify", "[status|test|summary|...]", "Alert channels (desktop, Telegram) and the daily summary"),
     ("help", "", "Show this help"),
@@ -2261,6 +2360,7 @@ HELP = "\n".join([
     "  hermes account anthropic report --hours 72",
     "  hermes account anthropic schedule alice@example.com --every \"mon-fri 09:00-17:00\"",
     "  hermes account anthropic notify daily=08:00",
+    "  hermes account anthropic strategy",
     "  hermes account anthropic doctor",
     "  hermes account anthropic notify test",
     "",
@@ -2278,13 +2378,14 @@ def _print_help(_args=None) -> int:
 HANDLERS = {"add": _cmd_add, "remove": _cmd_remove, "list": _cmd_list, "check": _cmd_check, "usage": _cmd_usage, "who": _cmd_who,
             "report": _cmd_report, "park": _cmd_park, "unpark": _cmd_unpark, "relogin": _cmd_relogin,
             "balance": _cmd_balance, "doctor": _cmd_doctor, "notify": _cmd_notify, "schedule": _cmd_schedule,
-            "unschedule": _cmd_unschedule}
+            "unschedule": _cmd_unschedule, "strategy": _cmd_strategy}
 NEEDS_TARGET = {"park", "unpark", "relogin", "add", "remove", "unschedule"}
-OPTIONAL_TARGET = {"notify", "schedule"}
+OPTIONAL_TARGET = {"notify", "schedule", "strategy"}
 OPTIONS = {"threshold": ("--threshold", {"balance"}), "dry_run": ("--dry-run", {"balance"}),
            "until": ("--until", {"park"}), "hours": ("--hours", {"report"}),
-           "minutes": ("--minutes", {"who"}), "yes": ("--yes", {"relogin", "add", "remove"}),
-           "key": ("--key", {"add"}), "every": ("--every", {"schedule"}), "chart": ("--chart", {"report"})}
+           "minutes": ("--minutes", {"who"}), "yes": ("--yes", {"relogin", "add", "remove", "strategy"}),
+           "key": ("--key", {"add"}), "every": ("--every", {"schedule"}), "chart": ("--chart", {"report"}),
+           "only": ("--only", {"strategy"})}
 
 
 def _dispatch(args) -> int:
@@ -2349,10 +2450,11 @@ def _setup(parser) -> None:
     parser.add_argument("--until", default=None, help="park: return automatically (17:00, +2h, 90m)")
     parser.add_argument("--hours", type=float, default=None, help="report: period in hours (default 24)")
     parser.add_argument("--minutes", type=float, default=None, help="who: activity window (default 30)")
-    parser.add_argument("--yes", action="store_true", help="add/remove/relogin: skip the confirmation prompt")
+    parser.add_argument("--yes", action="store_true", help="add/remove/relogin/strategy: skip the confirmation prompt")
     parser.add_argument("--key", action="store_true", help="add: add an API key instead of a sign-in")
     parser.add_argument("--every", default=None, help='schedule: days and hours, e.g. "mon-fri 09:00-17:00"')
     parser.add_argument("--chart", action="store_true", help="report: load by hour for the last 7 days")
+    parser.add_argument("--only", default=None, help="strategy: only these profiles (comma-separated)")
     parser.set_defaults(func=_dispatch)
 
 

@@ -2,6 +2,14 @@
 
 All releases of the `account-pool` plugin and its session tracker `account-pool-tracker` (now 1.3.0).
 
+## 3.8.0
+
+- Rotation strategy from the plugin. `hermes account <provider> strategy` lists Hermes' `credential_pool_strategies.<provider>` per profile and what each strategy does; `strategy <name>` sets it in every profile, `--only <profile>,...` in some. Values other than `fill_first` ask for confirmation (`--yes`). The value is written with Hermes' own `hermes config set` and read back; profiles that already have it are not touched. New sessions use it at once.
+- Accounts page: `rotation: …` in the header opens a dialog with one picker per profile and an **Every profile** row; the banner for profiles off `fill_first` gets a **Use fill_first** button instead of a command to copy.
+- `doctor`: a strategy value Hermes does not know is now a WARN, not a FAIL, because Hermes uses `fill_first` for it. The FAIL for another strategy now gives `hermes account <provider> strategy fill_first` as the fix. These are deliberate output changes.
+- Accounts page: the tokens card puts the requests on their own line, so the API price is no longer cut off in narrow windows.
+- Tests: `tests/api_sandbox.py` sets strategies through the page backend in a sandbox and checks that the real Hermes configs are untouched; `tests/ui/run.mjs` covers the dialog and the banner button.
+
 ## 3.7.0
 
 - Tokens per bot and per model. The session tracker (1.3.0) adds each call's tokens to its account, profile and model. `report` and the Report tab list tokens by profile (bot) and by model. Tokens counted by tracker 1.1.0 or 1.2.0 have no profile or model; they show as `(before tracker 1.3.0)` / `not split yet` and leave the report within 8 days. The token file moves to version 2; a 1.1.0 or 1.2.0 tracker still running in a bot until its restart keeps writing the old layout, which is folded in on the next write.

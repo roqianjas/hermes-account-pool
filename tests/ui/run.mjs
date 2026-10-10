@@ -131,7 +131,7 @@ ok(rows[0].textContent.includes('1.2M'), 'tokens of the first account shown comp
 ok(screen.getByText('rotation: fill_first'), 'rotation mode shown in the header')
 ok(screen.getByText(/New sessions start on #1/), 'rotation table explains where new sessions start')
 ok(!screen.queryByText(/Hermes rotation is not fill_first/), 'no rotation banner while every profile uses fill_first')
-ok(screen.getByText(/at API prices · \d+ requests/), 'tokens card shows the API price')
+ok(screen.getByText(/at API prices$/) && screen.getAllByText(/^\d+ requests$/).length, 'tokens card shows the API price and the requests on two lines')
 ok(within(rows[1]).getByText(/Mon-Fri 09:00-17:00/), 'schedule chip on the scheduled account')
 const schedTable = document.querySelector('[data-table="schedules"]')
 ok(schedTable && schedTable.querySelectorAll('tbody tr').length === status.schedules.length, 'schedules table lists every schedule')
@@ -297,6 +297,28 @@ fx['/status?provider=anthropic'].rotation_mode = { ...savedMode, profiles: rr, o
 mount('page')
 await screen.findByText(/Hermes rotation is not fill_first in worker-3 \(round_robin\)/)
 ok(screen.getByText('rotation: fill_first, 1 profile(s) differ'), 'rotation banner and header warning for a round_robin profile')
+await click(screen.getByText('Use fill_first', { selector: 'button' }))
+ok(screen.getByText('Use fill_first in worker-3?'), 'banner button asks before it changes the strategy')
+await click(screen.getAllByText('Use fill_first').filter(b => b.tagName === 'BUTTON').pop())
+await waitFor(() => {
+  const b = lastPost('/action')?.body
+  ok(b.action === 'strategy' && b.target === 'fill_first' && JSON.stringify(b.only) === '["worker-3"]', 'banner fix posts fill_first for that profile only')
+})
+// the strategy dialog: one Select per profile; changes are grouped per value
+await click(screen.getByLabelText('Change the rotation strategy'))
+ok(screen.getByText('Rotation strategy') && screen.getByText('New sessions take'), 'header opens the strategy dialog')
+const sels = [...document.querySelectorAll('[role="dialog"] select')]
+ok(sels.length === rr.length && sels[rr.findIndex(r => r.profile === 'worker-3')].value === 'round_robin', 'one strategy picker per profile, showing the current value')
+ok(screen.getByText(/ignore the order balance sets/), 'warning while a profile is not on fill_first')
+await click(screen.getByText('fill_first', { selector: 'button' }))
+ok(!screen.queryByText(/ignore the order balance sets/) && screen.getByText('Save (1 profile)'), '"every profile" button sets them all; only real changes count')
+await act(async () => { fireEvent.change(sels[0], { target: { value: 'random' } }) })
+await click(screen.getByText('Save (2 profiles)'))
+await waitFor(() => {
+  const posts = calls.filter(c => c.method === 'POST' && c.path === '/action').slice(-2).map(c => c.body)
+  ok(posts.some(b => b.target === 'random' && JSON.stringify(b.only) === JSON.stringify([rr[0].profile]))
+    && posts.some(b => b.target === 'fill_first' && JSON.stringify(b.only) === '["worker-3"]'), 'strategy dialog posts one change per value')
+})
 fx['/status?provider=anthropic'].rotation_mode = savedMode
 cleanup()
 
