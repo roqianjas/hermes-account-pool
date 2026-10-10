@@ -115,7 +115,11 @@ def _entries(provider: str):
 
 
 def _hhmm(ts) -> str:
-    return time.strftime("%H:%M", time.localtime(ts)) if ts else "?"
+    if not ts:
+        return "?"
+    if abs(ts - time.time()) > 20 * 3600:        # weekly windows: show the day
+        return time.strftime("%a %H:%M", time.localtime(ts))
+    return time.strftime("%H:%M", time.localtime(ts))
 
 
 def _root() -> Path:
@@ -318,14 +322,24 @@ def _identity(provider, entry):
     return ad.identity(entry)
 
 
-def _usage(provider, entry):
+def _usage_full(provider, entry):
+    """(percent, reset_epoch, detail_text) or None."""
     ad = providers.get(provider)
     if not ad.has_usage or (ad.oauth_only and not _oauth(entry)):
         return None
     try:
-        return ad.usage(entry)
+        u = ad.usage(entry)
     except Exception:
         return None
+    if not u:
+        return None
+    return float(u[0]), u[1], (u[2] if len(u) > 2 else "")
+
+
+def _usage(provider, entry):
+    """(percent, reset_epoch) or None: the value balance, report and alerts use."""
+    u = _usage_full(provider, entry)
+    return (u[0], u[1]) if u else None
 
 
 def _has_usage(provider) -> bool:
@@ -450,7 +464,7 @@ def _refresh_parked(provider: str, item: dict) -> dict:
         return item
     if item.get("auth_type") != "oauth" or item.get("_dead"):
         return item
-    if not _token_expired(SimpleNamespace(**{"expires_at_ms": item.get("expires_at_ms")})):
+    if not _token_expired(SimpleNamespace(expires_at_ms=item.get("expires_at_ms"), access_token=item.get("access_token"))):
         return item
     import fcntl
     lock_path = _parked_path().with_suffix(".lock")
@@ -460,7 +474,7 @@ def _refresh_parked(provider: str, item: dict) -> dict:
         cur = next((p for p in items if p["_provider"] == provider and p.get("id") == item.get("id")), None)
         if cur is None:
             return item
-        if not _token_expired(SimpleNamespace(expires_at_ms=cur.get("expires_at_ms"))):
+        if not _token_expired(SimpleNamespace(expires_at_ms=cur.get("expires_at_ms"), access_token=cur.get("access_token"))):
             return cur
         try:
             new = ad.refresh_parked(cur)
@@ -491,14 +505,14 @@ def _cmd_usage(args) -> int:
         state = ("DEAD" if st == "dead" else
                  "BENCHED" if st == "exhausted" and MARK in msg else
                  "LIMITED" if st == "exhausted" else "active")
-        rows.append((e.label, state, _usage(provider, e) if st != "dead" else None))
+        rows.append((e.label, state, _usage_full(provider, e) if st != "dead" else None))
     for item in [p for p in _read_parked() if p["_provider"] == provider]:
         item = _refresh_parked(provider, item)
         if item.get("_dead"):
             rows.append((item.get("label", "?"), "PARKED", "dead"))
             continue
         ent = SimpleNamespace(access_token=item.get("access_token"), auth_type=item.get("auth_type"))
-        rows.append((item.get("label", "?"), "PARKED", _usage(provider, ent)))
+        rows.append((item.get("label", "?"), "PARKED", _usage_full(provider, ent)))
 
     order = {"active": 0, "BENCHED": 1, "LIMITED": 1, "PARKED": 2, "DEAD": 3}
     rows.sort(key=lambda r: (order[r[1]], r[2][0] if isinstance(r[2], tuple) else 999))
@@ -511,15 +525,16 @@ def _cmd_usage(args) -> int:
             print(f"  -- {'in rotation' if group == 'rotation' else 'parked (not used by Hermes)'} --")
             last = group
         if u == "dead":
-            print(f"  {label:34s} {state:8s}   n/a  sign-in expired: hermes auth add {provider} --type oauth --label {label}")
+            print(f"  {label:34s} {state:8s}   n/a  sign-in expired: hermes account {provider} remove {label}, then add {label}")
         elif u is None:
             print(f"  {label:34s} {state:8s}   n/a")
         else:
-            util, reset = u
+            util, reset, detail = u
             fill = int(min(util, 100) // 5)
             ch = "=" if state == "PARKED" else "#"
             bar = ch * fill + "." * (20 - fill)
-            print(f"  {label:34s} {state:8s} {util:4.0f}%  [{bar}]  {_hhmm(reset)}")
+            extra = f"   ({detail})" if detail else ""
+            print(f"  {label:34s} {state:8s} {util:4.0f}%  [{bar}]  {_hhmm(reset)}{extra}")
     return 0
 
 
@@ -892,8 +907,8 @@ def _cmd_relogin(args) -> int:
     label, old_id, old_priority = matched.label, matched.id, matched.priority
     if not _oauth(matched):
         raise SystemExit(f"{label} uses an API key, not a sign-in. Replace the key with:\n"
-                         f"  hermes auth remove {provider} {old_id}\n"
-                         f"  hermes auth add {provider} --label {label}")
+                         f"  hermes account {provider} remove {label}\n"
+                         f"  hermes account {provider} add {label} --key")
     verify = providers.get(provider).has_identity
     print(f"Re-login {label} ({provider}, id={old_id})")
     print("  1. A browser sign-in link opens. Use a PRIVATE / INCOGNITO window,")
@@ -1063,6 +1078,151 @@ def _cmd_notify(args) -> int:
     return 0
 
 
+def _oauth_provider(provider: str) -> bool:
+    try:
+        from hermes_cli.auth_commands import _OAUTH_ADD_SPECS
+        return provider in _OAUTH_ADD_SPECS
+    except Exception:
+        return provider in ("anthropic", "openai-codex")
+
+
+def _find_parked(provider: str, target: str):
+    t = str(target).lower()
+    return next((p for p in _read_parked() if p["_provider"] == provider
+                 and t in (str(p.get("id", "")).lower(), str(p.get("label") or "").lower())), None)
+
+
+def _confirm(question: str, yes: bool) -> bool:
+    if yes:
+        return True
+    try:
+        return input(f"{question} [y/N] ").strip().lower() in ("y", "yes")
+    except EOFError:
+        return False
+
+
+def _cmd_add(args) -> int:
+    provider = _norm(args.provider)
+    label = str(args.target).strip()
+    pool = _pool(provider)
+    entries = pool.entries()
+    if any((e.label or "").lower() == label.lower() for e in entries):
+        raise SystemExit(f"{label} is already in rotation. To sign it in again: "
+                         f"hermes account {provider} relogin {label}")
+    if _find_parked(provider, label):
+        raise SystemExit(f"{label} is parked. Return it with: hermes account {provider} unpark {label}")
+
+    use_key = bool(args.key) or not _oauth_provider(provider)
+    verify = providers.get(provider).has_identity and not use_key
+    print(f"Add {label} to {provider}")
+    if use_key:
+        print("  You will be asked for the API key (input is hidden).")
+    else:
+        print("  1. A browser sign-in link opens. Use a PRIVATE / INCOGNITO window,")
+        print("     otherwise the browser may sign in as an account that is already in the pool.")
+        print(f"  2. Sign in as: {label}")
+        print("  3. Paste the code back here.")
+        print("  The account is kept only if the sign-in really is that account and not a duplicate."
+              if verify else
+              f"  NOTE: {provider} has no identity adapter, so the account cannot be verified.")
+    if not _confirm("Continue?", args.yes):
+        print("Cancelled. Nothing changed.")
+        return 1
+
+    before = {e.id for e in entries}
+    cmd = [_hermes_bin(), "auth", "add", provider, "--type", "api-key" if use_key else "oauth", "--label", label]
+    rc = subprocess.call(cmd, env=_hermes_env())
+    pool = _pool(provider)
+    new = [e for e in pool.entries() if e.id not in before]
+    if rc != 0 or not new:
+        print("Sign-in did not complete. Nothing was added.")
+        return 1
+    fresh = new[0]
+
+    def discard(msg: str) -> int:
+        idx, _, _ = pool.resolve_target(fresh.id)
+        if idx is not None:
+            pool.remove_index(idx)
+        print(msg)
+        return 1
+
+    if verify:
+        ident = _identity(provider, fresh)
+        if ident and "@" in ident:
+            if ident.lower() != label.lower():
+                same = next((e for e in pool.entries() if e.id != fresh.id
+                             and (e.label or "").lower() == ident.lower()), None)
+                hint = f" ({ident} is already in the pool as id={same.id})" if same else ""
+                return discard(f"Signed in as {ident}, not {label}{hint}. The sign-in was discarded.\n"
+                               f"Retry in a private/incognito window, signed in as {label}.")
+            for e in pool.entries():
+                if e.id == fresh.id:
+                    continue
+                if (e.label or "").lower() == ident.lower() or (
+                        _oauth(e) and not _token_expired(e) and (_identity(provider, e) or "").lower() == ident.lower()):
+                    return discard(f"{ident} is already in the pool as '{e.label}' (id={e.id}). "
+                                   f"The duplicate sign-in was discarded.")
+            print(f"Verified: {ident}")
+        else:
+            print(f"Could not verify the email ({ident or 'no answer'}). Kept as '{label}'; "
+                  f"check it later with: hermes account {provider} check")
+
+    print(f"Added {label} (id={fresh.id}) to {provider}.")
+    if _has_usage(provider):
+        import contextlib
+        import io
+        from types import SimpleNamespace
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            try:
+                _cmd_balance(SimpleNamespace(provider=provider, threshold=90.0, dry_run=False))
+            except SystemExit:
+                pass
+        order = next((l.strip()[2:] for l in out.getvalue().splitlines() if l.strip().startswith("- order:")), None)
+        print("Balanced now: " + order[len("order: "):] if order else "Balanced now (order unchanged).")
+    return 0
+
+
+def _cmd_remove(args) -> int:
+    provider = _norm(args.provider)
+    pool = _pool(provider)
+    index, matched, error = pool.resolve_target(args.target)
+
+    if matched is None or index is None:
+        item = _find_parked(provider, args.target)
+        if not item:
+            raise SystemExit(f"{error} See: hermes account {provider} list")
+        label = item.get("label", "?")
+        print(f"Remove PARKED account {label} (id={item.get('id')}) from {provider}.")
+        print("Its saved login is deleted; to use it again you must sign in again (add).")
+        if not _confirm("Delete it?", args.yes):
+            print("Cancelled. Nothing changed.")
+            return 1
+        items = [p for p in _read_parked() if not (p["_provider"] == provider and p.get("id") == item.get("id"))]
+        _write_parked(items)
+        print(f"Removed {label}.")
+        return 0
+
+    label = matched.label
+    others = [e for e in pool.entries() if e.id != matched.id and getattr(e, "last_status", None) != "dead"]
+    if not others:
+        raise SystemExit(f"Refused: {label} is the last working {provider} account. "
+                         f"Add another one first: hermes account {provider} add <email>")
+    print(f"Remove {label} (id={matched.id}) from {provider}.")
+    print("Its login is deleted; to use it again you must sign in again (add).")
+    print(f"To take it out of rotation for a while instead: hermes account {provider} park {label}")
+    if not _confirm("Delete it?", args.yes):
+        print("Cancelled. Nothing changed.")
+        return 1
+    r = subprocess.run([_hermes_bin(), "auth", "remove", provider, matched.id],
+                       capture_output=True, text=True, env=_hermes_env())
+    if r.returncode != 0:
+        print((r.stderr or r.stdout).strip() or "hermes auth remove failed.")
+        return 1
+    print(f"Removed {label}.")
+    return 0
+
+
 # ── registration ─────────────────────────────────────────────────────────────
 
 ACTIONS = [
@@ -1071,6 +1231,8 @@ ACTIONS = [
     ("usage", "", "Live usage per account, parked included (usage adapter needed)"),
     ("who", "[--minutes N]", "Which session is on which account (default: last 30 min)"),
     ("report", "[--hours N]", "Usage history: load per account, busiest hours (usage adapter needed)"),
+    ("add", "<email> [--key] [--yes]", "Sign in a new account, verified, no duplicates (--key: API key)"),
+    ("remove", "<target> [--yes]", "Delete an account's login (also works for parked accounts)"),
     ("park", "<target> [--until T]", "Take an account out of rotation; T = 17:00, +2h, 90m"),
     ("unpark", "<target>", "Return a parked account to rotation"),
     ("relogin", "<target> [--yes]", "Sign an account in again, verified, same label and position"),
@@ -1092,6 +1254,7 @@ HELP = "\n".join([
     "Targets: account label (email), list number, or id. unpark accepts label or id.",
     "",
     "Examples:",
+    "  hermes account anthropic add carol@example.com",
     "  hermes account anthropic usage",
     "  hermes account anthropic who",
     "  hermes account anthropic park alice@example.com --until 17:00",
@@ -1100,7 +1263,7 @@ HELP = "\n".join([
     "  hermes account anthropic doctor",
     "  hermes account anthropic notify test",
     "",
-    "Every provider in the credential pool: list, check, park, unpark, relogin, who, doctor, alerts,",
+    "Every provider in the credential pool: list, check, add, remove, park, unpark, relogin, who, doctor, alerts,",
     "  timed parks and refresh recovery.",
     f"Usage adapter (usage, report, balance ordering, real email): {', '.join(providers.with_usage())}.",
 ])
@@ -1111,14 +1274,15 @@ def _print_help(_args=None) -> int:
     return 0
 
 
-HANDLERS = {"list": _cmd_list, "check": _cmd_check, "usage": _cmd_usage, "who": _cmd_who,
+HANDLERS = {"add": _cmd_add, "remove": _cmd_remove, "list": _cmd_list, "check": _cmd_check, "usage": _cmd_usage, "who": _cmd_who,
             "report": _cmd_report, "park": _cmd_park, "unpark": _cmd_unpark, "relogin": _cmd_relogin,
             "balance": _cmd_balance, "doctor": _cmd_doctor, "notify": _cmd_notify}
-NEEDS_TARGET = {"park", "unpark", "relogin"}
+NEEDS_TARGET = {"park", "unpark", "relogin", "add", "remove"}
 OPTIONAL_TARGET = {"notify"}
 OPTIONS = {"threshold": ("--threshold", {"balance"}), "dry_run": ("--dry-run", {"balance"}),
            "until": ("--until", {"park"}), "hours": ("--hours", {"report"}),
-           "minutes": ("--minutes", {"who"}), "yes": ("--yes", {"relogin"})}
+           "minutes": ("--minutes", {"who"}), "yes": ("--yes", {"relogin", "add", "remove"}),
+           "key": ("--key", {"add"})}
 
 
 def _dispatch(args) -> int:
@@ -1166,7 +1330,8 @@ def _setup(parser) -> None:
     parser.add_argument("--until", default=None, help="park: return automatically (17:00, +2h, 90m)")
     parser.add_argument("--hours", type=float, default=None, help="report: period in hours (default 24)")
     parser.add_argument("--minutes", type=float, default=None, help="who: activity window (default 30)")
-    parser.add_argument("--yes", action="store_true", help="relogin: skip the confirmation prompt")
+    parser.add_argument("--yes", action="store_true", help="add/remove/relogin: skip the confirmation prompt")
+    parser.add_argument("--key", action="store_true", help="add: add an API key instead of a sign-in")
     parser.set_defaults(func=_dispatch)
 
 

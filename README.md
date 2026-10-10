@@ -8,7 +8,7 @@ Hermes already rotates to the next account when one hits a limit. This plugin ad
 
 | Feature | Providers |
 |---|---|
-| `list`, `check`, `park`/`unpark` (also `--until`), `who`, `doctor`, sign-in alerts, refresh-cooldown recovery | **Every provider in the credential pool** (OAuth and API-key entries) |
+| `list`, `check`, `add`/`remove`, `park`/`unpark` (also `--until`), `who`, `doctor`, sign-in alerts, refresh-cooldown recovery | **Every provider in the credential pool** (OAuth and API-key entries) |
 | `relogin` | Every provider with OAuth sign-in. Email verification needs an identity adapter. |
 | `usage`, `report`, usage-based `balance`, "all accounts high" alert, real-email lookup | **Providers with an adapter.** Built in: **`anthropic`** (Claude Pro / Max / Team OAuth). |
 
@@ -16,6 +16,7 @@ Provider-specific code lives in [`plugins/account-pool/providers.py`](plugins/ac
 
 ## Features
 
+- **`add` and `remove`**: sign in a new account and verify its real email. A wrong-account or duplicate sign-in is thrown away, and the new account is balanced right away. `remove` asks for confirmation, refuses to delete the last working account, and also handles parked accounts.
 - **Park and unpark**: take an account out of rotation without deleting its login, either until you unpark it or until a set time (`--until 17:00`).
 - **`who`**: shows which session (profile, platform, model) is using which account.
 - **`doctor`**: checks the whole setup in one command.
@@ -39,6 +40,8 @@ hermes account <provider> <action> [target] [options]
   usage                                 live usage per account, parked included (adapter)
   who      [--minutes N]                which session is on which account
   report   [--hours N]                  usage history: load per account, busiest hours (adapter)
+  add      <email> [--key] [--yes]      sign in a new account: verified, no duplicates (--key: API key)
+  remove   <target> [--yes]             delete an account's login (parked accounts too)
   park     <target> [--until T]         take an account out of rotation (T = 17:00, +2h, 90m)
   unpark   <target>                     return a parked account to rotation
   relogin  <target> [--yes]             sign an account in again, verified, same label and position
@@ -65,8 +68,8 @@ $ hermes account anthropic usage
 ## Requirements
 
 - Hermes Agent ≥ 0.21 on Linux, with systemd for the timer.
-- Two or more accounts of one provider, added from the **default** profile, for example
-  `hermes auth add anthropic --type oauth --label you@example.com`. For OAuth, use a private/incognito browser window for each account.
+- Two or more accounts of one provider. After installing, add them from the **default** profile with
+  `hermes account anthropic add you@example.com`. For OAuth, use a private/incognito browser window for each account.
 - Optional: `notify-send` for desktop alerts, and a configured Telegram bot with `TELEGRAM_ALLOWED_USERS` for Telegram alerts.
 
 ## Install
