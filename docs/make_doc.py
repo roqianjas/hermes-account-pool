@@ -70,7 +70,7 @@ def footer(c, doc):
     c.saveState()
     c.setFont("Sans", 7.5)
     c.setFillColor(MUTED)
-    c.drawString(18 * mm, 10 * mm, "Hermes plugin account-pool 3.3.2 · github.com/roqianjas/hermes-account-pool")
+    c.drawString(18 * mm, 10 * mm, "Hermes plugin account-pool 3.4.0 · github.com/roqianjas/hermes-account-pool")
     c.drawRightString(A4[0] - 18 * mm, 10 * mm, f"Halaman {doc.page}")
     c.setStrokeColor(LINE)
     c.line(18 * mm, 14 * mm, A4[0] - 18 * mm, 14 * mm)
@@ -79,7 +79,7 @@ def footer(c, doc):
 
 # ── content ──────────────────────────────────────────────────────────────────
 st += [Paragraph("Plugin account-pool: perintah <font name='Mono'>hermes account</font>", s_title),
-       Paragraph("Dokumentasi lengkap versi 3.3.2: kelola akun di credential pool Hermes, bagi pemakaian akun "
+       Paragraph("Dokumentasi lengkap versi 3.4.0: kelola akun di credential pool Hermes, bagi pemakaian akun "
                  "Claude secara merata, pantau sesi, pulihkan masalah otomatis, dan terima peringatan.", s_sub)]
 
 H1("1. Ringkasan")
@@ -145,7 +145,7 @@ P("Dengan " + C("fill_first") + ", setiap sesi baru mengambil akun teratas, yait
 H1("3. Lokasi file")
 table([
     ["File", "Isi"],
-    [C("~/.hermes/plugins/account-pool/"), "Plugin utama (perintah " + C("hermes account") + "), versi 3.3.2; adapter di " + C("providers.py")],
+    [C("~/.hermes/plugins/account-pool/"), "Plugin utama (perintah " + C("hermes account") + "), versi 3.4.0; adapter di " + C("providers.py")],
     [C("~/.hermes/plugins/account-pool-tracker/"), "Pelacak sesi; di-symlink ke " + C("profiles/*/plugins/")],
     [C("~/.hermes/auth.json"), "Credential pool bersama semua profil"],
     [C("~/.hermes/account-pool-parked.json"), "Akun yang diparkir (berisi token)"],
@@ -455,6 +455,8 @@ LI(["<b>Sesi yang berjalan tidak dipindah</b> sebelum akunnya kena limit. Pindah
 H1("12. Troubleshooting")
 table([
     ["Gejala", "Penyebab umum", "Solusi"],
+    ["usage: n/a (rate-limited) atau \"last known\"", "Endpoint usage dipanggil terlalu sering dalam waktu singkat",
+     "Tunggu beberapa menit. Bot tidak terpengaruh; balance menaruh akun tanpa data di belakang"],
     ["Login: \"Sign in again to continue\"", "Login di browser sudah lama (kebijakan Anthropic)", "Klik, login ulang sebagai akun yang sama"],
     ["Bot \"retrying in 600s\"", "Akun kena 429 sebelum balance mengistirahatkannya",
      C("hermes account anthropic balance") + ", lalu stop dan kirim ulang pesan"],

@@ -37,9 +37,22 @@ class Adapter:
     window = "usage window"       # shown in output, e.g. "5-hour"
     window_short = "window"       # used in bench reasons, e.g. "5h"
     oauth_only = True             # only OAuth entries carry account-level data
+    last_error = ""               # why the last usage() returned None (shown next to "n/a")
 
     def identity(self, entry):
         return None
+
+    def explain(self, err, entry) -> str:
+        """Short reason text for a failed usage request."""
+        code = getattr(err, "code", None)
+        if code == 429:
+            return "usage endpoint rate-limited, retry in a few minutes"
+        if code == 401:
+            return ("access token expired, refreshed on next use" if token_expired(entry)
+                    else "sign-in rejected (401)")
+        if code:
+            return f"usage endpoint HTTP {code}"
+        return f"usage endpoint unreachable ({type(err).__name__})"
 
     def usage(self, entry):
         return None
@@ -108,12 +121,15 @@ class Anthropic(Adapter):
 
     def usage(self, entry):
         # Undocumented endpoint used by Claude Code's /usage. None on any change.
+        self.last_error = ""
         try:
             five = self._get(entry, "/api/oauth/usage").get("five_hour") or {}
-        except Exception:
+        except Exception as x:
+            self.last_error = self.explain(x, entry)
             return None
         util = five.get("utilization")
         if util is None:
+            self.last_error = "no 5-hour data in the answer"
             return None
         reset = five.get("resets_at")
         try:
@@ -158,11 +174,13 @@ class OpenAICodex(Adapter):
 
     def usage(self, entry):
         # Undocumented endpoint used by Codex CLI's /status. None on any change.
+        self.last_error = ""
         try:
             req = urllib.request.Request(self.url, headers=self._headers(entry))
             with urllib.request.urlopen(req, timeout=20) as r:
                 rl = (json.loads(r.read()) or {}).get("rate_limit") or {}
-        except Exception:
+        except Exception as x:
+            self.last_error = self.explain(x, entry)
             return None
         windows = []
         for key, short in (("primary_window", "5h"), ("secondary_window", "week")):
@@ -177,6 +195,7 @@ class OpenAICodex(Adapter):
                 reset = time.time() + float(w["reset_after_seconds"])
             windows.append((short, float(w["used_percent"]), float(reset) if reset else None))
         if not windows:
+            self.last_error = "no limit data in the answer"
             return None
         short, pct, reset = max(windows, key=lambda x: x[1])
         if rl.get("limit_reached") or rl.get("allowed") is False:

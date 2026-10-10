@@ -183,6 +183,7 @@ If every account is at or above the threshold, only the ones at 100% are benched
 ## Limitations
 
 - Adapters exist for `anthropic` and `openai-codex`. The generic commands were tested for other providers with API-key entries only. The Codex adapter was verified read-only against a real ChatGPT Team account; `add` with a real Codex sign-in has not been run yet.
+- The usage endpoints rate-limit when they are queried many times in a short while. `usage` then shows the last value the timer recorded (`last known, 3 min ago`, at most 15 minutes old) or `n/a (usage endpoint rate-limited, retry in a few minutes)`. Cached values are never written back to the history, and `balance` puts accounts without data after the others without benching them. Only the plugin's measurement is affected, not the bots' requests.
 - Usage comes from **undocumented endpoints**: `https://api.anthropic.com/api/oauth/usage`, and `https://chatgpt.com/backend-api/wham/usage` (the one behind Codex CLI's `/status`). If it changes, `usage`, `balance` and `report` stop reordering accounts, `doctor` reports FAIL, and Hermes' built-in rotation keeps working.
 - Running sessions are not moved to another account until they hit a limit. Moving them would throw away the prompt cache.
 - Anthropic weekly quotas are not exposed for Team accounts.

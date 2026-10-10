@@ -33,7 +33,6 @@ import re
 import shutil
 import subprocess
 import time
-import urllib.request
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -179,6 +178,9 @@ def _history_path() -> Path:
 
 def _record_history(provider: str, known) -> None:
     path = _history_path()
+    known = [(e, u) for e, u in known if e.label not in _CACHED]     # never re-record a cached value
+    if not known:
+        return
     line = json.dumps({"ts": round(time.time()), "provider": provider,
                        "usage": {e.label: u[0] for e, u in known},
                        "reset": {e.label: u[1] for e, u in known}})
@@ -325,15 +327,69 @@ def _identity(provider, entry):
 def _usage_full(provider, entry):
     """(percent, reset_epoch, detail_text) or None."""
     ad = providers.get(provider)
-    if not ad.has_usage or (ad.oauth_only and not _oauth(entry)):
+    ad.last_error = ""
+    if not ad.has_usage:
+        return None
+    if ad.oauth_only and not _oauth(entry):
+        ad.last_error = "API key: no account usage"
         return None
     try:
         u = ad.usage(entry)
-    except Exception:
-        return None
+    except Exception as x:
+        ad.last_error = f"adapter error: {type(x).__name__}"
+        u = None
     if not u:
-        return None
+        transient = ad.last_error.startswith(("usage endpoint rate-limited", "usage endpoint unreachable",
+                                              "usage endpoint HTTP 5"))
+        label = getattr(entry, "label", None)
+        return (_cached_usage(provider, label) if transient and label else None)
+    _CACHED.discard(getattr(entry, "label", None))
     return float(u[0]), u[1], (u[2] if len(u) > 2 else "")
+
+
+_CACHED: set = set()          # labels whose usage came from history this run (never re-recorded)
+_SNAP: dict = {}
+
+
+def _last_snapshot(provider: str) -> dict:
+    """Newest history record for the provider (reads only the end of the file)."""
+    if provider not in _SNAP:
+        rec = {}
+        try:
+            with open(_history_path(), "rb") as fh:
+                fh.seek(0, 2)
+                fh.seek(max(0, fh.tell() - 262144))
+                for line in reversed(fh.read().decode(errors="replace").splitlines()):
+                    try:
+                        r = json.loads(line)
+                    except Exception:
+                        continue
+                    if r.get("provider") == provider:
+                        rec = r
+                        break
+        except OSError:
+            pass
+        _SNAP[provider] = rec
+    return _SNAP[provider]
+
+
+def _cached_usage(provider: str, label: str, max_age: float = 900):
+    """Last recorded usage for an account when the endpoint is temporarily unavailable.
+
+    Only values younger than 15 minutes whose window has not reset yet are used.
+    """
+    rec = _last_snapshot(provider)
+    age = time.time() - float(rec.get("ts", 0) or 0)
+    pct = (rec.get("usage") or {}).get(label)
+    reset = (rec.get("reset") or {}).get(label)
+    if pct is None or age > max_age or (reset and reset <= time.time()):
+        return None
+    _CACHED.add(label)
+    return float(pct), reset, f"last known, {max(1, round(age / 60))} min ago"
+
+
+def _usage_reason(provider) -> str:
+    return getattr(providers.get(provider), "last_error", "") or ""
 
 
 def _usage(provider, entry):
@@ -494,6 +550,28 @@ def _refresh_parked(provider: str, item: dict) -> dict:
         return cur
 
 
+def _pool_providers() -> list:
+    try:
+        data = json.loads((_root() / "auth.json").read_text())
+        names = {k for k, v in (data.get("credential_pool") or {}).items() if v}
+    except Exception:
+        names = set()
+    names |= {p["_provider"] for p in _read_parked()}
+    return sorted(names)
+
+
+def _known_provider(provider: str) -> bool:
+    if provider.startswith("custom") or provider in providers.ADAPTERS or provider in _pool_providers():
+        return True
+    try:
+        from hermes_cli.auth import PROVIDER_REGISTRY
+        if provider in PROVIDER_REGISTRY:
+            return True
+    except Exception:
+        return True                       # cannot tell: do not block
+    return provider in ("openrouter", "nous", "openai", "custom")
+
+
 def _no_accounts(provider: str) -> bool:
     """True (after printing a hint) when the provider has no accounts at all, parked included."""
     if _entries(provider) or any(p["_provider"] == provider for p in _read_parked()):
@@ -517,14 +595,14 @@ def _cmd_usage(args) -> int:
         state = ("DEAD" if st == "dead" else
                  "BENCHED" if st == "exhausted" and MARK in msg else
                  "LIMITED" if st == "exhausted" else "active")
-        rows.append((e.label, state, _usage_full(provider, e) if st != "dead" else None))
+        rows.append((e.label, state, (_usage_full(provider, e) or _usage_reason(provider)) if st != "dead" else None))
     for item in [p for p in _read_parked() if p["_provider"] == provider]:
         item = _refresh_parked(provider, item)
         if item.get("_dead"):
             rows.append((item.get("label", "?"), "PARKED", "dead"))
             continue
         ent = SimpleNamespace(access_token=item.get("access_token"), auth_type=item.get("auth_type"))
-        rows.append((item.get("label", "?"), "PARKED", _usage_full(provider, ent)))
+        rows.append((item.get("label", "?"), "PARKED", _usage_full(provider, ent) or _usage_reason(provider)))
 
     order = {"active": 0, "BENCHED": 1, "LIMITED": 1, "PARKED": 2, "DEAD": 3}
     rows.sort(key=lambda r: (order[r[1]], r[2][0] if isinstance(r[2], tuple) else 999))
@@ -538,8 +616,8 @@ def _cmd_usage(args) -> int:
             last = group
         if u == "dead":
             print(f"  {label:34s} {state:8s}   n/a  sign-in expired: hermes account {provider} remove {label}, then add {label}")
-        elif u is None:
-            print(f"  {label:34s} {state:8s}   n/a")
+        elif u is None or isinstance(u, str):
+            print(f"  {label:34s} {state:8s}   n/a" + (f"  ({u})" if u else ""))
         else:
             util, reset, detail = u
             fill = int(min(util, 100) // 5)
@@ -557,15 +635,20 @@ def _parse_until(text: str) -> float:
         return time.time() + int(m[1]) * {"m": 60, "min": 60, "h": 3600, "hr": 3600, "d": 86400}[m[2]]
     m = re.fullmatch(r"(\d{1,2})[:.](\d{2})", t)
     if m:
+        if int(m[1]) > 23 or int(m[2]) > 59:
+            raise SystemExit(f"Cannot read --until '{text}'. Use HH:MM (e.g. 17:00), +2h, 90m, or 'YYYY-MM-DD HH:MM'.")
         now = datetime.now()
         at = now.replace(hour=int(m[1]), minute=int(m[2]), second=0, microsecond=0)
         if at <= now:
             at += timedelta(days=1)
         return at.timestamp()
     try:
-        return datetime.fromisoformat(text).timestamp()
+        at = datetime.fromisoformat(text).timestamp()
     except Exception:
         raise SystemExit(f"Cannot read --until '{text}'. Use HH:MM (e.g. 17:00), +2h, 90m, or 'YYYY-MM-DD HH:MM'.")
+    if at <= time.time():
+        raise SystemExit(f"--until '{text}' is in the past.")
+    return at
 
 
 def _timer_active() -> bool:
@@ -582,6 +665,10 @@ def _cmd_park(args) -> int:
     pool = _pool(provider)
     index, matched, error = pool.resolve_target(args.target)
     if matched is None or index is None:
+        item = _find_parked(provider, args.target)
+        if item:
+            raise SystemExit(f"{item.get('label', args.target)} is already parked. "
+                             f"Undo: hermes account {provider} unpark {item.get('label', args.target)}")
         raise SystemExit(f"{error} See: hermes account {provider} list")
     alive = [e for e in pool.entries() if getattr(e, "last_status", None) != "dead"]
     if len(alive) <= 1 and any(e.id == matched.id for e in alive):
@@ -805,7 +892,7 @@ def _cmd_doctor(args) -> int:
         if not str(strat).startswith("fill_first"):
             bad.append(f"{name}={strat}")
     add("ok" if not bad else "fail",
-        f"strategy fill_first in {len(profiles)} profiles" if not bad else
+        f"strategy fill_first in {len(profiles)} profile{'' if len(profiles) == 1 else 's'}" if not bad else
         f"strategy is not fill_first: {', '.join(bad)} (balance order is ignored there). "
         f"Fix: hermes -p <profile> config set credential_pool_strategies.{provider} fill_first")
 
@@ -856,6 +943,13 @@ def _cmd_doctor(args) -> int:
                         f"See: journalctl --user -u hermes-account-balance.service -n 20")
         else:
             add("ok", f"balance timer active, last run {last.split(' ', 1)[-1] if last != 'never' else 'never'}")
+        execs = subprocess.run(["systemctl", "--user", "show", "hermes-account-balance.service", "-p", "ExecStart"],
+                               capture_output=True, text=True, timeout=10).stdout
+        if active and not re.search(rf"account\s+{re.escape(provider)}\s+balance", execs):
+            add("warn", f"the balance timer does not run {provider} (timed unparks, cooldown recovery and alerts "
+                        f"for {provider} wait for a manual balance). Fix: ./install.sh --provider {provider} "
+                        f"(repeat --provider for each one), or add an ExecStart line: "
+                        f"{_hermes_bin()} account {provider} balance")
     except Exception as x:
         add("warn", f"could not query systemd: {x}")
 
@@ -876,7 +970,7 @@ def _cmd_doctor(args) -> int:
     cooling = [e.label for e in entries if _is_cooling(e)]
     parked = [p.get("label") for p in _read_parked() if p["_provider"] == provider]
     add("ok" if entries and not dead else "fail",
-        f"{len(entries)} accounts in rotation, {len(parked)} parked" + (f"; DEAD: {', '.join(dead)}" if dead else ""))
+        f"{len(entries)} account{'' if len(entries) == 1 else 's'} in rotation, {len(parked)} parked" + (f"; DEAD: {', '.join(dead)}" if dead else ""))
     if cooling:
         add("warn", f"cooling down (auto-retried by balance): {', '.join(cooling)}")
 
@@ -1008,8 +1102,10 @@ def _cmd_report(args) -> int:
         print(f"[{provider}] report needs usage history. {_no_usage_text(provider)}")
         return 0
     hist = _read_history(provider, since)
+    if len(hist) < 2 and _no_accounts(provider):
+        return 0
     if len(hist) < 2:
-        print(f"[{provider}] Not enough history yet ({len(hist)} snapshot). "
+        print(f"[{provider}] Not enough history yet ({len(hist)} snapshot{'' if len(hist) == 1 else 's'}). "
               f"The balance timer records one every 5 minutes.")
         return 0
     series = defaultdict(list)
@@ -1075,7 +1171,7 @@ def _cmd_who(args) -> int:
     print(f"[{provider}] sessions active in the last {minutes:.0f} min: {len(rows)}")
     for label in labels + sorted(set(by_acc) - set(labels)):
         sess = sorted(by_acc.get(label, []), key=lambda r: -r.get("last_seen", 0))
-        print(f"  {label}" + ("" if sess else "   (idle)"))
+        print(f"  {label:34s}" + ("" if sess else " (idle)"))
         for r in sess:
             ago = (time.time() - r["last_seen"]) / 60
             moved = f"  (moved from {r['previous_account']})" if r.get("previous_account") else ""
@@ -1151,6 +1247,44 @@ def _confirm(question: str, yes: bool) -> bool:
         return False
 
 
+def _in_root() -> bool:
+    try:
+        from hermes_constants import get_hermes_home
+        return Path(get_hermes_home()).resolve() == _root().resolve()
+    except Exception:
+        return False
+
+
+def _add_key_in_process(provider: str, label: str):
+    """Ask for the key here (masked, clean Ctrl+C) and hand it to Hermes' own `auth add`.
+
+    The key never goes on a command line (other processes could read it there).
+    Returns 0 on success, 1 on failure, None when cancelled.
+    """
+    from types import SimpleNamespace
+    try:
+        from hermes_cli.secret_prompt import masked_secret_prompt
+        key = masked_secret_prompt("Paste the API key (hidden): ").strip()
+    except (KeyboardInterrupt, EOFError):
+        print("Cancelled. Nothing was added.")
+        return None
+    if not key:
+        print("No API key given.")
+        return 1
+    try:
+        from hermes_cli.auth_commands import auth_add_command
+        auth_add_command(SimpleNamespace(provider=provider, auth_type="api-key", api_key=key, label=label))
+        return 0
+    except SystemExit as x:
+        if x.code not in (None, 0):
+            print(x.code if isinstance(x.code, str) else f"hermes auth add failed ({x.code}).")
+            return 1
+        return 0
+    except KeyboardInterrupt:
+        print("\nCancelled. Nothing was added.")
+        return None
+
+
 def _cmd_add(args) -> int:
     provider = _norm(args.provider)
     label = str(args.target).strip()
@@ -1181,14 +1315,17 @@ def _cmd_add(args) -> int:
         return 1
 
     before = {e.id for e in entries}
-    cmd = [_hermes_bin(), "auth", "add", provider, "--type", "api-key" if use_key else "oauth", "--label", label]
-    rc = _signin(cmd, provider, before)
+    if use_key and _in_root():
+        rc = _add_key_in_process(provider, label)
+    else:
+        cmd = [_hermes_bin(), "auth", "add", provider, "--type", "api-key" if use_key else "oauth", "--label", label]
+        rc = _signin(cmd, provider, before)
     if rc is None:
         return 130
     pool = _pool(provider)
     new = [e for e in pool.entries() if e.id not in before]
     if rc != 0 or not new:
-        print("Sign-in did not complete. Nothing was added.")
+        print("Sign-in did not complete. Nothing was added." if not use_key else "Nothing was added.")
         return 1
     fresh = new[0]
 
@@ -1367,6 +1504,19 @@ def _dispatch(args) -> int:
             return 2
     if args.threshold is None:
         args.threshold = 90.0
+    elif not 1 <= args.threshold <= 100:
+        print("--threshold must be between 1 and 100 (percent).")
+        return 2
+    if args.hours is not None and args.hours <= 0:
+        print("--hours must be greater than 0.")
+        return 2
+    if args.minutes is not None and args.minutes <= 0:
+        print("--minutes must be greater than 0.")
+        return 2
+    if not _known_provider(_norm(provider)):
+        print(f"Unknown provider '{args.provider}'. Providers in your pool: {', '.join(_pool_providers()) or 'none'}. "
+              f"All providers: hermes auth list")
+        return 2
     try:
         return HANDLERS[action](args)
     except KeyboardInterrupt:
