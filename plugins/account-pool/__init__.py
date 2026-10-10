@@ -421,6 +421,8 @@ def _cmd_list(args) -> int:
 
 def _cmd_check(args) -> int:
     provider = _norm(args.provider)
+    if _no_accounts(provider):
+        return 0
     entries = _entries(provider)
     parked = [p for p in _read_parked() if p["_provider"] == provider]
     note = "" if providers.get(provider).has_identity else "   (real-identity lookup not available for this provider)"
@@ -492,10 +494,20 @@ def _refresh_parked(provider: str, item: dict) -> dict:
         return cur
 
 
+def _no_accounts(provider: str) -> bool:
+    """True (after printing a hint) when the provider has no accounts at all, parked included."""
+    if _entries(provider) or any(p["_provider"] == provider for p in _read_parked()):
+        return False
+    print(f"[{provider}] No {provider} accounts yet. Add one: hermes account {provider} add <email>")
+    return True
+
+
 def _cmd_usage(args) -> int:
     from types import SimpleNamespace
     provider = _norm(args.provider)
     _require_usage(provider)
+    if _no_accounts(provider):
+        return 0
     pool = _pool(provider)
     rows = []                                          # (label, state, usage)
     for e in sorted(pool.entries(), key=lambda x: x.priority):
@@ -629,6 +641,9 @@ def _cmd_unpark(args) -> int:
 
 def _cmd_balance(args) -> int:
     provider = _norm(args.provider)
+    if not _entries(provider) and not any(p["_provider"] == provider for p in _read_parked()):
+        print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} [{provider}] balance: no accounts, nothing to do.")
+        return 0
     threshold = float(args.threshold)
     dry = bool(args.dry_run)
     stamp = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -760,6 +775,14 @@ def _cmd_balance(args) -> int:
 def _cmd_doctor(args) -> int:
     import yaml
     provider = _norm(args.provider)
+    if not _entries(provider) and not any(p["_provider"] == provider for p in _read_parked()):
+        ad = providers.get(provider)
+        feats = "usage, balance, report and email checks" if ad.has_usage else "the basic commands (no usage adapter)"
+        print(f"[{provider}] doctor")
+        print(f"  --    no {provider} accounts yet: not in use, nothing to check.")
+        print(f"        When you want it: hermes account {provider} add <email>  ({feats} are ready)")
+        print(f"        Using {provider} in a profile is a Hermes setting, not part of this plugin.")
+        return 0
     root = _root()
     checks = []                                    # (level, text) level: ok / warn / fail
 

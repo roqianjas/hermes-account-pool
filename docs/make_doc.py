@@ -69,7 +69,7 @@ def footer(c, doc):
     c.saveState()
     c.setFont("Sans", 7.5)
     c.setFillColor(MUTED)
-    c.drawString(18 * mm, 10 * mm, "Hermes plugin account-pool 3.2.0 · github.com/roqianjas/hermes-account-pool")
+    c.drawString(18 * mm, 10 * mm, "Hermes plugin account-pool 3.3.0 · github.com/roqianjas/hermes-account-pool")
     c.drawRightString(A4[0] - 18 * mm, 10 * mm, f"Halaman {doc.page}")
     c.setStrokeColor(LINE)
     c.line(18 * mm, 14 * mm, A4[0] - 18 * mm, 14 * mm)
@@ -78,7 +78,7 @@ def footer(c, doc):
 
 # ── content ──────────────────────────────────────────────────────────────────
 st += [Paragraph("Plugin account-pool: perintah <font name='Mono'>hermes account</font>", s_title),
-       Paragraph("Dokumentasi lengkap versi 3.2.0: kelola akun di credential pool Hermes, bagi pemakaian akun "
+       Paragraph("Dokumentasi lengkap versi 3.3.0: kelola akun di credential pool Hermes, bagi pemakaian akun "
                  "Claude secara merata, pantau sesi, pulihkan masalah otomatis, dan terima peringatan.", s_sub)]
 
 H1("1. Ringkasan")
@@ -109,11 +109,17 @@ table([
      + C("doctor") + ", peringatan login, pemulihan cooling down", "<b>Semua provider</b> di credential pool (OAuth dan API key)"],
     [C("relogin"), "Provider dengan login OAuth. Verifikasi email butuh adapter identity."],
     [C("usage") + ", " + C("report") + ", urutan " + C("balance") + ", peringatan \"semua akun tinggi\", email asli",
-     "Provider yang punya <b>adapter</b>. Bawaan: <b>anthropic</b>."],
+     "Provider yang punya <b>adapter</b>. Bawaan: <b>anthropic</b> (5 jam) dan <b>openai-codex</b> (5 jam + mingguan)."],
 ], [0.55, 0.45])
 P("Kode khusus provider ada di " + C("providers.py") + " (adapter). Tanpa adapter, " + C("usage") + " dan " + C("report")
   + " menampilkan pesan jelas, dan " + C("balance") + " tetap menjalankan unpark terjadwal, pemulihan, dan "
   "peringatan login, tetapi urutan akun tidak diubah. Provider lain bisa ditambahkan dengan menulis satu adapter.")
+P("<b>Codex</b>: balance memakai limit yang paling ketat di antara 5 jam dan mingguan, dan " + C("usage")
+  + " menampilkan keduanya, misalnya " + C("5h 12% · week 78%") + ". Akun Codex yang juga login di Codex CLI atau VS Code "
+  "berbagi kuota dengan aplikasi itu. Hermes memakai login Codex-nya sendiri dan tidak mengambil " + C("~/.codex/auth.json") + ".")
+note("Plugin hanya mengelola akun <b>di dalam</b> satu provider. Apakah sebuah profil memakai provider itu (model utama, "
+     "urutan fallback) tetap diatur di pengaturan Hermes. Provider yang belum punya akun cukup diam: "
+     + C("hermes account openai-codex doctor") + " menyebutnya \"not in use\".")
 
 H1("2. Setup yang disarankan")
 table([
@@ -138,7 +144,7 @@ P("Dengan " + C("fill_first") + ", setiap sesi baru mengambil akun teratas, yait
 H1("3. Lokasi file")
 table([
     ["File", "Isi"],
-    [C("~/.hermes/plugins/account-pool/"), "Plugin utama (perintah " + C("hermes account") + "), versi 3.2.0; adapter di " + C("providers.py")],
+    [C("~/.hermes/plugins/account-pool/"), "Plugin utama (perintah " + C("hermes account") + "), versi 3.3.0; adapter di " + C("providers.py")],
     [C("~/.hermes/plugins/account-pool-tracker/"), "Pelacak sesi; di-symlink ke " + C("profiles/*/plugins/")],
     [C("~/.hermes/auth.json"), "Credential pool bersama semua profil"],
     [C("~/.hermes/account-pool-parked.json"), "Akun yang diparkir (berisi token)"],
@@ -400,7 +406,9 @@ LI(["<b>Sesi yang berjalan tidak dipindah</b> sebelum akunnya kena limit. Pindah
     C("who") + " mencari sesi lewat stack thread yang sedang berjalan. Jika suatu update Hermes mengubah "
     "struktur internalnya, " + C("who") + " kosong tetapi bot tidak terganggu (pelacak menelan semua error).",
     C("relogin") + " membutuhkan terminal interaktif untuk menempel kode login.",
-    "Adapter usage baru ada untuk anthropic. Perintah umum untuk provider lain baru dites dengan akun API key."])
+    "Adapter usage ada untuk anthropic dan openai-codex (endpoint " + C("chatgpt.com/backend-api/wham/usage")
+    + ", juga tidak resmi). Adapter Codex baru diuji read-only pada akun asli; " + C("add") + " dengan login Codex "
+    "sungguhan belum pernah dijalankan. Perintah umum untuk provider lain baru dites dengan akun API key."])
 
 H1("12. Troubleshooting")
 table([

@@ -2,6 +2,8 @@
 
 ## Adding a provider adapter
 
+Built in: `anthropic` and `openai-codex`. The Codex adapter is a good template for providers with several limits: it reports the most constraining window and puts the breakdown in `detail`.
+
 The core plugin already works for every provider in the Hermes credential pool. An adapter adds the parts that need the provider's own API. Everything is in [`plugins/account-pool/providers.py`](plugins/account-pool/providers.py).
 
 ```python
@@ -12,7 +14,8 @@ class MyProvider(Adapter):
     oauth_only = True           # False if API-key entries can read usage too
 
     def usage(self, entry):
-        """Return (percent_used: float, resets_at_epoch: float | None), or None."""
+        """Return (percent_used, resets_at_epoch[, detail]), or None.
+        Several limits: return the most constraining one, e.g. (78.0, reset, "5h 0% · week 78%")."""
 
     def identity(self, entry):
         """Return the real account email/name, or None."""

@@ -10,7 +10,11 @@ Hermes already rotates to the next account when one hits a limit. This plugin ad
 |---|---|
 | `list`, `check`, `add`/`remove`, `park`/`unpark` (also `--until`), `who`, `doctor`, sign-in alerts, refresh-cooldown recovery | **Every provider in the credential pool** (OAuth and API-key entries) |
 | `relogin` | Every provider with OAuth sign-in. Email verification needs an identity adapter. |
-| `usage`, `report`, usage-based `balance`, "all accounts high" alert, real-email lookup | **Providers with an adapter.** Built in: **`anthropic`** (Claude Pro / Max / Team OAuth). |
+| `usage`, `report`, usage-based `balance`, "all accounts high" alert, real-email lookup | **Providers with an adapter.** Built in: **`anthropic`** (Claude Pro / Max / Team, 5-hour window) and **`openai-codex`** (ChatGPT Plus / Pro / Team, 5-hour **and** weekly window). |
+
+For `openai-codex`, the more constraining of the 5-hour and weekly limits drives `balance`, and `usage` shows both (`5h 12% · week 78%`). A Codex account that is also signed in to Codex CLI or VS Code shares its quota with them. Hermes keeps its own Codex sign-in and never reuses `~/.codex/auth.json`.
+
+The plugin only manages accounts **inside** a provider. Whether a profile uses a provider at all (main model, fallback order, and so on) stays a normal Hermes setting. A provider with no accounts yet is simply idle: `hermes account openai-codex doctor` says "not in use".
 
 Provider-specific code lives in [`plugins/account-pool/providers.py`](plugins/account-pool/providers.py). [CONTRIBUTING.md](CONTRIBUTING.md) explains how to add an adapter, for example for Codex or another provider with a quota endpoint. Without an adapter, `usage` and `report` say so plainly, and `balance` still unparks timed parks, retries refresh cooldowns and sends sign-in alerts, but leaves the order unchanged.
 
@@ -24,7 +28,7 @@ Provider-specific code lives in [`plugins/account-pool/providers.py`](plugins/ac
 - **Alerts** by desktop notification and Telegram when an account needs sign-in, or (with a usage adapter) when every account is above 80%.
 - **Auto-recovery** for accounts stuck in a cooldown after a token refresh failed during a network drop.
 - With a usage adapter:
-  - **Live usage** for every account, including parked ones (Anthropic: the 5-hour window).
+  - **Live usage** for every account, including parked ones (Anthropic: the 5-hour window; Codex: 5-hour and weekly).
   - **`balance`**: puts the least-used account first and benches accounts at ≥ 90% before they run out, so new sessions never wait in a 600-second retry on a nearly full account.
   - **`report`**: usage history, showing load per account, the busiest hours, and how long every account was full.
 
@@ -128,10 +132,10 @@ If every account is at or above the threshold, only the ones at 100% are benched
 
 ## Limitations
 
-- Only `anthropic` has an adapter today, and the other providers' generic commands were tested with API-key entries only.
-- Anthropic usage comes from `https://api.anthropic.com/api/oauth/usage`, which is **not a documented API**. If it changes, `usage`, `balance` and `report` stop reordering accounts, `doctor` reports FAIL, and Hermes' built-in rotation keeps working.
+- Adapters exist for `anthropic` and `openai-codex`. The generic commands were tested for other providers with API-key entries only. The Codex adapter was verified read-only against a real ChatGPT Team account; `add` with a real Codex sign-in has not been run yet.
+- Usage comes from **undocumented endpoints**: `https://api.anthropic.com/api/oauth/usage`, and `https://chatgpt.com/backend-api/wham/usage` (the one behind Codex CLI's `/status`). If it changes, `usage`, `balance` and `report` stop reordering accounts, `doctor` reports FAIL, and Hermes' built-in rotation keeps working.
 - Running sessions are not moved to another account until they hit a limit. Moving them would throw away the prompt cache.
-- Weekly quotas are not exposed for Team accounts.
+- Anthropic weekly quotas are not exposed for Team accounts.
 - `who` finds the agent object by scanning running thread frames. A future Hermes refactor may leave `who` empty, but it never breaks the bots.
 - Anthropic refresh tokens are single-use. Never share a Hermes login with another app or machine.
 

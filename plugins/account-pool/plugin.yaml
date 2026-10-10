@@ -1,10 +1,10 @@
 name: account-pool
 label: Account Pool
-version: 3.2.0
+version: 3.3.0
 description: "`hermes account <provider> <action>`: list, check, park/unpark, who, doctor and alerts for any credential-pool provider; usage, report and usage-based balance through provider adapters (anthropic built in)."
 author: roqianjas
 license: MIT
 requires_hermes: ">=0.21"
-tags: [auth, credential-pool, multi-account, anthropic, cli]
+tags: [auth, credential-pool, multi-account, anthropic, openai-codex, cli]
 provides_tools: []
 provides_hooks: []

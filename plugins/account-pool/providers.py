@@ -5,8 +5,11 @@ refresh-cooldown recovery, sign-in alerts) works for every provider in the
 Hermes credential pool. Anything that needs a provider's own API lives here:
 
     identity(entry)        -> real account email, for `check` and `relogin`
-    usage(entry)           -> (percent_used, resets_at_epoch) for `usage`,
-                              `balance`, `report` and the "all accounts high" alert
+    usage(entry)           -> (percent_used, resets_at_epoch[, detail]) for
+                              `usage`, `balance`, `report` and the "all accounts
+                              high" alert. With several limits (e.g. 5-hour and
+                              weekly) return the most constraining one and put the
+                              breakdown in `detail`, a short text shown by `usage`
     refresh_parked(record) -> new token fields for a PARKED OAuth account whose
                               access token expired (pool accounts are refreshed
                               by Hermes itself)
@@ -21,6 +24,7 @@ instance to ADAPTERS. See CONTRIBUTING.md.
 """
 from __future__ import annotations
 
+import base64
 import json
 import time
 import urllib.error
@@ -52,8 +56,27 @@ class Adapter:
         return type(self).identity is not Adapter.identity
 
 
+def jwt_claims(token) -> dict:
+    """Unverified JWT payload (only used to read exp/email, never to trust a token)."""
+    try:
+        part = str(token).split(".")[1]
+        return json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
+    except Exception:
+        return {}
+
+
 def token_expired(entry) -> bool:
-    return (getattr(entry, "expires_at_ms", None) or 0) / 1000 < time.time() + 60
+    """True when the access token expires within a minute.
+
+    Uses expires_at_ms when the pool stores it (anthropic), otherwise the JWT
+    `exp` claim (openai-codex). Unknown expiry counts as expired, which only
+    means "refresh before use".
+    """
+    ms = getattr(entry, "expires_at_ms", None)
+    if not ms:
+        exp = jwt_claims(getattr(entry, "access_token", "") or "").get("exp")
+        ms = exp * 1000 if isinstance(exp, (int, float)) else 0
+    return ms / 1000 < time.time() + 60
 
 
 # ── anthropic (Claude Pro / Max / Team OAuth) ───────────────────────────────
@@ -107,7 +130,70 @@ class Anthropic(Adapter):
                 "expires_at_ms": new["expires_at_ms"]}
 
 
-ADAPTERS: dict[str, Adapter] = {a.name: a for a in (Anthropic(),)}
+# ── openai-codex (ChatGPT Plus / Pro / Team sign-in) ─────────────────────────
+
+class OpenAICodex(Adapter):
+    name = "openai-codex"
+    window = "5-hour + weekly"
+    window_short = "codex"
+    url = "https://chatgpt.com/backend-api/wham/usage"
+
+    def _headers(self, entry) -> dict:
+        token = getattr(entry, "access_token", "") or ""
+        headers = {"Authorization": f"Bearer {token}", "Accept": "application/json",
+                   "User-Agent": "codex_cli_rs/0.0.0 (Hermes Agent)", "originator": "codex_cli_rs"}
+        try:
+            from agent.codex_headers import codex_account_headers   # ChatGPT-Account-ID, residency
+            headers.update(codex_account_headers(token))
+        except Exception:
+            acct = (jwt_claims(token).get("https://api.openai.com/auth") or {}).get("chatgpt_account_id")
+            if acct:
+                headers["ChatGPT-Account-ID"] = acct
+        return headers
+
+    def identity(self, entry):
+        claims = jwt_claims(getattr(entry, "access_token", "") or "")
+        email = (claims.get("https://api.openai.com/profile") or {}).get("email")
+        return email or "(no email in token)"
+
+    def usage(self, entry):
+        # Undocumented endpoint used by Codex CLI's /status. None on any change.
+        try:
+            req = urllib.request.Request(self.url, headers=self._headers(entry))
+            with urllib.request.urlopen(req, timeout=20) as r:
+                rl = (json.loads(r.read()) or {}).get("rate_limit") or {}
+        except Exception:
+            return None
+        windows = []
+        for key, short in (("primary_window", "5h"), ("secondary_window", "week")):
+            w = rl.get(key) or {}
+            if w.get("used_percent") is None:
+                continue
+            secs = w.get("limit_window_seconds") or 0
+            if secs and key == "primary_window" and secs != 18000:
+                short = f"{secs // 3600}h"
+            reset = w.get("reset_at")
+            if reset is None and w.get("reset_after_seconds") is not None:
+                reset = time.time() + float(w["reset_after_seconds"])
+            windows.append((short, float(w["used_percent"]), float(reset) if reset else None))
+        if not windows:
+            return None
+        short, pct, reset = max(windows, key=lambda x: x[1])
+        if rl.get("limit_reached") or rl.get("allowed") is False:
+            pct = 100.0
+        detail = " · ".join(f"{n} {p:.0f}%" for n, p, _ in windows)
+        return pct, reset, detail
+
+    def refresh_parked(self, record: dict):
+        from hermes_cli.auth_codex import refresh_codex_oauth_pure
+        new = refresh_codex_oauth_pure(record.get("access_token") or "", record.get("refresh_token") or "")
+        out = {"access_token": new["access_token"], "refresh_token": new["refresh_token"]}
+        if new.get("last_refresh"):
+            out["last_refresh"] = new["last_refresh"]
+        return out
+
+
+ADAPTERS: dict[str, Adapter] = {a.name: a for a in (Anthropic(), OpenAICodex())}
 
 
 def get(provider: str) -> Adapter:
