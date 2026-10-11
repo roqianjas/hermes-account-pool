@@ -2,7 +2,7 @@
 
 Run several accounts of one provider in [Hermes Agent](https://hermes-agent.nousresearch.com/docs) and manage them from one command, `hermes account`, or from an Accounts page in Hermes Desktop. Add accounts with a verified email, see live usage per account, spread the load before an account runs out, park accounts for a while or on a weekly schedule, see which bot is on which account and how many tokens each bot uses, and get an alert or a daily summary.
 
-Version 3.10.2 · MIT · Hermes Agent ≥ 0.21.5 · Linux with systemd · Indonesian PDF guide in [`docs/`](docs/hermes-account-pool.pdf)
+Version 3.10.3 · MIT · Hermes Agent ≥ 0.21.5 · Linux with systemd · Indonesian PDF guide in [`docs/`](docs/hermes-account-pool.pdf)
 
 ![The Accounts page in Hermes Desktop: eight accounts in rotation with their 5-hour usage, the bots on each account, one parked account, two park schedules and the forecast](docs/screenshots/accounts.png)
 
@@ -87,7 +87,7 @@ Run it as the user Hermes runs as. `install.sh` copies `account-pool` (with the 
 
 | Option | Effect |
 |---|---|
-| `--provider <name>` | Provider the timer balances (default `anthropic`). Repeat for several: `--provider anthropic --provider openai-codex`. Each gets its own `ExecStart` line. |
+| `--provider <name>` | Provider to run `setup` for (default `anthropic`); repeat for several. It matters for `--set-strategy`, which sets `fill_first` for each one. The timer balances every provider with accounts whichever you name. |
 | `--set-strategy` | Set `fill_first` for each provider in every profile. Without it the strategy is left alone and `doctor` tells you if it is wrong. |
 | `--no-tracker` | Skip the session tracker. `who` stays empty and no tokens are counted. |
 | `--no-timer` | Skip the timer. Run `balance` yourself. |
@@ -128,7 +128,7 @@ Changes:
   - enable the session tracker in worker-1 (hermes -p worker-1 plugins enable account-pool-tracker)
   - link the session tracker into worker-2 (...)
   - enable the session tracker in worker-2 (...)
-  - install the balance timer: systemd user units in /home/you/.config/systemd/user, every 5 minutes runs: hermes account anthropic balance
+  - install the balance timer: systemd user units in /home/you/.config/systemd/user, every 5 minutes runs hermes account all balance (every provider with accounts, now: anthropic; providers you add later are included by themselves)
 Apply these changes? [y/N] y
   done: list account-pool in plugins.enabled of worker-1 (...)
   ...
@@ -140,9 +140,9 @@ It shows what it found and every change it would make, asks once, then makes the
 |---|---|
 | Accounts page | Adds `account-pool` to `plugins.enabled` of every profile under `$HERMES_HOME/profiles/` ([why](#why-every-profile-lists-account-pool)). Profiles get no command and no tools from it. A profile with `account-pool` in `plugins.disabled` is skipped and named. |
 | Session tracker | Enables `account-pool-tracker` in the default profile. In every other profile it links `plugins/account-pool-tracker` to the default profile's copy and enables it there with `hermes -p <profile> plugins enable`. One copy means one update for every profile. |
-| `--timer` | Writes `hermes-account-balance.service` and `hermes-account-balance.timer` to `~/.config/systemd/user/`, enables the timer and starts a first run in the background. The service runs `hermes account <provider> balance` every 5 minutes; run `setup --timer` once per provider and each gets its own line. A custom `HERMES_HOME` is written into the service. Options you added to a line by hand (`--threshold 85`) and a changed interval are kept. |
+| `--timer` | Writes `hermes-account-balance.service` and `hermes-account-balance.timer` to `~/.config/systemd/user/`, enables the timer and starts a first run in the background. The service runs `hermes account all balance` every 5 minutes: every provider with accounts, so a provider that gets its first account later (Codex, for example) is balanced from the next run, with no second `setup`. A unit from 3.10.2 or older has one line per provider; `setup --timer` for a provider it lacks switches it to `all`. A custom `HERMES_HOME` is written into the service. Options you added by hand (`--threshold 85`) and a changed interval are kept. |
 | `--strategy` | Sets `credential_pool_strategies.<provider>: fill_first` in every profile that has another value. `balance` needs it (see [Concepts](#concepts)). |
-| `--undo` | Removes the tracker links and the `plugins.enabled` entries in the other profiles, and takes the provider out of the timer (the timer goes when no provider is left). It keeps both plugins in the default profile, the accounts, parked accounts, settings, data files and strategies, and names parked accounts that would stay out of rotation. |
+| `--undo` | Removes the tracker links and the `plugins.enabled` entries in the other profiles, and takes the provider out of the timer: the timer then runs the other providers with accounts, one line each, and no longer picks up new ones; it goes when no provider is left. It keeps both plugins in the default profile, the accounts, parked accounts, settings, data files and strategies, and names parked accounts that would stay out of rotation. |
 | `--yes` | No question. Without a terminal (cron, an agent's shell) `setup` shows the plan and changes nothing unless `--yes` is given. |
 
 Every config change goes through `hermes config set` or `hermes plugins enable`, so the files keep Hermes' own format and checks. Without the tracker installed, `setup` says how to install it and leaves that part out. On a system without systemd, `--timer` says so; run `balance` some other way (cron).
@@ -173,7 +173,7 @@ Git install:
 ```bash
 cd hermes-account-pool
 git pull
-./install.sh                # add the same --provider options you installed with
+./install.sh                # add the same --set-strategy / --provider options you installed with
 ```
 
 The previous plugin folder is backed up to `$HERMES_HOME/plugin-backups/<name>.<timestamp>` (outside `plugins/`, so Hermes never loads it twice). Accounts, parked accounts, history and settings are kept. `install.sh` without `--set-strategy` leaves your strategy as it is. Restart Hermes Desktop after any update so it loads the new page and its backend.
@@ -349,6 +349,8 @@ Added you@example.com (id=7c41e0) to openai-codex.
 
 **Codex CLI and VS Code are not touched.** Hermes creates its own login for the account. `~/.codex/auth.json` and your Codex CLI and VS Code history stay as they are, and signing in here does not sign them out.
 
+**The timer picks them up by itself.** With the balance timer installed, its next run balances the Codex accounts too (usage history, order, benching, alerts): no second `setup`. On a timer from 3.10.2 or older, run `hermes account openai-codex setup --timer` once; `doctor` says so.
+
 **Using the accounts is a Hermes setting.** `add` only puts the account in the pool. A profile uses Codex when its own `config.yaml` says so: as the main model, in `fallback_providers`, or for images (`image_gen.provider: openai-codex`). Check `hermes config` of the profiles if you want to know where Codex quota goes.
 
 ## Command reference
@@ -379,6 +381,8 @@ hermes account <provider> <action> [target] [options]
                                         profiles, tracker and timer after an install
   notify   [status|test|summary|...]    alert channels (desktop, Telegram) and the daily summary
   help                                  show the help
+
+hermes account all balance [--dry-run] [--threshold N]   balance every provider with accounts (the timer)
 ```
 
 A **target** is an account label (email), its number in `list`, or its id. `unpark` takes a label or id. `hermes account`, `hermes account help`, `hermes account --help` and `hermes account <provider> help` all show the help.
@@ -595,7 +599,7 @@ $ hermes account anthropic balance --dry-run
   - order: frank(2%) > erin(3%) > dave(3%) > alice(4%) > carol(5%) > bob(7%) > grace(12%) > heidi(17%)
 ```
 
-The timer runs `balance` every 5 minutes; you rarely need it by hand. `--dry-run` shows the plan without changing anything. `--threshold N` (1 to 100, default 90) sets the bench level. Other lines you may see: `unpark X (park --until ... reached)`, `recovered: X (token refresh retried)`, `bench X (93%) until 17:10`, `release X (40%)`. See [How balance works](#how-balance-works).
+The timer runs `hermes account all balance` (every provider with accounts) every 5 minutes; you rarely need it by hand. `--dry-run` shows the plan without changing anything. `--threshold N` (1 to 100, default 90) sets the bench level. Other lines you may see: `unpark X (park --until ... reached)`, `recovered: X (token refresh retried)`, `bench X (93%) until 17:10`, `release X (40%)`. See [How balance works](#how-balance-works).
 
 ### relogin
 
@@ -806,7 +810,7 @@ Run `notify test` after setting up.
 
 ### Daily summary
 
-`notify daily=08:00` sends a summary of the last 24 hours once a day, on the first timer run after 08:00, to the same channels as the alerts. Turned on after that time, the first one comes the next day. `notify summary` sends one at once, which is also a preview.
+`notify daily=08:00` sends a summary of the last 24 hours once a day, on the first timer run after 08:00, to the same channels as the alerts. There is one per provider, and only for a provider with something to report: requests counted, usage above 0%, or an account that needs a new sign-in. A provider whose accounts sat idle all day sends none. Turned on after that time, the first one comes the next day. `notify summary` sends one at once, which is also a preview.
 
 ```
 Hermes anthropic: last 24 h
@@ -845,6 +849,8 @@ Forecast: At the last hour's pace (31% of one 5-hour window per hour), every acc
 
 ## How balance works
 
+`hermes account <provider> balance` balances one provider; `hermes account all balance`, which the timer runs, does it for every provider with accounts (in rotation or parked), one after the other. A provider that fails does not stop the others; the exit code says that one did.
+
 Each run, for one provider:
 
 1. **Timed parks**: unparks accounts whose `--until` time has passed (schedule windows that ended included).
@@ -877,8 +883,9 @@ systemctl --user enable --now hermes-account-balance.timer          # start agai
 
 - **Interval**: `systemctl --user edit --full hermes-account-balance.timer`, change `OnUnitActiveSec=5min`. Every run reads each account's usage once, so do not go much below 5 minutes.
 - **Threshold**: `systemctl --user edit --full hermes-account-balance.service`, add `--threshold 85` to the `ExecStart` line.
-- **More providers**: `hermes account openai-codex setup --timer` adds a second `ExecStart` line and keeps the first. `doctor` warns when the timer does not cover a provider that has accounts.
-- **Remove**: `hermes account <provider> setup --undo` takes that provider out, and removes the timer with the last one.
+- **Providers**: the timer runs `hermes account all balance`, so every provider with accounts is balanced, including one that gets its first account later. On a unit from 3.10.2 or older (one `ExecStart` line per provider), `doctor` warns about a provider with accounts that the timer misses; `hermes account <provider> setup --timer` switches the unit to `all`.
+- **Only some providers**: replace the `all` line with one line per provider (`ExecStart=... account anthropic balance`), or run `hermes account <provider> setup --undo` for the one to leave out.
+- **Remove**: `hermes account <provider> setup --undo` with only that provider left removes the timer; `systemctl --user disable --now hermes-account-balance.timer` stops it at once.
 
 The timer uses no AI tokens; it only calls the usage endpoints (and, for alerts and the daily summary, your notification channels).
 
@@ -961,7 +968,7 @@ There is no telemetry, no update check and no other host. Opening the page or sw
 
 **Local listener.** Only during a Codex browser sign-in started on the Accounts page, the page's backend listens on `127.0.0.1:1455` (loopback only, not reachable from other computers) for the browser's return from OpenAI. It accepts only the sign-in it was started for and closes when that sign-in ends, is cancelled, or after 15 minutes. `add` and `relogin` in a terminal leave the listener to `hermes auth add`.
 
-**Background work.** Nothing runs on its own unless you install the timer (`setup --timer`, or `install.sh` without `--no-timer`). The timer is a systemd user unit that runs `hermes account <provider> balance` every 5 minutes: it reads every account's usage, reorders the pool, benches and releases accounts, applies timed parks and schedules, retries token refreshes and sends alerts. The tracker runs inside every Hermes process that loads it, as a `post_api_request` hook (see its [README](plugins/account-pool-tracker/README.md)).
+**Background work.** Nothing runs on its own unless you install the timer (`setup --timer`, or `install.sh` without `--no-timer`). The timer is a systemd user unit that runs `hermes account all balance` every 5 minutes, for every provider with accounts: it reads every account's usage, reorders the pool, benches and releases accounts, applies timed parks and schedules, retries token refreshes and sends alerts. The tracker runs inside every Hermes process that loads it, as a `post_api_request` hook (see its [README](plugins/account-pool-tracker/README.md)).
 
 **Commands it runs.**
 
@@ -998,7 +1005,8 @@ There is no telemetry, no update check and no other host. Opening the page or sw
 | `report`: not enough history | The timer is off or was just installed | `doctor`, then wait for a few runs |
 | A `--until` park did not end | The timer is off | `hermes account <provider> setup --timer` |
 | A schedule did not park its account | The timer is off, it is the last working account, or you unparked it by hand inside the window | `hermes account <provider> schedule` shows the state of each schedule |
-| No daily summary | The timer is off, no alert channel is on, or it was turned on after its time today | `notify` shows the time and the last day it was sent; `notify summary` tests delivery |
+| No daily summary | The timer is off, no alert channel is on, it was turned on after its time today, or the provider had nothing to report (no requests, no usage, no account to sign in again) | `notify` shows the time and the last day it was sent; `notify summary` tests delivery |
+| `doctor`: `the balance timer does not run openai-codex` | The timer unit is from 3.10.2 or older and has one line per provider | `hermes account openai-codex setup --timer` (switches it to every provider with accounts) |
 | `report`: `API $` shows `-` or ends in `+` | The model has no price in Hermes' price list, or the tokens were counted before tracker 1.3.0 | Nothing to fix; those tokens are left out of the price |
 | `doctor`: strategy is not fill_first | A profile uses `round_robin` or another strategy | `hermes account <provider> strategy fill_first`, or **Use fill_first** on the page |
 | `doctor`: profiles with their OWN pool | Someone ran `hermes -p <profile> auth add` | Remove those entries in that profile (`hermes -p <profile> auth remove ...`) and add the accounts from the default profile |

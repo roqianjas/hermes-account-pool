@@ -594,8 +594,21 @@ def _daily_at(cfg: dict):
     return (int(m[1]), int(m[2])) if m and int(m[1]) < 24 and int(m[2]) < 60 else None
 
 
+def _quiet_day(provider: str, hours: float = 24) -> bool:
+    """Nothing to report for the provider: no request counted, no usage above 0% recorded, no account that
+    needs to sign in again. The timer balances every provider with accounts, and a summary of nothing is noise."""
+    if any(getattr(e, "last_status", None) == "dead" for e in _entries(provider)):
+        return False
+    since = time.time() - hours * 3600
+    if _has_usage(provider) and any((v or 0) > 0 for h in _read_history(provider, since)
+                                    for v in (h.get("usage") or {}).values()):
+        return False
+    return not _report_data(provider, hours)["tokens_total"]["requests"]
+
+
 def _run_daily(provider: str) -> list[str]:
-    """Send the daily summary on the first balance run at or after its time, once a day."""
+    """Send the daily summary on the first balance run at or after its time, once a day; skipped (and not
+    retried that day) for a provider with nothing to report."""
     at = _daily_at(_config())
     if not at:
         return []
@@ -605,6 +618,10 @@ def _run_daily(provider: str) -> list[str]:
     state = _load_json(_state_path(), {}) or {}
     key, today = f"daily:{provider}", now.strftime("%Y-%m-%d")
     if state.get(key) == today:
+        return []
+    if _quiet_day(provider):
+        state[key] = today
+        _atomic_json(_state_path(), state)
         return []
     title, body = _summary(provider)
     sent = _notify(title, body, icon="dialog-information")
@@ -1358,6 +1375,27 @@ def _cmd_balance(args) -> int:
         _p("  - " + a)
     return 0
 
+def _cmd_balance_all(args) -> int:
+    """`hermes account all balance`, what the timer runs: balance every provider with accounts (in rotation or
+    parked), one after the other. A provider that fails does not stop the others; the exit code says it did."""
+    from types import SimpleNamespace
+    provs = _pool_providers()
+    if not provs:
+        _p(f"{time.strftime('%Y-%m-%d %H:%M:%S')} balance: no accounts in any provider, nothing to do.")
+        return 0
+    rc = 0
+    for p in provs:
+        try:
+            rc = max(rc, int(_cmd_balance(SimpleNamespace(**{**vars(args), "provider": p})) or 0))
+        except SystemExit as x:
+            _p(f"{time.strftime('%Y-%m-%d %H:%M:%S')} [{p}] balance stopped: {x}")
+            rc = max(rc, 1)
+        except Exception as x:  # noqa: BLE001  (one provider must not stop the others)
+            _p(f"{time.strftime('%Y-%m-%d %H:%M:%S')} [{p}] balance failed: {type(x).__name__}: {x}")
+            rc = max(rc, 1)
+    return rc
+
+
 def _timer_info() -> dict:
     """Balance timer state from systemd: active, running, result, last (text), next (text)."""
     out = {"active": _timer_active(), "running": False, "result": "?", "last": "never", "next": ""}
@@ -1701,9 +1739,10 @@ def _doctor_checks(provider: str) -> list:
             add("ok", f"balance timer active, last run {timer['last']}")
         execs = subprocess.run(["systemctl", "--user", "show", "hermes-account-balance.service", "-p", "ExecStart"],
                                capture_output=True, text=True, timeout=10).stdout
-        if active and not re.search(rf"account\s+{re.escape(provider)}\s+balance", execs):
+        if active and not re.search(rf"account\s+(?:{ALL}|{re.escape(provider)})\s+balance", execs):
             add("warn", f"the balance timer does not run {provider} (timed unparks, cooldown recovery and alerts "
-                        f"for {provider} wait for a manual balance). Fix: hermes account {provider} setup --timer")
+                        f"for {provider} wait for a manual balance). Fix: hermes account {provider} setup --timer "
+                        f"(the timer then balances every provider with accounts, later ones included)")
     except Exception as x:
         add("warn", f"could not query systemd: {x}")
 
@@ -3006,9 +3045,12 @@ def _set_enabled(home: Path, name: str, on: bool) -> None:
         _set_config_value(home, "plugins.enabled", json.dumps(new))
 
 
+ALL = "all"          # `hermes account all balance`: every provider with accounts, what the timer runs
+
+
 def _timer_lines() -> dict:
-    """{provider: its ExecStart line} of the installed balance service, in order (empty without the unit file).
-    Lines are kept as written, so options added by hand (--threshold 85) survive a rewrite."""
+    """{provider or "all": its ExecStart line} of the installed balance service, in order (empty without the
+    unit file). Lines are kept as written, so options added by hand (--threshold 85) survive a rewrite."""
     try:
         text = (_unit_dir() / f"{UNIT_NAME}.service").read_text()
     except OSError:
@@ -3016,22 +3058,40 @@ def _timer_lines() -> dict:
     return {m.group(1): m.group(0) for m in re.finditer(r"^ExecStart=.*?\baccount\s+(\S+)\s+balance\b.*$", text, re.M)}
 
 
+def _timer_follows_pool() -> bool:
+    """True when the timer runs `hermes account all balance`: every provider with accounts, new ones included."""
+    return ALL in _timer_lines()
+
+
 def _timer_providers() -> list:
-    return list(_timer_lines())
+    """The providers the balance timer covers now. With `all` that is every provider with accounts."""
+    lines = _timer_lines()
+    return _pool_providers() if ALL in lines else list(lines)
+
+
+def _timer_opts(lines: dict) -> str:
+    """Options written by hand after `balance` (--threshold 85) on the first ExecStart line, to carry over."""
+    for line in lines.values():
+        return re.sub(r"^.*?\bbalance\b", "", line).strip()
+    return ""
 
 
 def _write_timer(provs: list) -> None:
-    """Write the balance service (one ExecStart per provider, run in order) and, when missing, its 5-minute
-    timer. An existing timer file is left alone (its interval may have been changed by hand)."""
+    """Write the balance service and, when missing, its 5-minute timer. provs == ["all"]: one ExecStart that
+    balances every provider with accounts; otherwise one ExecStart per provider, run in order. Hand-added
+    options are kept. An existing timer file is left alone (its interval may have been changed by hand)."""
     d = _unit_dir()
     d.mkdir(parents=True, exist_ok=True)
     root = _root()
     keep = _timer_lines()
+    opts = _timer_opts(keep)
+    opts = f" {opts}" if opts else ""
     env = "" if root.resolve() == (Path.home() / ".hermes").resolve() else f"Environment=HERMES_HOME={root}\n"
-    execs = "".join((keep.get(p) or f"ExecStart={_hermes_bin()} account {p} balance") + "\n" for p in provs)
+    execs = "".join((keep.get(p) or f"ExecStart={_hermes_bin()} account {p} balance{opts}") + "\n" for p in provs)
+    what = "every provider's" if provs == [ALL] else " ".join(provs)
     (d / f"{UNIT_NAME}.service").write_text(
-        f"[Unit]\nDescription=Hermes account pool: balance {' '.join(provs)} accounts by live usage\n\n"
-        f"[Service]\nType=oneshot\n{env}{execs}TimeoutStartSec={120 * len(provs)}\n")
+        f"[Unit]\nDescription=Hermes account pool: balance {what} accounts by live usage\n\n"
+        f"[Service]\nType=oneshot\n{env}{execs}TimeoutStartSec={600 if provs == [ALL] else 120 * len(provs)}\n")
     timer = d / f"{UNIT_NAME}.timer"
     if not timer.exists():
         timer.write_text(
@@ -3047,6 +3107,8 @@ def _timer_on(provs: list) -> None:
 
 
 def _timer_drop(provider: str, provs: list) -> None:
+    if provs == [ALL]:
+        provs = _pool_providers()
     rest = [p for p in provs if p != provider]
     if rest:
         _write_timer(rest)
@@ -3099,15 +3161,21 @@ def _cmd_setup(args) -> int:
         for n in listed:
             change(f"unlist account-pool from plugins.enabled of {n}",
                    lambda n=n: _set_enabled(home_of[n], "account-pool", False))
-        provs = _timer_providers()
-        if provider in provs:
+        follows, provs = _timer_follows_pool(), _timer_providers()
+        if follows or provider in provs:
             rest = [p for p in provs if p != provider]
-            change(f"take {provider} out of the balance timer (it keeps running {', '.join(rest)})" if rest else
-                   f"remove the balance timer ({_unit_dir()}/{UNIT_NAME}.service and .timer)",
-                   lambda: _timer_drop(provider, provs))
+            gone = f"remove the balance timer ({_unit_dir()}/{UNIT_NAME}.service and .timer)"
+            if follows:
+                change(f"take {provider} out of the balance timer: it then runs {', '.join(rest)} only, one line each, "
+                       f"and no longer picks up providers you add later" if rest else gone,
+                       lambda: _timer_drop(provider, [ALL]))
+            else:
+                change(f"take {provider} out of the balance timer (it keeps running {', '.join(rest)})" if rest else gone,
+                       lambda: _timer_drop(provider, provs))
         status.append(("Session tracker", f"linked into {len(linked)} profile(s)"))
         status.append(("Accounts page", f"listed in {len(listed)} profile(s)"))
-        status.append(("Balance timer", f"runs {', '.join(provs)}" if provs else "not installed"))
+        status.append(("Balance timer", (f"runs every provider with accounts ({', '.join(provs) or 'none yet'})" if follows else
+                                         f"runs {', '.join(provs)}") if (follows or provs) else "not installed"))
     else:
         # Accounts page: Hermes Desktop mounts the backend only for profiles that list the plugin
         off = [n for n, _ in named if "account-pool" in lists[n][1]]
@@ -3143,21 +3211,28 @@ def _cmd_setup(args) -> int:
                 todo += bool(need_link or need_on)
             status.append(("Session tracker", f"{ver}, active in {len(homes) - todo} of {len(homes)} profile(s)"))
         # balance timer (opt-in: a background job every 5 minutes)
-        provs, active = _timer_providers(), _timer_active()
-        state = (f"runs {', '.join(provs)}, {'active' if active else 'NOT active'}" if provs else
+        lines, active = _timer_lines(), _timer_active()
+        follows, provs = ALL in lines, _timer_providers()
+        now = ", ".join(provs) or "none yet"
+        state = (f"runs every provider with accounts (now: {now}), {'active' if active else 'NOT active'}" if follows else
+                 f"runs {', '.join(provs)}, {'active' if active else 'NOT active'}" if lines else
                  "active, but not from this setup (no unit file found)" if active else "not installed")
         if want_timer and not shutil.which("systemctl"):
-            status.append(("Balance timer", f"systemd not found: run `hermes account {provider} balance` every few "
+            status.append(("Balance timer", "systemd not found: run `hermes account all balance` every few "
                            "minutes some other way (cron)"))
-        elif want_timer and provider not in provs:
-            new = provs + [provider]
-            change(f"{'add ' + provider + ' to' if provs else 'install'} the balance timer: systemd user units in "
-                   f"{_unit_dir()}, every 5 minutes runs: {'; '.join('hermes account ' + p + ' balance' for p in new)}",
-                   lambda: _timer_on(new))
+        elif want_timer and not follows and provider not in lines:
+            pool_now = ", ".join(sorted(set(_pool_providers()) | {provider}))
+            change((f"switch the balance timer from {', '.join(lines)} to every provider with accounts (now: {pool_now}; "
+                    f"providers you add later are included by themselves): every 5 minutes runs hermes account all balance")
+                   if lines else
+                   (f"install the balance timer: systemd user units in {_unit_dir()}, every 5 minutes runs "
+                    f"hermes account all balance (every provider with accounts, now: {pool_now}; providers you add "
+                    f"later are included by themselves)"),
+                   lambda: _timer_on([ALL]))
         elif want_timer and not active:
-            change("start the balance timer (systemctl --user enable --now)", lambda: _timer_on(provs))
-        if not want_timer and provider not in provs:
-            state += f"; add --timer to run `hermes account {provider} balance` every 5 minutes"
+            change("start the balance timer (systemctl --user enable --now)", lambda: _timer_on(list(lines)))
+        if not want_timer and not follows and provider not in lines:
+            state += f"; add --timer to balance {provider} (and every other provider with accounts) every 5 minutes"
         status.append(("Balance timer", state))
         # rotation strategy: Hermes' setting, written only on request
         rows = _strategies(provider)
@@ -3239,6 +3314,7 @@ HELP = "\n".join([
     "",
     "Targets: account label (email), list number, or id. unpark accepts label or id.",
     "openai-codex add/relogin sign in through the browser on this computer; --device: with a device code.",
+    "hermes account all balance: balance every provider with accounts (what the timer runs).",
     "",
     "Examples:",
     "  hermes account anthropic add carol@example.com",
@@ -3320,6 +3396,12 @@ def _dispatch(args) -> int:
     if args.minutes is not None and args.minutes <= 0:
         _p("--minutes must be greater than 0.")
         return 2
+    if provider.lower() == ALL:
+        if action != "balance":
+            _p(f"'{ALL}' works with balance only: hermes account {ALL} balance (every provider with accounts). "
+               f"For {action}, name the provider: hermes account <provider> {action}")
+            return 2
+        return _cmd_balance_all(args)
     if not _known_provider(_norm(provider)):
         _p(f"Unknown provider '{args.provider}'. Providers in your pool: {', '.join(_pool_providers()) or 'none'}. "
               f"All providers: hermes auth list")

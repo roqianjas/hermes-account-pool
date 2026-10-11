@@ -3,7 +3,8 @@
 #
 #   ./install.sh [--provider NAME]... [--set-strategy] [--no-tracker] [--no-timer]
 #
-# --provider      provider(s) the timer balances; repeat for several (default: anthropic)
+# --provider      provider(s) to run setup for; repeat for several (default: anthropic).
+#                 The timer balances every provider with accounts whichever you name.
 # --set-strategy  set credential_pool_strategies.<provider>=fill_first in every profile
 #                 that has another value (needed by balance)
 # --no-tracker    skip the session tracker (`hermes account <provider> who` stays empty)
@@ -23,7 +24,7 @@ while [ $# -gt 0 ]; do
     --set-strategy) SET_STRATEGY=1; shift ;;
     --no-tracker) TRACKER=0; shift ;;
     --no-timer) TIMER=0; shift ;;
-    -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
 done

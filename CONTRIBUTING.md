@@ -12,7 +12,7 @@ Bug reports, fixes and adapters for more providers are welcome. This page covers
 | `plugins/account-pool/desktop/plugin.js` | The Accounts page in Hermes Desktop (one ES module, no build step) |
 | `plugins/account-pool/dashboard/plugin_api.py` | The page's backend: FastAPI routes under `/api/plugins/account-pool/` |
 | `plugins/account-pool/dashboard/manifest.json` | Tells Hermes to mount `plugin_api.py`; `dist/index.js` is a stub for the browser dashboard |
-| `tests/api_sandbox.py`, `tests/profile_backend.py`, `tests/tokens_sandbox.py`, `tests/features_sandbox.py`, `tests/insights_sandbox.py`, `tests/setup_sandbox.py`, `tests/codex_sandbox.py`, `tests/ui/` | Backend tests in a sandbox (actions and the page's sign-ins, Codex browser and device code included; backend launched under a profile; token counting; the tracker check, tokens per session, bot alerts, the activity log and the forecast; tokens per bot and model, API prices, the hour chart, the daily summary and park schedules; `setup`, the terminal's Codex sign-in and the refusals without a terminal; Codex identity, usage, park, parked-token refresh and balance), and the page in jsdom |
+| `tests/api_sandbox.py`, `tests/profile_backend.py`, `tests/tokens_sandbox.py`, `tests/features_sandbox.py`, `tests/insights_sandbox.py`, `tests/setup_sandbox.py`, `tests/codex_sandbox.py`, `tests/ui/` | Backend tests in a sandbox (actions and the page's sign-ins, Codex browser and device code included; backend launched under a profile; token counting; the tracker check, tokens per session, bot alerts, the activity log and the forecast; tokens per bot and model, API prices, the hour chart, the daily summary and park schedules; `setup`, the terminal's Codex sign-in and the refusals without a terminal; Codex identity, usage, park, parked-token refresh and balance; the timer's `all balance` and the daily summary of an idle provider), and the page in jsdom |
 | `tests/ui/fixture_api.py`, `tests/ui/screenshots.mjs` | A backend that answers from `tests/ui/fixtures.json`, and the script that takes `docs/screenshots/` from a Hermes Desktop running it |
 | `plugins/account-pool-tracker/` | The `post_api_request` hook behind `who`, with its own `README.md` |
 | `install.sh`, `uninstall.sh` | Install and remove from a git checkout. `install.sh` copies the plugins and runs `hermes account <provider> setup --yes`; the systemd units are written by `setup` (`_write_timer`) |
@@ -153,7 +153,8 @@ SB=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" hap-sandbox.XXXX)
 HERMES_HOME=$SB ~/.hermes/hermes-agent/venv/bin/python tests/setup_sandbox.py
 rm -rf "$SB"
 
-# openai-codex: identity, check, usage, park/unpark, parked-token refresh, balance, doctor
+# openai-codex: identity, check, usage, park/unpark, parked-token refresh, balance, doctor,
+# `all balance` over two providers and the daily summary of an idle provider
 # (own sandbox; fake ChatGPT tokens and a fake usage endpoint, nothing reaches OpenAI)
 SB=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" hap-sandbox.XXXX)
 HERMES_HOME=$SB ~/.hermes/hermes-agent/venv/bin/python tests/codex_sandbox.py

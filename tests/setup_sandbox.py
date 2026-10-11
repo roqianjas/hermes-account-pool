@@ -120,7 +120,7 @@ check("list account-pool in plugins.enabled of w1" in text and "of w3" in text a
 check("enable the session tracker in the default profile" in text and "link the session tracker into w1" in text
       and "enable the session tracker in w3 (it is in plugins.disabled there now)" in text,
       "tracker: default enable, link per profile, a disabled one is named")
-check("add --timer to run `hermes account anthropic balance` every 5 minutes" in text
+check("add --timer to balance anthropic (and every other provider with accounts) every 5 minutes" in text
       and "not fill_first in w3; add --strategy to set it" in text, "timer and strategy are only offered")
 check(enabled("w1") == [] and not link["w1"].exists() and not CALLS and not HERMES, "nothing was written")
 
@@ -141,30 +141,49 @@ rc, text = run(core._cmd_setup, yes=True)
 check(rc == 0 and "Nothing to change." in text and "active in 4 of 4 profile(s)" in text, "a second run changes nothing")
 
 # ── --timer ──────────────────────────────────────────────────────────────────
+POOL = ["anthropic"]                      # the providers with accounts, as _pool_providers() reads them
+real_pool_providers = core._pool_providers
+core._pool_providers = lambda: list(POOL)
+BIN = core._hermes_bin()
 rc, text = run(core._cmd_setup, timer=True, yes=True)
 svc = (UNITS / "hermes-account-balance.service").read_text()
-check(rc == 0 and f"ExecStart={core._hermes_bin()} account anthropic balance" in svc
+check(rc == 0 and f"ExecStart={BIN} account all balance\n" in svc and svc.count("ExecStart=") == 1
       and f"Environment=HERMES_HOME={SB}" in svc and (UNITS / "hermes-account-balance.timer").exists(),
-      "--timer writes the service (with HERMES_HOME of a custom home) and the timer")
+      "--timer writes one service line that balances every provider with accounts (HERMES_HOME of a custom home), and the timer")
+check("every provider with accounts, now: anthropic" in text and "included by themselves" in text,
+      "the plan says which providers that is now and that later ones are included")
 check(CALLS == [("daemon-reload",), ("enable", "--now", "hermes-account-balance.timer"),
                 ("start", "--no-block", "hermes-account-balance.service")], "--timer reloads, enables and starts once")
 rc, text = run(core._cmd_setup, timer=True, yes=True)
-check(rc == 0 and "Nothing to change." in text and "runs anthropic, active" in text, "--timer again: nothing to change")
+check(rc == 0 and "Nothing to change." in text and "runs every provider with accounts (now: anthropic), active" in text,
+      "--timer again: nothing to change")
+POOL.append("openai-codex")
+check(core._timer_providers() == ["anthropic", "openai-codex"], "a provider that gets accounts is in the timer without another setup")
+rc, text = run(core._cmd_setup, provider="openai-codex", timer=True, yes=True)
+check(rc == 0 and "Nothing to change." in text and "(now: anthropic, openai-codex)" in text,
+      "--timer for that provider: nothing to change")
 STATE["active"] = False
 CALLS.clear()
 rc, text = run(core._cmd_setup, timer=True, yes=True)
-check(rc == 0 and "start the balance timer" in text and ("enable", "--now", "hermes-account-balance.timer") in CALLS,
-      "an installed but stopped timer is started")
-svc = (UNITS / "hermes-account-balance.service").read_text()
-(UNITS / "hermes-account-balance.service").write_text(svc.replace("anthropic balance", "anthropic balance --threshold 85"))
+check(rc == 0 and "start the balance timer" in text and ("enable", "--now", "hermes-account-balance.timer") in CALLS
+      and core._timer_follows_pool(), "an installed but stopped timer is started, still for every provider")
+# a unit from 3.10.2 or older: one line per provider
+OLD = (f"[Unit]\nDescription=Hermes account pool: balance anthropic accounts by live usage\n\n[Service]\nType=oneshot\n"
+       f"Environment=HERMES_HOME={SB}\nExecStart={BIN} account anthropic balance --threshold 85\nTimeoutStartSec=120\n")
+(UNITS / "hermes-account-balance.service").write_text(OLD)
 (UNITS / "hermes-account-balance.timer").write_text(
     (UNITS / "hermes-account-balance.timer").read_text().replace("OnUnitActiveSec=5min", "OnUnitActiveSec=10min"))
+check(core._timer_providers() == ["anthropic"] and not core._timer_follows_pool(), "an older unit runs only its own lines")
+rc, text = run(core._cmd_setup, timer=True, yes=True)
+check(rc == 0 and "Nothing to change." in text and "runs anthropic, active" in text,
+      "--timer for a provider an older unit already runs: left alone")
 rc, text = run(core._cmd_setup, provider="openai-codex", timer=True, yes=True)
 svc = (UNITS / "hermes-account-balance.service").read_text()
-check(rc == 0 and core._timer_providers() == ["anthropic", "openai-codex"] and "TimeoutStartSec=240" in svc,
-      "a second provider adds its own ExecStart line after the first")
-check("anthropic balance --threshold 85" in svc and "OnUnitActiveSec=10min" in (UNITS / "hermes-account-balance.timer").read_text(),
-      "hand edits survive: the options of an ExecStart line and the timer's interval")
+check(rc == 0 and "switch the balance timer from anthropic to every provider with accounts" in text
+      and svc.count("ExecStart=") == 1 and f"ExecStart={BIN} account all balance --threshold 85\n" in svc
+      and "TimeoutStartSec=600" in svc, "--timer for a provider it lacks switches an older unit to every provider")
+check("OnUnitActiveSec=10min" in (UNITS / "hermes-account-balance.timer").read_text(),
+      "hand edits survive: the options of the ExecStart line and the timer's interval")
 
 # ── --strategy ───────────────────────────────────────────────────────────────
 rc, text = run(core._cmd_setup, strategy=True, yes=True)
@@ -176,13 +195,18 @@ rc, text = run(core._cmd_setup, undo=True, timer=True)
 check(rc == 2 and "--undo cannot be combined" in text, "--undo with --timer is refused")
 rc, text = run(core._dispatch, action="list", timer=True)
 check(rc == 2 and "--timer only applies to: setup" in text, "--timer on another action is refused")
+rc, text = run(core._dispatch, provider="all", action="list")
+check(rc == 2 and "'all' works with balance only" in text, "`all` with another action is refused")
+check("hermes account all balance" in core.HELP, "help names `all balance`")
 check("setup" in core.HELP and "--undo" in core.HELP, "help lists setup")
 
 # ── --undo ───────────────────────────────────────────────────────────────────
 CALLS.clear()
 rc, text = run(core._cmd_setup, provider="openai-codex", undo=True, yes=True)
-check(rc == 0 and core._timer_providers() == ["anthropic"] and ("daemon-reload",) in CALLS
-      and "it keeps running anthropic" in text, "undo for one provider keeps the timer for the other")
+svc = (UNITS / "hermes-account-balance.service").read_text()
+check(rc == 0 and list(core._timer_lines()) == ["anthropic"] and ("daemon-reload",) in CALLS
+      and "it then runs anthropic only" in text and "account anthropic balance --threshold 85\n" in svc,
+      "undo for one provider keeps the timer for the others, one line each, options kept")
 (SB / "account-pool-parked.json").write_text(json.dumps({"parked": [{"_provider": "anthropic", "id": "pk0001",
                                                                        "label": "dave@example.com"}]}))
 rc, text = run(core._cmd_setup, undo=True, yes=True)
@@ -198,6 +222,7 @@ check("1 anthropic account(s) are parked and stay out of rotation: dave@example.
       "undo names the parked accounts that would stay out of rotation")
 rc, text = run(core._cmd_setup, undo=True, yes=True)
 check(rc == 0 and "Nothing to change." in text, "undo twice: nothing to change")
+core._pool_providers = real_pool_providers
 
 # ── no tracker installed ─────────────────────────────────────────────────────
 shutil.move(str(TRACKER), str(SB / "tracker.off"))
@@ -213,7 +238,7 @@ try:
     rc, text = run(core._cmd_setup, timer=True)
 finally:
     core.shutil.which = real_which
-check("systemd not found: run `hermes account anthropic balance`" in text and "install the balance timer" not in text,
+check("systemd not found: run `hermes account all balance`" in text and "install the balance timer" not in text,
       "--timer without systemd says so and plans nothing for it")
 
 # ── anything waiting for a person refuses without a terminal ───────────────

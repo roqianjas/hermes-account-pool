@@ -16,7 +16,7 @@ from reportlab.platypus import (CondPageBreak, Image, KeepTogether, PageBreak, P
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 from reportlab.platypus.tableofcontents import TableOfContents
 
-VERSION = "3.10.2"
+VERSION = "3.10.3"
 REPO = "github.com/roqianjas/hermes-account-pool"
 FOOTER = f"Hermes plugin account-pool {VERSION} · {REPO}"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hermes-account-pool.pdf")
@@ -198,9 +198,10 @@ P(C("install.sh") + " menyalin " + C("account-pool") + " (beserta halaman Hermes
   + " jika " + C("--set-strategy") + "), lalu " + C("doctor") + ".")
 table([
     ["Opsi", "Fungsi"],
-    [C("--provider &lt;nama&gt;"), "Provider yang diseimbangkan timer (default " + C("anthropic") + "). Ulangi untuk "
-     "beberapa provider: " + C("--provider anthropic --provider openai-codex") + ". Masing-masing mendapat baris "
-     + C("ExecStart") + " sendiri."],
+    [C("--provider &lt;nama&gt;"), "Provider yang dijalankan " + C("setup") + "-nya (default " + C("anthropic")
+     + "); ulangi untuk beberapa provider. Berpengaruh pada " + C("--set-strategy") + ", yang mengatur "
+     + C("fill_first") + " untuk tiap provider itu. Timer menyeimbangkan semua provider yang punya akun, provider "
+     "mana pun yang Anda sebut."],
     [C("--set-strategy"), "Atur " + C("fill_first") + " untuk tiap provider di semua profil. Tanpa opsi ini strategi "
      "tidak disentuh, dan " + C("doctor") + " memberi tahu jika salah."],
     [C("--no-tracker"), "Tanpa pelacak sesi. " + C("who") + " akan kosong dan token tidak dihitung."],
@@ -262,7 +263,8 @@ Changes:
   - enable the session tracker in worker-1 (hermes -p worker-1 plugins enable account-pool-...)
   - ... the same for worker-2 ...
   - install the balance timer: systemd user units in /home/you/.config/systemd/user, every
-    5 minutes runs: hermes account anthropic balance
+    5 minutes runs hermes account all balance (every provider with accounts, now: anthropic;
+    providers you add later are included by themselves)
 Apply these changes? [y/N]
 """)
 P(C("setup") + " menampilkan keadaan sekarang dan setiap perubahan yang akan dibuat, bertanya sekali, lalu "
@@ -278,13 +280,17 @@ table([
      + C("hermes -p &lt;profil&gt; plugins enable") + ". Satu salinan berarti satu update untuk semua profil."],
     [C("--timer"), "Menulis " + C("hermes-account-balance.service") + " dan " + C(".timer") + " ke "
      + C("~/.config/systemd/user/") + ", menyalakan timer, dan menjalankan putaran pertama di latar belakang. "
-     "Service menjalankan " + C("hermes account &lt;provider&gt; balance") + " tiap 5 menit; " + C("setup --timer")
-     + " untuk provider kedua menambah baris sendiri. " + C("HERMES_HOME") + " kustom ditulis ke service. Opsi yang "
-     "Anda tambahkan sendiri (" + C("--threshold 85") + ") dan interval yang diubah tetap dipertahankan."],
+     "Service menjalankan " + C("hermes account all balance") + " tiap 5 menit: semua provider yang punya akun, "
+     "jadi provider yang baru mendapat akun pertamanya nanti (misalnya Codex) ikut diseimbangkan mulai putaran "
+     "berikutnya, tanpa " + C("setup") + " kedua. Unit dari 3.10.2 atau lebih lama berisi satu baris per provider; "
+     + C("setup --timer") + " untuk provider yang belum ada di sana mengubahnya ke " + C("all") + ". "
+     + C("HERMES_HOME") + " kustom ditulis ke service. Opsi yang Anda tambahkan sendiri (" + C("--threshold 85")
+     + ") dan interval yang diubah tetap dipertahankan."],
     [C("--strategy"), "Mengatur " + C("credential_pool_strategies.&lt;provider&gt;: fill_first") + " di profil yang "
      "nilainya lain. " + C("balance") + " membutuhkannya (bagian 5)."],
     [C("--undo"), "Menghapus symlink pelacak dan entri " + C("plugins.enabled") + " di profil lain, serta "
-     "mengeluarkan provider itu dari timer (timer hilang jika tidak ada provider tersisa). Kedua plugin di profil "
+     "mengeluarkan provider itu dari timer: timer lalu menjalankan provider lain yang punya akun, satu baris per "
+     "provider, dan tidak lagi mengambil provider baru; timer hilang jika tidak ada provider tersisa. Kedua plugin di profil "
      "default, akun, akun parkir, pengaturan, file data, dan strategi tetap. Akun parkir yang akan tetap di luar "
      "rotasi disebut namanya."],
     [C("--yes"), "Tanpa pertanyaan. Tanpa terminal (cron, shell milik agent), " + C("setup") + " hanya menampilkan "
@@ -315,7 +321,7 @@ P("Hermes mengganti folder plugin di profil default. Symlink pelacak di profil l
 code("""
 cd hermes-account-pool
 git pull
-./install.sh                # pakai opsi --provider yang sama seperti saat instalasi
+./install.sh                # pakai opsi --set-strategy / --provider yang sama seperti dulu
 """)
 P("Folder plugin lama dicadangkan ke " + C("$HERMES_HOME/plugin-backups/&lt;nama&gt;.&lt;waktu&gt;") + " (di luar "
   + C("plugins/") + ", jadi tidak pernah dimuat dua kali). Akun, akun parkir, riwayat, dan pengaturan tetap. Tanpa "
@@ -496,6 +502,10 @@ P("<b>Kode perangkat</b> (" + C("--device") + "): " + C("hermes account openai-c
 P("<b>Codex CLI dan VS Code tidak tersentuh.</b> Hermes membuat login sendiri untuk akun itu. "
   + C("~/.codex/auth.json") + " serta riwayat Codex CLI dan VS Code tetap utuh, dan login di sini tidak membuat "
   "aplikasi itu logout.")
+P("<b>Timer mengambilnya sendiri.</b> Jika timer balance terpasang, putaran berikutnya ikut menyeimbangkan akun Codex "
+  "(riwayat pemakaian, urutan, istirahat, peringatan) tanpa " + C("setup") + " kedua. Pada timer dari 3.10.2 atau "
+  "lebih lama, jalankan sekali " + C("hermes account openai-codex setup --timer") + "; " + C("doctor") + " "
+  "memberitahunya.")
 note("<b>Memakai akunnya adalah pengaturan Hermes.</b> " + C("add") + " hanya memasukkan akun ke pool. Profil memakai "
      "Codex bila " + C("config.yaml") + " profil itu menyebutnya: sebagai model utama, di " + C("fallback_providers")
      + ", atau untuk gambar (" + C("image_gen.provider: openai-codex") + "). Cek " + C("hermes config")
@@ -526,6 +536,8 @@ hermes account <provider> <action> [target] [options]
   doctor                                periksa strategi, timer, file, pool, peringatan
   notify   [status|test|summary|...]    peringatan (desktop, Telegram), ringkasan harian
   help                                  bantuan
+
+hermes account all balance [--dry-run] [--threshold N]   semua provider berakun (timer)
 """)
 P("<b>Target</b> adalah label akun (email), nomor urut di " + C("list") + ", atau id. " + C("unpark")
   + " menerima label atau id. Contoh output di bawah berdasarkan pool sungguhan, dengan nama akun diganti.")
@@ -730,7 +742,9 @@ $ hermes account anthropic balance                 # jalankan (otomatis tiap 5 m
 2026-10-10 18:39:48 [anthropic] balance (dry run):
   - order: frank(2%) > erin(3%) > dave(3%) > alice(4%) > carol(5%) > bob(7%) > ...
 """)
-P(C("--threshold N") + " (1 sampai 100, default 90) mengatur ambang istirahat. Baris lain yang bisa muncul: "
+P("Timer menjalankan " + C("hermes account all balance") + ": semua provider yang punya akun (di rotasi atau "
+  "parkir), satu per satu. Provider yang gagal tidak menghentikan yang lain; exit code menandai kegagalannya. "
+  + C("--threshold N") + " (1 sampai 100, default 90) mengatur ambang istirahat. Baris lain yang bisa muncul: "
   + C("unpark X (park --until ... reached)") + ", " + C("recovered: X (token refresh retried)") + ", "
   + C("bench X (93%) until 17:10") + ", " + C("release X (40%)") + ". Cara kerjanya di bagian 10.")
 H2("7.9 relogin")
@@ -1070,8 +1084,10 @@ LI(["<b>Biasanya</b> = rata-rata jam aktif profil itu (jam dengan minimal satu r
     + C("alert_bot.cooldown_h") + " di file pengaturan."])
 H2("Ringkasan harian", need=70)
 P(C("notify daily=08:00") + " mengirim ringkasan 24 jam terakhir sekali sehari, pada putaran timer pertama setelah "
-  "jam 08:00, ke saluran yang sama dengan peringatan. Jika dinyalakan setelah jam itu, ringkasan pertama datang "
-  "besoknya. " + C("notify summary") + " langsung mengirim satu, sekaligus sebagai pratinjau.")
+  "jam 08:00, ke saluran yang sama dengan peringatan. Ringkasan dikirim per provider, dan hanya untuk provider yang "
+  "punya sesuatu untuk dilaporkan: ada permintaan yang tercatat, pemakaian di atas 0%, atau akun yang perlu login "
+  "ulang. Provider yang akunnya diam seharian tidak mengirim ringkasan. Jika dinyalakan setelah jam itu, ringkasan "
+  "pertama datang besoknya. " + C("notify summary") + " langsung mengirim satu, sekaligus sebagai pratinjau.")
 code("""
 Hermes anthropic: last 24 h
 Tokens: 10.9M in 647 requests, $5.66 at API list prices.
@@ -1149,8 +1165,9 @@ P("Ambang 90% membuat akun diistirahatkan sebelum penuh, sehingga sesi baru tida
 
 H1("11. Timer otomatis")
 code("""
-hermes account anthropic setup --timer                             # pasang / tambah provider
-hermes account anthropic setup --undo                              # keluarkan provider
+hermes account anthropic setup --timer                             # pasang (semua provider)
+hermes account all balance                                         # yang dijalankan timer
+hermes account openai-codex setup --undo                           # keluarkan satu provider
 systemctl --user list-timers hermes-account-balance.timer          # status, jadwal berikutnya
 journalctl --user -u hermes-account-balance.service -n 20 -o cat   # log
 systemctl --user start hermes-account-balance.service              # jalankan sekarang
@@ -1161,9 +1178,14 @@ LI(["<b>Interval</b>: " + C("systemctl --user edit --full hermes-account-balance
     + C("OnUnitActiveSec=5min") + ". Setiap putaran membaca pemakaian semua akun sekali, jadi jangan jauh di bawah 5 menit.",
     "<b>Ambang</b>: " + C("systemctl --user edit --full hermes-account-balance.service") + ", tambahkan "
     + C("--threshold 85") + " di baris " + C("ExecStart") + ".",
-    "<b>Provider tambahan</b>: " + C("hermes account openai-codex setup --timer") + " menambah baris "
-    + C("ExecStart") + " kedua dan mempertahankan yang pertama. " + C("doctor")
-    + " memperingatkan jika timer tidak mencakup provider yang punya akun.",
+    "<b>Provider</b>: timer menjalankan " + C("hermes account all balance") + ", jadi setiap provider yang punya "
+    "akun ikut diseimbangkan, termasuk provider yang baru mendapat akun pertamanya nanti. Pada unit dari 3.10.2 atau "
+    "lebih lama (satu baris " + C("ExecStart") + " per provider), " + C("doctor") + " memperingatkan provider "
+    "berakun yang terlewat; " + C("hermes account &lt;provider&gt; setup --timer") + " mengubah unit itu ke "
+    + C("all") + ".",
+    "<b>Hanya sebagian provider</b>: ganti baris " + C("all") + " dengan satu baris per provider ("
+    + C("ExecStart=... account anthropic balance") + "), atau jalankan " + C("hermes account &lt;provider&gt; setup --undo")
+    + " untuk provider yang mau dikeluarkan.",
     "Timer hanya dipasang jika Anda minta (" + C("setup --timer") + ", atau " + C("install.sh") + " tanpa "
     + C("--no-timer") + "). File unit ditulis oleh " + C("setup") + ", bukan diambil dari template.",
     "Timer tidak memakai token AI; ia hanya memanggil endpoint pemakaian (dan saluran notifikasi Anda untuk "
@@ -1247,7 +1269,8 @@ table([
      "lewat " + C("hermes send") + ". Header klien sama dengan "
      "pembaca pemakaian Hermes (" + C("claude-code/2.1.0") + ", " + C("codex_cli_rs") + "). Tanpa telemetri, tanpa "
      "cek update."],
-    ["Kerja di latar belakang", "Hanya timer, jika dipasang: " + C("balance") + " tiap 5 menit. Pelacak berjalan "
+    ["Kerja di latar belakang", "Hanya timer, jika dipasang: " + C("all balance") + " tiap 5 menit, untuk semua "
+     "provider yang punya akun. Pelacak berjalan "
      "di dalam setiap proses Hermes sebagai hook " + C("post_api_request") + "."],
     ["Perintah yang dijalankan", C("systemctl --user") + ", " + C("notify-send") + ", " + C("hermes config set")
      + ", " + C("hermes plugins enable account-pool-tracker") + ", " + C("hermes auth add/remove") + ", "
@@ -1302,8 +1325,12 @@ table([
     ["Akun " + C("--until") + " tidak kembali", "Timer mati", C("hermes account &lt;provider&gt;") + "<br/>" + C("setup --timer")],
     ["Jadwal tidak memarkir akunnya", "Timer mati, akun itu akun aktif terakhir, atau Anda meng-unpark di tengah jendela",
      C("hermes account anthropic schedule") + " menampilkan keadaan tiap jadwal"],
-    ["Ringkasan harian tidak datang", "Timer mati, tidak ada saluran aktif, atau dinyalakan setelah jamnya hari ini",
-     C("notify") + " menampilkan jam dan hari terakhir terkirim; " + C("notify summary") + " menguji pengiriman"],
+    ["Ringkasan harian tidak datang", "Timer mati, tidak ada saluran aktif, dinyalakan setelah jamnya hari ini, atau "
+     "provider itu tidak punya apa pun untuk dilaporkan", C("notify") + " menampilkan jam dan hari terakhir terkirim; "
+     + C("notify summary") + " menguji pengiriman"],
+    [C("doctor") + ": " + C("the balance timer does not run openai-codex"), "Unit timer dari 3.10.2 atau lebih lama, "
+     "satu baris per provider", C("hermes account openai-codex setup --timer") + " (mengubahnya ke semua provider "
+     "yang punya akun)"],
     [C("report") + ": API $ " + C("-") + " atau berakhiran " + C("+"), "Model tanpa harga di daftar Hermes, atau token "
      "dari sebelum pelacak 1.3.0", "Tidak perlu diperbaiki; token itu tidak dihargai"],
     ["doctor: strategy is not fill_first", "Profil memakai " + C("round_robin") + " atau strategi lain",
@@ -1460,6 +1487,10 @@ table([
 H1("19. Riwayat versi")
 table([
     ["Versi", "Perubahan"],
+    ["3.10.3", "Timer menyeimbangkan semua provider yang punya akun (" + C("hermes account all balance") + "), jadi "
+     "akun Codex atau provider lain yang ditambahkan belakangan ikut tanpa " + C("setup") + " kedua. Ringkasan "
+     "harian tidak dikirim untuk provider yang diam seharian. " + C("install.sh --help") + " tidak lagi mencetak "
+     "satu baris kode."],
     ["3.10.2", "Akun Codex dari workspace ChatGPT Business dan Enterprise bisa ditambahkan: " + C("add")
      + " dan " + C("relogin") + " untuk " + C("openai-codex") + " login lewat browser (kembali ke "
      + C("localhost:1455") + "), " + C("--device") + " untuk kode perangkat. Halaman Accounts menawarkan keduanya, "

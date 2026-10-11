@@ -2,6 +2,16 @@
 
 All releases of the `account-pool` plugin and its session tracker `account-pool-tracker` (now 1.5.0).
 
+## 3.10.3
+
+The balance timer covers every provider with accounts, so a Codex account (or any other provider) added later is balanced without a second `setup`.
+
+- **`hermes account all balance`** balances every provider with accounts (in rotation or parked), one after the other. A provider that fails does not stop the others; the exit code says it failed. `all` works with `balance` only.
+- **`setup --timer` installs the timer with `all balance`.** A unit from 3.10.2 or older (one `ExecStart` per provider) stays as it is until `setup --timer` runs for a provider it lacks, which switches it to `all`, keeping hand-added options (`--threshold 85`) and the interval. `doctor` names the fix for such a unit. `setup --undo` for one provider turns `all` into one line per remaining provider.
+- **Daily summary** only for a provider with something to report (requests counted, usage above 0%, or an account that needs a new sign-in). With every provider balanced, an idle one would otherwise send an empty summary every day.
+- `install.sh --help` printed the `set -euo pipefail` line after the options.
+- Docs: README and PDF (setup, the timer, balance, Codex, daily summary, troubleshooting, command reference). Tests: `setup_sandbox.py` (the `all` unit, a new provider picked up without setup, the switch from an older unit, undo for one provider) and `codex_sandbox.py` (`all balance` over two providers, one provider failing, the daily summary skipped for an idle provider).
+
 ## 3.10.2
 
 Codex accounts from ChatGPT Business and Enterprise workspaces can be added, and every Codex feature has tests.

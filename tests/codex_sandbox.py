@@ -1,5 +1,6 @@
 """openai-codex in a throwaway Hermes home: identity, check, live usage, park/unpark, parked-token refresh,
-balance, remove and doctor, with fake tokens and a fake usage endpoint, so no request reaches OpenAI.
+balance, remove, doctor, the timer's `all balance` and the daily summary, with fake tokens and a fake usage
+endpoint, so no request reaches OpenAI.
 
     SB=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" hap-sandbox.XXXX)
     HERMES_HOME=$SB ~/.hermes/hermes-agent/venv/bin/python tests/codex_sandbox.py
@@ -229,6 +230,46 @@ check(rc == 0 and [lab for lab, _ in entries()] == ["ben@example.com", "ann@exam
 rc, text = run(core._cmd_doctor)
 print(text)
 check("2 accounts in rotation" in text and "usage endpoint reachable" in text, "doctor for openai-codex")
+# ── `hermes account all balance` (what the timer runs): every provider with accounts ──
+load_pool("openrouter").add_entry(PooledCredential(provider="openrouter", id="or0001", label="ops@example.com",
+                                                   auth_type="api_key", priority=0, source="manual",
+                                                   access_token="FAKE-or"))
+USAGE[TOK["ann@example.com"]] = rl(5, 10)
+USAGE[TOK["ben@example.com"]] = rl(70, 80)
+rc, text = run(core._dispatch, provider="all", action="balance", yes=False)
+check(rc == 0 and "[openai-codex] balance" in text and "[openrouter] balance" in text
+      and [lab for lab, _ in entries()] == ["ann@example.com", "ben@example.com"],
+      "all balance: every provider with accounts, Codex reordered by usage")
+rc, text = run(core._dispatch, provider="all", action="usage", yes=False)
+check(rc == 2 and "works with balance only" in text, "all with another action is refused")
+real_balance = core._cmd_balance
+
+
+def failing_balance(a):
+    if a.provider == P:
+        raise RuntimeError("boom")
+    return real_balance(a)
+
+
+core._cmd_balance = failing_balance
+rc, text = run(core._dispatch, provider="all", action="balance", yes=False)
+core._cmd_balance = real_balance
+check(rc == 1 and "[openai-codex] balance failed: RuntimeError: boom" in text and "[openrouter] balance" in text,
+      "one provider failing does not stop the others; the exit code says it failed")
+
+# ── daily summary: only for a provider with something to report ─────────────
+run(core._cmd_notify, target="daily=00:00")
+STATE_FILE = Path(HOME) / "account-pool-state.json"
+st = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
+STATE_FILE.write_text(json.dumps({k: v for k, v in st.items() if not k.startswith("daily:")}))   # not sent today yet
+SENT.clear()
+quiet, busy = core._run_daily("openrouter"), core._run_daily(P)
+state = json.loads(STATE_FILE.read_text())
+today = time.strftime("%Y-%m-%d")
+check(quiet == [] and state.get("daily:openrouter") == today and not any("openrouter" in t for t, _ in SENT),
+      "daily summary skipped for a provider with nothing to report, and not retried that day")
+check(busy and any(t.startswith(f"Hermes {P}") for t, _ in SENT), "daily summary sent for a provider with usage")
+
 blob = "".join(p.read_text() for p in Path(HOME).glob("account-pool-*")
                if p.suffix in (".json", ".jsonl") and p.name != "account-pool-parked.json")
 check(blob and not any(t in blob for t in (TOK["ann@example.com"], TOK["ben@example.com"], "rt-0", "refresh_token")),
