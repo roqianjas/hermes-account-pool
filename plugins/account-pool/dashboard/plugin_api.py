@@ -295,6 +295,7 @@ def _status(provider: str) -> dict:
     return {
         "provider": provider, "providers": plist, "window": ad.window, "has_usage": ad.has_usage,
         "has_identity": ad.has_identity, "web_signin": ad.has_web_signin and core._oauth_provider(provider),
+        "signin_methods": list(getattr(ad, "signin_methods", ()) or ()),
         "rotation": rotation, "parked": parked_rows, "other_sessions": other_sessions,
         "sessions_active": who["count"], "who_minutes": WHO_MINUTES,
         "snapshot": {"ts": hist[-1]["ts"] if hist else None, "count": len(hist)},
@@ -459,9 +460,19 @@ def doctor(body: dict):
 
 # ── sign-in from the page (add / relogin) ────────────────────────────────────
 
+def _drop_flow(fid: str) -> None:
+    """Forget a sign-in and free what it holds (the browser method's listener on port 1455)."""
+    flow = _FLOWS.pop(fid, None)
+    if flow is not None:
+        try:
+            providers.get(flow["provider"]).signin_close(flow["state"])
+        except Exception:
+            pass
+
+
 def _expire_flows() -> None:
     for fid in [k for k, v in _FLOWS.items() if time.time() - v["created"] > SIGNIN_TTL]:
-        _FLOWS.pop(fid, None)
+        _drop_flow(fid)
 
 
 @router.post("/signin/start")
@@ -477,6 +488,10 @@ def signin_start(body: dict):
     if not (ad.has_web_signin and core._oauth_provider(p)):
         raise HTTPException(400, f"Sign-in from the desktop is not available for {p}. "
                                  f"Use the terminal: hermes account {p} {mode} {target}")
+    methods = tuple(getattr(ad, "signin_methods", ()) or ())
+    method = body.get("method") or (methods[0] if methods else None)
+    if methods and method not in methods:
+        raise HTTPException(400, f"Sign-in method must be one of: {', '.join(methods)}.")
     flow = {"provider": p, "mode": mode, "created": time.time(), "verify": ad.has_identity}
     with _exclusive():
         try:
@@ -489,34 +504,47 @@ def signin_start(body: dict):
                 flow["label"], flow["old_id"], flow["old_priority"] = core._relogin_target(p, target)
         except SystemExit as x:
             raise HTTPException(400, _exit_text(x))
+    if method == "browser":                  # one listener per computer: an older browser sign-in gives way
+        for fid in [k for k, v in _FLOWS.items() if v.get("kind") == "browser"]:
+            _drop_flow(fid)
     try:
-        info = ad.signin_start()
+        info = ad.signin_start(method)
     except Exception as x:
         raise HTTPException(502, f"Could not start the sign-in: {str(x)[:200] or type(x).__name__}")
-    flow.update(kind=info["kind"], state=info["state"])
+    flow.update(kind=info["kind"], state=info["state"], lock=threading.Lock())
     fid = secrets.token_urlsafe(16)
     _FLOWS[fid] = flow
     return {"flow": fid, "kind": info["kind"], "url": info["url"], "user_code": info.get("user_code"),
-            "label": flow["label"], "mode": mode, "verify": flow["verify"], "expires_in": SIGNIN_TTL}
+            "listening": info.get("listening"), "label": flow["label"], "mode": mode, "verify": flow["verify"],
+            "expires_in": SIGNIN_TTL}
 
 
 @router.post("/signin/step")
 def signin_step(body: dict):
-    """Finish with a pasted code (kind=code), or check once whether a device sign-in finished."""
+    """Finish with a pasted code (kind=code, or the address a browser sign-in ended on), or check once
+    whether a device or browser sign-in finished. "final": the flow is gone, the page starts again."""
     _expire_flows()
-    flow = _FLOWS.get(str(body.get("flow") or ""))
+    fid = str(body.get("flow") or "")
+    flow = _FLOWS.get(fid)
     if flow is None:
-        return {"status": "error", "message": "This sign-in expired or was cancelled. Start again."}
-    ad = providers.get(flow["provider"])
-    try:
-        creds = ad.signin_step(flow["state"], str(body.get("code") or ""))
-    except ValueError as x:
-        return {"status": "error", "message": str(x)}
-    except Exception as x:
-        return {"status": "error", "message": f"Sign-in failed: {str(x)[:200] or type(x).__name__}"}
-    if creds is None:
+        return {"status": "error", "final": True, "message": "This sign-in expired or was cancelled. Start again."}
+    if not flow["lock"].acquire(blocking=False):     # a poll and a pasted address at the same moment
         return {"status": "pending"}
-    _FLOWS.pop(str(body.get("flow")), None)          # tokens are single-use: never run the same flow twice
+    try:
+        ad = providers.get(flow["provider"])
+        try:
+            creds = ad.signin_step(flow["state"], str(body.get("code") or ""))
+        except Exception as x:
+            msg = str(x) if isinstance(x, ValueError) else f"Sign-in failed: {str(x)[:200] or type(x).__name__}"
+            final = bool(flow["state"].get("used"))
+            if final:
+                _drop_flow(fid)
+            return {"status": "error", "final": final, "message": msg}
+        if creds is None:
+            return {"status": "pending"}
+        _drop_flow(fid)                              # tokens are single-use: never run the same flow twice
+    finally:
+        flow["lock"].release()
     p, label = flow["provider"], flow["label"]
     with _exclusive():
         with core._capture() as buf:
@@ -537,5 +565,5 @@ def signin_step(body: dict):
 
 @router.post("/signin/cancel")
 def signin_cancel(body: dict):
-    _FLOWS.pop(str(body.get("flow") or ""), None)
+    _drop_flow(str(body.get("flow") or ""))
     return {"ok": True}

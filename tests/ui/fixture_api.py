@@ -141,6 +141,11 @@ async def action(request: Request):
 @router.post("/signin/start")
 async def signin_start(request: Request):
     body = await request.json()
+    if body.get("method") == "browser":
+        return {"flow": "F2", "kind": "browser", "listening": True, "user_code": None,
+                "url": "https://auth.openai.com/oauth/authorize?response_type=code&client_id=example"
+                       "&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback",
+                "label": body.get("target"), "mode": body.get("mode"), "verify": True, "expires_in": 900}
     return {"flow": "F1", "kind": "code", "url": "https://claude.ai/oauth/authorize?client_id=example",
             "user_code": None, "label": body.get("target"), "mode": body.get("mode"), "verify": True, "expires_in": 900}
 

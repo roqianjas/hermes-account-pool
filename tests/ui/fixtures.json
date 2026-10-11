@@ -17,6 +17,9 @@
   "has_usage": true,
   "has_identity": true,
   "web_signin": true,
+  "signin_methods": [
+   "code"
+  ],
   "rotation": [
    {
     "pos": 1,
@@ -1838,6 +1841,10 @@
   "has_usage": true,
   "has_identity": true,
   "web_signin": true,
+  "signin_methods": [
+   "browser",
+   "device"
+  ],
   "rotation": [],
   "parked": [],
   "other_sessions": [],

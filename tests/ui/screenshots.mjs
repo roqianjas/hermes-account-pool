@@ -119,4 +119,19 @@ await waitFor(hasText('Copy link'), 'the sign-in step')
 await shot('add-account')
 await click('[role=dialog] button', 'Cancel').catch(() => {})
 
+// Codex: the browser sign-in waiting for the browser to come back to localhost:1455
+await js(`(() => {
+  const el = [...document.querySelectorAll('button')].filter(${visible})
+    .find(e => e.textContent.trim().startsWith('openai-codex'))
+  if (!el) throw new Error('no openai-codex provider button')
+  el.click(); return true })()`)
+await waitFor(hasText('No openai-codex accounts yet'), 'the empty Codex page')
+await click('button', 'Add account')
+await waitFor(hasText('Browser on this computer'), 'the Codex Add account dialog')
+await type('[role=dialog] input', 'judy@example.com')
+await click('[role=dialog] button', 'Start sign-in')
+await waitFor(hasText('Waiting for the browser'), 'the browser sign-in step')
+await shot('add-account-codex')
+await click('[role=dialog] button', 'Cancel').catch(() => {})
+
 ws.close()

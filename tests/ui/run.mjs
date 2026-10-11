@@ -58,6 +58,11 @@ for (const [path, rep] of Object.entries(fx)) {
 }
 // a schedule window three days away: its day must show once, not twice
 fx['/status?provider=anthropic'].schedules[0].next = Math.floor(Date.now() / 1000) + 3 * 86400
+// the forecast 2 hours from now, whenever the test runs (a day further, the time gains a weekday)
+const fc = fx['/status?provider=anthropic'].forecast
+const shift = Math.floor(Date.now() / 1000) + 2 * 3600 - fc.full_at
+fc.full_at += shift
+fc.back_at += shift
 const calls = []
 let failNext = null
 const store = {}
@@ -80,11 +85,21 @@ async function rest(path, opts = {}) {
     return { ok: true, rc: 0, output: `${b.action} done for ${b.target}` }
   }
   if (path === '/signin/start') {
+    if (b.method === 'browser') {
+      const deny = b.target === 'deny@example.com'
+      return { flow: deny ? 'F4' : 'F3', kind: 'browser', url: 'https://auth.openai.com/oauth/authorize?x=' + (deny ? 4 : 3), user_code: null, listening: !deny, label: b.target, mode: b.mode, verify: true, expires_in: 900 }
+    }
     if (b.provider === 'openai-codex' || b.mode === 'relogin')
       return { flow: 'F2', kind: 'device', url: 'https://auth.example/device', user_code: 'ABCD-1234', label: b.target, mode: b.mode, verify: true, expires_in: 900 }
     return { flow: 'F1', kind: 'code', url: 'https://claude.ai/oauth/authorize?x=1', user_code: null, label: b.target, mode: b.mode, verify: true, expires_in: 900 }
   }
   if (path === '/signin/step') {
+    if (b.flow === 'F3') {
+      if (!b.code) return { status: 'pending' }
+      return b.code.includes('state=ok') ? { status: 'done', output: 'Added codex9@example.com.' }
+        : { status: 'error', message: 'This address belongs to another sign-in. Open the link from this window.' }
+    }
+    if (b.flow === 'F4') return { status: 'error', final: true, message: 'OpenAI refused the sign-in: access_denied. Start again.' }
     if (b.flow === 'F1') return b.code === 'bad' ? { status: 'error', message: 'Token exchange failed: bad code' } : { status: 'done', output: 'Added user9@example.com.' }
     stepCount += 1
     return stepCount < 2 ? { status: 'pending' } : { status: 'done', output: 'Signed in again.' }
@@ -312,6 +327,47 @@ await click(screen.getByText('Accounts', { selector: 'button' }))
 await click(screen.getByText(/^openai-codex/))
 await screen.findByText('No openai-codex accounts yet.')
 ok(store.provider === 'openai-codex', 'provider choice stored')
+
+// codex add: browser sign-in by default, a pasted address, a refused sign-in, the device code
+await click(screen.getAllByText('Add account')[0].closest('button'))
+ok(screen.getByText('Browser on this computer').getAttribute('aria-selected') === 'true' && screen.getByText('Device code'),
+  'codex offers the browser (default) and the device code')
+ok(!screen.queryByText('Authorize, copy the code and paste it here.') && screen.getByText(/localhost:1455 page/),
+  'codex steps do not ask for a pasted code')
+await act(async () => { fireEvent.change(document.querySelector('input[placeholder="name@example.com"]'), { target: { value: 'codex9@example.com' } }) })
+await click(screen.getByText('Start sign-in'))
+await screen.findByText('Waiting for the browser…')
+ok(lastPost('/signin/start').body.method === 'browser' && lastPost('/signin/start').body.provider === 'openai-codex',
+  'browser sign-in started for openai-codex')
+ok(document.querySelector('.hap-link')?.textContent.startsWith('https://auth.openai.com/oauth/authorize'), 'sign-in link shown')
+await waitFor(() => ok(calls.some(c => c.path === '/signin/step' && c.body.flow === 'F3' && !c.body.code), 'browser sign-in is polled'), { timeout: 5000 })
+const addr = () => document.querySelector('input[placeholder^="http://localhost:1455"]')
+await act(async () => { fireEvent.change(addr(), { target: { value: 'http://localhost:1455/auth/callback?code=x&state=bad' } }) })
+await click(screen.getByText('Finish'))
+await screen.findByText(/belongs to another sign-in/)
+ok(screen.getByText('Waiting for the browser…'), 'a wrong address keeps the sign-in waiting')
+await act(async () => { fireEvent.change(addr(), { target: { value: 'http://localhost:1455/auth/callback?code=x&state=ok' } }) })
+await click(screen.getByText('Finish'))
+await screen.findByText('Added codex9@example.com.')
+ok(screen.getByText('Done.'), 'pasted address finishes the browser sign-in')
+await click(screen.getByText('Close'))
+
+await click(screen.getAllByText('Add account')[0].closest('button'))
+await act(async () => { fireEvent.change(document.querySelector('input[placeholder="name@example.com"]'), { target: { value: 'deny@example.com' } }) })
+await click(screen.getByText('Start sign-in'))
+await screen.findByText(/Port 1455 on this computer is taken/)
+ok(true, 'busy port: the page asks for the address')
+await screen.findByText(/OpenAI refused the sign-in/, {}, { timeout: 5000 })
+ok(screen.getByText('Start sign-in') && document.querySelector('input[placeholder="name@example.com"]').value === 'deny@example.com',
+  'a refused sign-in goes back to the start, email kept')
+await click(screen.getByText('Device code'))
+ok(screen.getByText(/often turn this off/) && screen.getByText('Enter the code shown here and authorize.'), 'device code choice explained')
+await click(screen.getByText('Start sign-in'))
+await screen.findByText('ABCD-1234')
+ok(lastPost('/signin/start').body.method === 'device' && screen.getByText(/sign in with the browser instead/),
+  'device code sign-in with the workspace hint')
+await click(screen.getByText('Cancel'))
+ok(lastPost('/signin/cancel')?.body.flow === 'F2', 'cancel ends the device sign-in')
 cleanup()
 
 // a profile that does not use fill_first -> banner with the fix

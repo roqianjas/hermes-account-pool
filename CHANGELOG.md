@@ -2,6 +2,20 @@
 
 All releases of the `account-pool` plugin and its session tracker `account-pool-tracker` (now 1.5.0).
 
+## 3.10.2
+
+Codex accounts from ChatGPT Business and Enterprise workspaces can be added, and every Codex feature has tests.
+
+- **Codex sign-in through the browser.** Those workspaces turn device-code sign-in off, so `add` stopped at OpenAI's *"Please contact your workspace admin to enable device code authentication"*. `hermes account openai-codex add` and `relogin` now sign in through the browser by default (authorization code + PKCE, back to `http://localhost:1455/auth/callback`, as Codex CLI does), with Hermes' own `hermes auth add openai-codex --browser --no-browser`. `--device` keeps the device code. Hermes before 0.21.6 has no browser sign-in; there the device code stays the default.
+- **Accounts page.** **Add account** and **Sign in again** for Codex ask **Browser on this computer** (default) or **Device code**. The browser sign-in finishes by itself when the browser returns to `localhost:1455`; with the browser on another computer, paste the address it ended on. The page's backend listens on `127.0.0.1:1455` only while that sign-in waits, answers only its own `state`, and stops on finish, cancel or after 15 minutes. One browser sign-in waits at a time; a busy port falls back to the pasted address.
+- A sign-in that cannot be finished any more (refused on OpenAI's page, a spent device code, an expired flow) takes the dialog back to its first step with the email kept, instead of polling on.
+- Two polls, or a poll and a pasted address, can no longer finish the same sign-in twice.
+- The Codex sign-in dialog no longer shows Anthropic's "paste the code" steps before it starts.
+- `add` and `relogin` without a terminal say what is missing per method (`the sign-in link is shown there` for Codex).
+- `doctor` could say `usage history last written -0 min ago` right after a run.
+- Docs: a Codex section (browser sign-in, device code and the workspace setting, Codex CLI and VS Code untouched, where Codex quota goes), the local listener in the security disclosure, five Codex rows in Troubleshooting, the adapter's sign-in interface in CONTRIBUTING, and a screenshot of the Codex dialog.
+- Tests: `tests/codex_sandbox.py` (identity, check, usage parsing and headers, park/unpark keeping the whole login, parked-token refresh and a dead refresh, balance, doctor, no token outside `auth.json` and the parked file); `api_sandbox.py` covers the page's Codex browser and device-code sign-ins end to end against a local callback; `setup_sandbox.py` the terminal's Codex sign-in; `tests/ui/run.mjs` the Codex dialog (92 checks). The forecast check in `run.mjs` no longer fails a day after the fixtures were made.
+
 ## 3.10.1
 
 Installed from this repository, not from the Hermes plugin catalog. No change in behaviour.

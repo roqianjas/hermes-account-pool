@@ -2,11 +2,11 @@
 
 Run several accounts of one provider in [Hermes Agent](https://hermes-agent.nousresearch.com/docs) and manage them from one command, `hermes account`, or from an Accounts page in Hermes Desktop. Add accounts with a verified email, see live usage per account, spread the load before an account runs out, park accounts for a while or on a weekly schedule, see which bot is on which account and how many tokens each bot uses, and get an alert or a daily summary.
 
-Version 3.10.1 · MIT · Hermes Agent ≥ 0.21.5 · Linux with systemd · Indonesian PDF guide in [`docs/`](docs/hermes-account-pool.pdf)
+Version 3.10.2 · MIT · Hermes Agent ≥ 0.21.5 · Linux with systemd · Indonesian PDF guide in [`docs/`](docs/hermes-account-pool.pdf)
 
 ![The Accounts page in Hermes Desktop: eight accounts in rotation with their 5-hour usage, the bots on each account, one parked account, two park schedules and the forecast](docs/screenshots/accounts.png)
 
-More of the page: [Report](docs/screenshots/report.png) · [tokens by session and load by hour](docs/screenshots/sessions.png) · [Activity](docs/screenshots/activity.png) · [Alerts](docs/screenshots/alerts.png) · [Add account](docs/screenshots/add-account.png). All screenshots show made-up accounts from the test fixtures.
+More of the page: [Report](docs/screenshots/report.png) · [tokens by session and load by hour](docs/screenshots/sessions.png) · [Activity](docs/screenshots/activity.png) · [Alerts](docs/screenshots/alerts.png) · [Add account](docs/screenshots/add-account.png) · [Add a Codex account](docs/screenshots/add-account-codex.png). All screenshots show made-up accounts from the test fixtures.
 
 ## Contents
 
@@ -314,7 +314,42 @@ The target can be an email or an id. `remove` refuses the last working account a
 
 ### Codex
 
-The same commands work for `openai-codex`: `hermes account openai-codex add you@example.com` with a ChatGPT sign-in, in a browser signed in as that account. This only puts the account in the pool. Making a profile use Codex (main model or fallback) is a normal Hermes setting.
+The same commands work for `openai-codex` (ChatGPT Plus, Pro, Business and Enterprise). The sign-in is different: by default it goes through the browser and comes back to this computer, so there is no code to paste.
+
+```bash
+hermes account openai-codex list
+hermes account openai-codex add you@example.com
+```
+
+1. Answer `y`. Hermes prints a sign-in link at `auth.openai.com`.
+2. Open it in a browser **on this computer** that is signed in to ChatGPT as **that** account: its own Chrome profile, or a private window where you sign in.
+3. Pick the workspace if ChatGPT asks, and authorize.
+4. The browser opens `http://localhost:1455/auth/callback?...` and shows **OpenAI Codex authorization received**. That page comes from Hermes on your computer: the sign-in is done and the tab can be closed. The code in its address works only once and is already spent.
+5. Look for `Verified: you@example.com` and `Added ...`, then check with `hermes account openai-codex check` and `usage`.
+
+```
+$ hermes account openai-codex add you@example.com
+Add you@example.com to openai-codex
+  1. Open the sign-in link in a browser ON THIS COMPUTER that is signed in to ChatGPT as THIS
+     account: its own Chrome profile, or a private / incognito window.
+  2. Pick the workspace and authorize. The browser then opens a localhost:1455 page that says
+     "authorization received", and the sign-in finishes here by itself.
+     Browser on another computer? Use the Accounts page in Hermes Desktop (it takes the
+     address the browser ends on), or sign in with a code: add --device.
+  The account is kept only if the sign-in really is that account and not a duplicate.
+Continue? [y/N] y
+   ... Hermes prints the link and waits for the browser ...
+Verified: you@example.com
+Added you@example.com (id=7c41e0) to openai-codex.
+```
+
+**Why the browser and not a code.** ChatGPT Business and Enterprise workspaces turn device-code sign-in off unless an owner turns it on, and OpenAI then answers *"Please contact your workspace admin to enable device code authentication"*. The browser sign-in works either way. It is the same authorization-code + PKCE flow Codex CLI uses, with Hermes' own `hermes auth add openai-codex --browser`. It needs Hermes 0.21.6 or newer; on 0.21.5 `add` falls back to the device code.
+
+**Device code** (`--device`): `hermes account openai-codex add you@example.com --device` shows a code; open `https://auth.openai.com/codex/device`, enter it and confirm. Useful when the browser runs on another computer and you are not using the Accounts page. On a Business or Enterprise workspace an owner first turns on *Settings > Permissions & roles > Codex and Work Local > Enable device code sign-in for Codex* (personal accounts: *Settings > Security*); the setting can take a while to apply.
+
+**Codex CLI and VS Code are not touched.** Hermes creates its own login for the account. `~/.codex/auth.json` and your Codex CLI and VS Code history stay as they are, and signing in here does not sign them out.
+
+**Using the accounts is a Hermes setting.** `add` only puts the account in the pool. A profile uses Codex when its own `config.yaml` says so: as the main model, in `fallback_providers`, or for images (`image_gen.provider: openai-codex`). Check `hermes config` of the profiles if you want to know where Codex quota goes.
 
 ## Command reference
 
@@ -330,12 +365,13 @@ hermes account <provider> <action> [target] [options]
   sessions [--hours N]                  the sessions (tasks) with the most tokens, with their API price
   log      [--hours N]                  what the timer, the command and the page changed
   add      <email> [--key] [--yes]      sign in a new account: verified, no duplicates
+           [--device]                   openai-codex: a device code instead of the browser
   remove   <target> [--yes]             delete an account's login (parked accounts too)
   park     <target> [--until T]         take an account out of rotation
   unpark   <target>                     return a parked account to rotation
   schedule [<target> --every SPEC]      park an account every week at set hours; no target: list
   unschedule <target>                   remove an account's park schedule
-  relogin  <target> [--yes]             sign an account in again, verified, same label and position
+  relogin  <target> [--yes] [--device]  sign an account in again, verified, same label and position
   balance  [--dry-run] [--threshold N]  order by usage, bench >= N% (90), auto-recover, alerts
   strategy [<name>] [--only P,...]      Hermes' rotation strategy per profile: show it, or set it
   doctor                                check strategy, timer, files, pools, alerts
@@ -567,7 +603,7 @@ The timer runs `balance` every 5 minutes; you rarely need it by hand. `--dry-run
 hermes account anthropic relogin alice@example.com
 ```
 
-Signs an OAuth account in again, for example after `DEAD` or `WRONG LABEL`. The new login is added first and its real email checked. If it matches, it replaces the old entry in the same position with the same label. If it does not, the new login is discarded and the old entry is left as it was. Parked accounts must be unparked first. Needs an interactive terminal to paste the code. Ctrl+C cancels cleanly.
+Signs an OAuth account in again, for example after `DEAD` or `WRONG LABEL`. The new login is added first and its real email checked. If it matches, it replaces the old entry in the same position with the same label. If it does not, the new login is discarded and the old entry is left as it was. Parked accounts must be unparked first. Needs an interactive terminal, where the sign-in link is shown (and, for Anthropic, the code pasted). Ctrl+C cancels cleanly. For `openai-codex` it signs in through the browser like `add`; `--device` uses a device code instead.
 
 ### strategy
 
@@ -705,10 +741,17 @@ The **status-bar chip** reads `8/8 · 12%`: 8 of 8 accounts in rotation are usab
 ### Add an account or sign in again from the page
 
 1. **Add account**, type the account's email, **Start sign-in**. For an existing account, use the key button on its row (or **Sign in again** on a dead-account banner); that is `relogin`.
-2. **Anthropic**: click **Copy link** and open the link in a browser signed in as that account (its own browser profile, or a private window). Check `Logged in as ...`, authorize, copy the code, paste it into the page and click **Finish**. **Codex**: open the page shown, enter the code; the page finishes by itself once you confirm.
-3. The result is the same as on the command line: `add` keeps the sign-in only when the email matches and the account is not in the pool yet, then balances; `relogin` swaps the new login in at the same position only when it is the same account.
+2. **Anthropic**: click **Copy link** and open the link in a browser signed in as that account (its own browser profile, or a private window). Check `Logged in as ...`, authorize, copy the code, paste it into the page and click **Finish**.
+3. **Codex** asks how to sign in, **Browser on this computer** (the default) or **Device code**:
+   - **Browser on this computer**: click **Copy link**, open it in a browser on this computer signed in to ChatGPT as that account, pick the workspace and authorize. The browser lands on a `localhost:1455` page that says *authorization received*, and the dialog finishes by itself within two seconds. If the browser runs on another computer, its last page does not load: copy the whole address it ended on (`http://localhost:1455/auth/callback?code=...`), paste it into the dialog and click **Finish**.
+   - **Device code**: open the page shown, enter the code; the dialog finishes by itself once you confirm. ChatGPT Business and Enterprise workspaces often turn this off (see [Codex](#codex)).
+4. The result is the same as on the command line: `add` keeps the sign-in only when the email matches and the account is not in the pool yet, then balances; `relogin` swaps the new login in at the same position only when it is the same account.
 
-**Open in default browser** is there too, but your default browser is often signed in as another account; **Copy link** into the right browser profile is the safe way. A sign-in that is not finished within 15 minutes expires, and **Cancel** drops it at once. Each sign-in can be finished only once.
+![Add a Codex account from the page](docs/screenshots/add-account-codex.png)
+
+**Open in default browser** is there too, but your default browser is often signed in as another account; **Copy link** into the right browser profile is the safe way. A sign-in that is not finished within 15 minutes expires, and **Cancel** drops it at once. Each sign-in can be finished only once. A sign-in OpenAI refuses (you clicked *Cancel* there, or the link expired) takes the dialog back to its first step, with the email kept.
+
+While a Codex browser sign-in waits, the page's backend listens on `127.0.0.1:1455`, the only address OpenAI sends the browser back to. It answers only that sign-in (any other `state` gets *Not this sign-in*) and stops listening when the sign-in finishes, is cancelled, or after 15 minutes. One Codex browser sign-in waits at a time: starting a second one ends the first. When another program holds the port (a Codex CLI login, or `hermes auth add openai-codex --browser` in a terminal), the dialog says so and takes the pasted address instead.
 
 ### Requests to the provider
 
@@ -727,7 +770,7 @@ The usage endpoint limits requests per account (see [Troubleshooting](#troublesh
 
 - The page is the plugin's `desktop/plugin.js`, a Hermes Desktop plugin. It imports only the Hermes plugin SDK and React, and talks only to its own backend.
 - The backend is `dashboard/plugin_api.py`, mounted by Hermes under `/api/plugins/account-pool/` when `account-pool` is in `plugins.enabled` of the profile Desktop runs. Hermes requires the desktop's session token for every request.
-- Responses carry labels, ids, states, percentages and times. Tokens never leave the backend. The state of a sign-in in progress (the PKCE verifier for Anthropic, the device id for Codex) stays in the backend's memory.
+- Responses carry labels, ids, states, percentages and times. Tokens never leave the backend. The state of a sign-in in progress (the PKCE verifier for Anthropic and for the Codex browser sign-in, the device id for the Codex device code) stays in the backend's memory.
 - The page always works on the shared pool in the default Hermes home, whichever profile the window shows. Bots cannot use it: it is part of the desktop app, not a tool.
 - One action runs at a time; a second click while one runs gets `Another account action is still running`.
 
@@ -897,10 +940,10 @@ What the plugins do outside their own files, in one place: what you should know 
 
 - `add`, `relogin`, `remove`, `park`, `unpark`, `schedule` and `balance` change the pool through Hermes' own `CredentialPool` API (`load_pool`, `add_entry`, `remove_index`) or through `hermes auth add` and `hermes auth remove`. Nothing edits `auth.json` as text.
 - `park` moves an account's pool entry, OAuth tokens included, into `account-pool-parked.json` (mode 600, written under a file lock) and `unpark` moves it back. While an account is parked, `balance` refreshes its access token when it expires, with Hermes' own refresh functions (`refresh_anthropic_oauth_pure`, `refresh_codex_oauth_pure`), and writes the new tokens back at once, because refresh tokens can be single use.
-- `add` and `relogin` in a terminal run `hermes auth add`. **Add account** and **Sign in again** on the Accounts page run the same OAuth flows in the page's backend, with Hermes' own client ids and token functions: the PKCE code flow at `claude.ai` for Anthropic, the device code flow at `auth.openai.com` for Codex. The PKCE verifier and the device id stay in the backend's memory for at most 15 minutes.
+- `add` and `relogin` in a terminal run `hermes auth add` (for Codex with `--browser --no-browser`, or without them for `--device`). **Add account** and **Sign in again** on the Accounts page run the same OAuth flows in the page's backend, with Hermes' own client ids and token functions: the PKCE code flow at `claude.ai` for Anthropic; for Codex the PKCE browser flow at `auth.openai.com` with its callback on `127.0.0.1:1455`, or the device code flow. The PKCE verifiers and the device id stay in the backend's memory for at most 15 minutes.
 - `add --key` reads an API key without echo and stores it through the pool API.
 - Usage and profile requests send the same client headers as Hermes' own usage fetcher: `User-Agent: claude-code/2.1.0` with `anthropic-beta: oauth-2025-04-20` for Anthropic, `codex_cli_rs/0.0.0 (Hermes Agent)` with `originator: codex_cli_rs` for Codex. Without them Anthropic rate-limits the usage endpoint far sooner.
-- It uses these Hermes internals, checked against Hermes 0.21.5: `hermes_cli.auth_commands` (`_OAUTH_ADD_SPECS`, `_unsuppress_provider_sources`, `_normalize_provider`, `auth_add_command`, `auth_remove_command`), `agent.anthropic_credentials` (`_OAUTH_CLIENT_ID`, `_OAUTH_REDIRECT_URI`, `_OAUTH_SCOPES`, `_generate_pkce`, `_post_oauth_token`, `_oauth_token_state`, `refresh_anthropic_oauth_pure`), `hermes_cli.auth_codex` (`CODEX_OAUTH_CLIENT_ID`, `_codex_request_device_code`, `_codex_exchange_authorization_code`, `_codex_http_client`, `_codex_base_url`, `refresh_codex_oauth_pure`), `agent.codex_headers.codex_account_headers`, `hermes_cli.auth` (`PROVIDER_REGISTRY`, `_utc_now_z`, `mark_provider_active_if_unset`), `agent.credential_pool` (`load_pool`, `PooledCredential`), `hermes_constants` (the Hermes home and its per-profile override), `hermes_cli.secret_prompt.masked_secret_prompt`, `hermes_cli.config.set_config_value`, and `agent.usage_pricing` (`_lookup_official_docs_pricing`, `resolve_billing_route`) with `agent.models_dev._load_disk_cache` for API prices. A Hermes update that changes them breaks the affected command with an error; it cannot corrupt the pool, because every write still goes through the pool API.
+- It uses these Hermes internals, checked against Hermes 0.21.5: `hermes_cli.auth_commands` (`_OAUTH_ADD_SPECS`, `_unsuppress_provider_sources`, `_normalize_provider`, `auth_add_command`, `auth_remove_command`), `agent.anthropic_credentials` (`_OAUTH_CLIENT_ID`, `_OAUTH_REDIRECT_URI`, `_OAUTH_SCOPES`, `_generate_pkce`, `_post_oauth_token`, `_oauth_token_state`, `refresh_anthropic_oauth_pure`), `hermes_cli.auth_codex` (`CODEX_OAUTH_CLIENT_ID`, `_codex_request_device_code`, `_codex_exchange_authorization_code`, `_codex_http_client`, `_codex_base_url`, `refresh_codex_oauth_pure`), `hermes_cli.auth_codex_browser._codex_browser_exchange_code` (Hermes 0.21.6 and newer; without it the plugin posts the same token request itself), `agent.codex_headers.codex_account_headers`, `hermes_cli.auth` (`PROVIDER_REGISTRY`, `_utc_now_z`, `mark_provider_active_if_unset`), `agent.credential_pool` (`load_pool`, `PooledCredential`), `hermes_constants` (the Hermes home and its per-profile override), `hermes_cli.secret_prompt.masked_secret_prompt`, `hermes_cli.config.set_config_value`, and `agent.usage_pricing` (`_lookup_official_docs_pricing`, `resolve_billing_route`) with `agent.models_dev._load_disk_cache` for API prices. A Hermes update that changes them breaks the affected command with an error; it cannot corrupt the pool, because every write still goes through the pool API.
 - Tokens are never printed, logged, returned to the page, or sent anywhere but the provider's own endpoints.
 
 **Network.** Only these, and only when a command, the timer or a page button asks:
@@ -911,10 +954,12 @@ What the plugins do outside their own files, in one place: what you should know 
 | Anthropic's OAuth token endpoint, through Hermes' `_post_oauth_token` | code exchange, token refresh | page sign-in, refresh of parked accounts |
 | `claude.ai/oauth/authorize` | the sign-in link you open yourself | page sign-in |
 | `chatgpt.com/backend-api/wham/usage` | Codex usage | as for Anthropic usage |
-| `auth.openai.com` | device code, token exchange and refresh | Codex page sign-in, refresh of parked Codex accounts |
+| `auth.openai.com` | the sign-in link you open yourself; device code, token exchange and refresh | Codex sign-in, refresh of parked Codex accounts |
 | Telegram, through `hermes send` | alerts and the daily summary | when an alert fires or the summary is due, if Telegram alerts are on |
 
 There is no telemetry, no update check and no other host. Opening the page or switching tabs makes no request at all.
+
+**Local listener.** Only during a Codex browser sign-in started on the Accounts page, the page's backend listens on `127.0.0.1:1455` (loopback only, not reachable from other computers) for the browser's return from OpenAI. It accepts only the sign-in it was started for and closes when that sign-in ends, is cancelled, or after 15 minutes. `add` and `relogin` in a terminal leave the listener to `hermes auth add`.
 
 **Background work.** Nothing runs on its own unless you install the timer (`setup --timer`, or `install.sh` without `--no-timer`). The timer is a systemd user unit that runs `hermes account <provider> balance` every 5 minutes: it reads every account's usage, reorders the pool, benches and releases accounts, applies timed parks and schedules, retries token refreshes and sends alerts. The tracker runs inside every Hermes process that loads it, as a `post_api_request` hook (see its [README](plugins/account-pool-tracker/README.md)).
 
@@ -966,6 +1011,11 @@ There is no telemetry, no update check and no other host. Opening the page or sw
 | No Accounts entry in the sidebar | The Desktop half of the plugin is off | Capabilities > Plugins, account-pool, switch on Desktop. After an update: Ctrl+K, `Reload desktop plugins` |
 | Live usage button greyed out | Live usage ran less than 2 minutes ago | Wait for the countdown on the button |
 | Sign-in in the page: `This code belongs to another sign-in` | The code came from another sign-in link, or was copied without the part after `#` | Open the link from this window again and copy the whole code |
+| Codex: *"Please contact your workspace admin to enable device code authentication"*, **Continue** greyed out | The ChatGPT workspace turned device-code sign-in off | Sign in without `--device` (the default), or pick **Browser on this computer** on the page. Or have an owner turn on *Enable device code sign-in for Codex*, which can take a while to apply |
+| Codex: the browser ends on a `localhost:1455` page that does not load | The browser runs on another computer than Hermes, or the sign-in in Hermes already ended | Page: paste that whole address into the dialog. Terminal: use the page, `--device`, or the SSH tunnel Hermes prints |
+| Codex page sign-in: `Port 1455 on this computer is taken` | A Codex CLI login or `hermes auth add openai-codex --browser` is waiting on the port | Finish or stop that one, or paste the address the browser ends on |
+| Codex: `OpenAI refused the sign-in` or `Token exchange failed` | You cancelled on OpenAI's page, or the link was older than a few minutes | Start the sign-in again |
+| Codex: `This address belongs to another sign-in` | The pasted address came from an older sign-in link | Open the link from this dialog again and paste the address it ends on |
 
 ## FAQ
 
@@ -1009,12 +1059,13 @@ At least two. `report` tells you when the whole pool was nearly full at the same
 
 - Usage comes from **undocumented endpoints**: `https://api.anthropic.com/api/oauth/usage` and `https://chatgpt.com/backend-api/wham/usage` (the one behind Codex CLI's `/status`). They can change or rate-limit without notice. The plugin sends the same client headers as Hermes' own usage fetcher.
 - Anthropic weekly quotas are not exposed for Team accounts, so `balance` uses the 5-hour window for `anthropic`.
-- Adapters exist for `anthropic` and `openai-codex`. The generic commands were tested for other providers with API-key entries only. The Codex adapter was verified read-only against a real ChatGPT Team account; `add` with a real Codex sign-in has not been run yet.
+- Adapters exist for `anthropic` and `openai-codex`. The generic commands were tested for other providers with API-key entries only. Codex was verified with a real ChatGPT Business account: the browser sign-in, `check`, `usage`, `who`, `report`, `sessions`, `log`, `doctor` and `balance --dry-run`. Park, unpark, the parked-token refresh, balance and the page's sign-ins were tested in a sandbox with fake tokens (`tests/codex_sandbox.py`, `tests/api_sandbox.py`).
 - Token counts start when tracker 1.1.0 first runs and cover Hermes on this computer only. They are kept for 8 days, in 15-minute buckets, so a period starts at the nearest quarter hour. The split by profile and model starts with tracker 1.3.0; bots pick up a new tracker when their gateway or session restarts.
 - `API $` uses list prices for the standard context length; long-context surcharges and batch discounts are not applied.
 - `who` finds the agent object by scanning running thread frames, because Hermes' `post_api_request` hook does not name the pool entry a call used. That needs Hermes' default `plugins.isolation: in_process`: under `host` isolation the tracker records nothing, so `who`, token counts, the session list and the bot alert stay empty, while usage, balance, park, schedules and the forecast keep working. A future Hermes refactor may also leave `who` empty, but it can never break the bots.
 - Both plugins are built for Hermes' default `plugins.isolation: in_process`. Under `plugins.isolation: host`, Hermes does not register plugin CLI commands, so `hermes account` is not there (the timer's `balance` included), the tracker records nothing, and the Accounts page backend runs in the plugin host, where it has not been tested. Switch back with `hermes config set plugins.isolation in_process`.
-- `add` and `relogin` need a terminal (or the Accounts page) to paste the code or type the key. Without one they stop at once with the command to run, instead of waiting for input. The page's Codex sign-in was tested up to the device code; a full Codex sign-in has not been run yet.
+- `add` and `relogin` need a terminal (or the Accounts page) to show the sign-in link, paste the code or type the key. Without one they stop at once with the command to run, instead of waiting for input.
+- The Codex browser sign-in needs the browser on the computer that runs Hermes (or the Accounts page, which takes the pasted address). OpenAI accepts only `http://localhost:1455/auth/callback` as the return address for the Codex client, so the port cannot be changed.
 - The Accounts page follows the Hermes Desktop plugin SDK as of Hermes Agent 0.21.5. A future SDK change can break the page; the command is not affected.
 - Linux with systemd only, for the timer. The commands themselves work wherever Hermes runs.
 

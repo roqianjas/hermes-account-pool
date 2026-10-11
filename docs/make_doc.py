@@ -16,7 +16,7 @@ from reportlab.platypus import (CondPageBreak, Image, KeepTogether, PageBreak, P
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 from reportlab.platypus.tableofcontents import TableOfContents
 
-VERSION = "3.10.1"
+VERSION = "3.10.2"
 REPO = "github.com/roqianjas/hermes-account-pool"
 FOOTER = f"Hermes plugin account-pool {VERSION} · {REPO}"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hermes-account-pool.pdf")
@@ -451,10 +451,55 @@ LI(["Jangan pakai " + C("hermes -p &lt;profil&gt; auth add") + ": profil itu aka
     "Jangan pakai " + C("hermes auth add") + " langsung: tidak ada cek email, sehingga label bisa salah dan duplikat bisa masuk.",
     "Jangan menyalin token Hermes ke aplikasi atau perangkat lain. Refresh token sekali pakai, jadi salah satu login "
     "akan mati. Login terpisah ke akun yang sama di aplikasi lain tidak masalah."])
-H2("6.4 Akun Codex (jika nanti dipakai)")
-P("Caranya sama: " + C("hermes account openai-codex add &lt;email&gt;") + ", login ChatGPT di browser yang login "
-  "sebagai akun itu. Ini hanya menyiapkan akun di pool. Agar profil memakai Codex, atur di pengaturan Hermes (model "
-  "atau fallback), bukan lewat plugin.")
+H2("6.4 Akun Codex")
+P("Perintahnya sama untuk " + C("openai-codex") + " (ChatGPT Plus, Pro, Business, dan Enterprise). Bedanya di cara "
+  "login: secara default lewat browser yang kembali ke komputer ini, jadi tidak ada kode yang perlu ditempel.")
+code("""
+hermes account openai-codex list
+hermes account openai-codex add you@example.com
+""")
+OL(["Jawab " + C("y") + ". Hermes menampilkan link login di " + C("auth.openai.com") + ".",
+    "Buka link itu di browser <b>di komputer ini</b> yang login ChatGPT sebagai <b>akun itu</b>: profil Chrome "
+    "sendiri, atau jendela private lalu login di sana.",
+    "Pilih workspace jika ChatGPT bertanya, lalu authorize.",
+    "Browser membuka " + C("http://localhost:1455/auth/callback?...") + " dan menampilkan <b>OpenAI Codex "
+    "authorization received</b>. Halaman itu berasal dari Hermes di komputer Anda: login sudah selesai dan tab boleh "
+    "ditutup. Kode di alamatnya hanya berlaku sekali dan sudah terpakai.",
+    "Cari " + C("Verified: you@example.com") + " dan " + C("Added ...") + ", lalu cek dengan "
+    + C("hermes account openai-codex check") + " dan " + C("usage") + "."])
+code("""
+$ hermes account openai-codex add you@example.com
+Add you@example.com to openai-codex
+  1. Open the sign-in link in a browser ON THIS COMPUTER that is signed in to ChatGPT as THIS
+     account: its own Chrome profile, or a private / incognito window.
+  2. Pick the workspace and authorize. The browser then opens a localhost:1455 page that says
+     "authorization received", and the sign-in finishes here by itself.
+     Browser on another computer? Use the Accounts page in Hermes Desktop (it takes the
+     address the browser ends on), or sign in with a code: add --device.
+  The account is kept only if the sign-in really is that account and not a duplicate.
+Continue? [y/N] y
+   ... Hermes prints the link and waits for the browser ...
+Verified: you@example.com
+Added you@example.com (id=7c41e0) to openai-codex.
+""")
+P("<b>Kenapa browser, bukan kode.</b> Workspace ChatGPT Business dan Enterprise mematikan login dengan kode perangkat "
+  "kecuali owner menyalakannya, dan OpenAI lalu menjawab <i>\"Please contact your workspace admin to enable device "
+  "code authentication\"</i>. Login lewat browser jalan di kedua keadaan. Alurnya sama dengan Codex CLI "
+  "(authorization code + PKCE), lewat " + C("hermes auth add openai-codex --browser") + " milik Hermes sendiri. "
+  "Butuh Hermes 0.21.6 atau lebih baru; di 0.21.5 " + C("add") + " kembali memakai kode perangkat.")
+P("<b>Kode perangkat</b> (" + C("--device") + "): " + C("hermes account openai-codex add you@example.com --device")
+  + " menampilkan kode; buka " + C("https://auth.openai.com/codex/device") + ", masukkan kodenya, lalu konfirmasi. "
+  "Berguna bila browser ada di komputer lain dan Anda tidak memakai halaman Accounts. Di workspace Business atau "
+  "Enterprise, owner harus lebih dulu menyalakan <i>Permissions &amp; roles &gt; Codex and Work Local &gt; Enable "
+  "device code sign-in for Codex</i> (akun pribadi: <i>Settings &gt; Security</i>); pengaturannya bisa butuh waktu "
+  "sebelum berlaku.")
+P("<b>Codex CLI dan VS Code tidak tersentuh.</b> Hermes membuat login sendiri untuk akun itu. "
+  + C("~/.codex/auth.json") + " serta riwayat Codex CLI dan VS Code tetap utuh, dan login di sini tidak membuat "
+  "aplikasi itu logout.")
+note("<b>Memakai akunnya adalah pengaturan Hermes.</b> " + C("add") + " hanya memasukkan akun ke pool. Profil memakai "
+     "Codex bila " + C("config.yaml") + " profil itu menyebutnya: sebagai model utama, di " + C("fallback_providers")
+     + ", atau untuk gambar (" + C("image_gen.provider: openai-codex") + "). Cek " + C("hermes config")
+     + " tiap profil bila ingin tahu ke mana kuota Codex terpakai.")
 
 H1("7. Referensi perintah")
 code("""
@@ -467,12 +512,13 @@ hermes account <provider> <action> [target] [options]
   report   [--hours N] [--chart]        beban dan token per akun, bot, model, harga API;
                                         --chart: beban per jam 7 hari terakhir
   add      <email> [--key] [--yes]      tambah akun: terverifikasi, tanpa duplikat
+           [--device]                   openai-codex: kode perangkat, bukan browser
   remove   <target> [--yes]             hapus login akun (akun parkir juga)
   park     <target> [--until T]         keluarkan akun dari rotasi
   unpark   <target>                     kembalikan akun yang diparkir
   schedule [<target> --every SPEC]      parkir akun tiap minggu; tanpa target: daftar jadwal
   unschedule <target>                   hapus jadwal parkir akun
-  relogin  <target> [--yes]             login ulang, terverifikasi, label dan posisi tetap
+  relogin  <target> [--yes] [--device]  login ulang, terverifikasi, label dan posisi tetap
   balance  [--dry-run] [--threshold N]  urutkan, istirahatkan >= N% (90), pulihkan, alert
   strategy [<nama>] [--only P,...]      strategi rotasi Hermes per profil: lihat atau ubah
   sessions [--hours N]                  sesi (tugas) dengan token terbanyak, beserta harga API
@@ -934,8 +980,14 @@ OL(["<b>Add account</b>, ketik email akun, <b>Start sign-in</b>. Untuk akun yang
     "barisnya (atau <b>Sign in again</b> di banner akun mati); itu sama dengan " + C("relogin") + ".",
     "<b>Anthropic</b>: klik <b>Copy link</b>, buka link itu di browser yang login sebagai akun tersebut (profil "
     "browser sendiri, atau jendela private). Pastikan tertulis " + C("Logged in as ...") + ", authorize, salin kodenya, "
-    "tempel di halaman, lalu <b>Finish</b>. <b>Codex</b>: buka halaman yang ditampilkan dan masukkan kodenya; jendela "
-    "selesai sendiri setelah Anda konfirmasi.",
+    "tempel di halaman, lalu <b>Finish</b>.",
+    "<b>Codex</b> menanyakan cara login: <b>Browser on this computer</b> (default) atau <b>Device code</b>. "
+    "<b>Browser</b>: klik <b>Copy link</b>, buka di browser komputer ini yang login ChatGPT sebagai akun itu, pilih "
+    "workspace, authorize. Browser mendarat di halaman " + C("localhost:1455") + " bertuliskan <i>authorization "
+    "received</i>, dan dialog selesai sendiri dalam dua detik. Jika browser ada di komputer lain, halaman terakhirnya "
+    "tidak terbuka: salin seluruh alamatnya (" + C("http://localhost:1455/auth/callback?code=...") + "), tempel di "
+    "dialog, lalu <b>Finish</b>. <b>Device code</b>: buka halaman yang ditampilkan dan masukkan kodenya; dialog "
+    "selesai sendiri setelah Anda konfirmasi. Workspace Business dan Enterprise sering mematikan cara ini (bagian 6.4).",
     "Hasilnya sama dengan di terminal: " + C("add") + " hanya menyimpan login jika emailnya cocok dan akun belum ada "
     "di pool, lalu langsung balance; " + C("relogin") + " menukar login lama di posisi yang sama hanya jika akunnya "
     "sama."])
@@ -944,6 +996,15 @@ note("Tombol <b>Open in default browser</b> juga ada, tetapi browser default ser
      "<b>Cancel</b> langsung membatalkannya, dan setiap login hanya bisa diselesaikan sekali.")
 shot("add-account", "Add account untuk Anthropic: salin link, buka di browser yang login sebagai akun itu, tempel "
      "kodenya, Finish.", width=0.85)
+shot("add-account-codex", "Add account untuk Codex lewat browser: dialog menunggu browser kembali ke localhost:1455; "
+     "kolom alamat hanya untuk browser di komputer lain.", width=0.85)
+P("Selama login Codex lewat browser menunggu, backend halaman mendengarkan di " + C("127.0.0.1:1455") + ", satu-satunya "
+  "alamat tujuan OpenAI mengembalikan browser. Ia hanya melayani login itu (" + C("state") + " lain mendapat <i>Not "
+  "this sign-in</i>) dan berhenti saat login selesai, dibatalkan, atau setelah 15 menit. Hanya satu login browser "
+  "yang menunggu dalam satu waktu: memulai yang kedua mengakhiri yang pertama. Bila port dipakai program lain (login "
+  "Codex CLI, atau " + C("hermes auth add openai-codex --browser") + " di terminal), dialog memberi tahu dan menerima "
+  "alamat yang ditempel. Login yang ditolak OpenAI (Anda menekan <i>Cancel</i> di sana, atau link kedaluwarsa) "
+  "membawa dialog kembali ke langkah pertama, email tetap terisi.")
 H2("8.5 Permintaan ke provider")
 table([
     ["Anda", "Permintaan"],
@@ -965,7 +1026,8 @@ LI(["Halaman adalah " + C("desktop/plugin.js") + ", sebuah desktop plugin Hermes
     + " jika " + C("account-pool") + " ada di " + C("plugins.enabled") + " profil yang sedang dijalankan Desktop. Setiap "
     "permintaan wajib membawa session token desktop.",
     "Jawaban backend hanya berisi label, id, status, persen, dan waktu. Token tidak pernah keluar dari backend. Data "
-    "rahasia login yang sedang berjalan (PKCE verifier Anthropic, device id Codex) tetap di memori backend.",
+    "rahasia login yang sedang berjalan (PKCE verifier Anthropic dan login browser Codex, device id kode perangkat "
+    "Codex) tetap di memori backend.",
     "Halaman selalu memakai pool bersama di Hermes home default, profil mana pun yang sedang dibuka di jendela. Bot "
     "tidak bisa memakainya: ini bagian aplikasi desktop, bukan tool.",
     "Satu aksi berjalan dalam satu waktu; klik kedua saat aksi masih jalan mendapat pesan " + C("Another account action is still running") + "."])
@@ -1176,9 +1238,13 @@ table([
      "Hermes atau " + C("hermes auth add/remove") + ". " + C("park") + " memindahkan entri beserta token OAuth-nya ke "
      + C("account-pool-parked.json") + " (600, file lock); " + C("balance") + " me-refresh token akun parkir dengan "
      "fungsi refresh Hermes sendiri. Login dari halaman memakai client id dan fungsi token Hermes."],
+    ["Listener lokal", "Hanya selama login Codex lewat browser dari halaman Accounts: backend halaman mendengarkan di "
+     + C("127.0.0.1:1455") + " (loopback, tidak bisa dijangkau komputer lain), hanya untuk login itu, dan ditutup saat "
+     "login selesai, dibatalkan, atau setelah 15 menit. Di terminal, listener itu milik " + C("hermes auth add") + "."],
     ["Jaringan", C("api.anthropic.com") + " (usage, profile), endpoint token OAuth Anthropic lewat Hermes, "
      + C("claude.ai/oauth/authorize") + " (link yang Anda buka sendiri), " + C("chatgpt.com/backend-api/wham/usage")
-     + ", " + C("auth.openai.com") + ", dan Telegram lewat " + C("hermes send") + ". Header klien sama dengan "
+     + ", " + C("auth.openai.com") + " (link login yang Anda buka sendiri, kode perangkat, token), dan Telegram "
+     "lewat " + C("hermes send") + ". Header klien sama dengan "
      "pembaca pemakaian Hermes (" + C("claude-code/2.1.0") + ", " + C("codex_cli_rs") + "). Tanpa telemetri, tanpa "
      "cek update."],
     ["Kerja di latar belakang", "Hanya timer, jika dipasang: " + C("balance") + " tiap 5 menit. Pelacak berjalan "
@@ -1261,6 +1327,20 @@ table([
     ["Tombol Live usage abu-abu", "Live usage baru jalan kurang dari 2 menit lalu", "Tunggu hitungan mundurnya"],
     ["Login di halaman: " + C("This code belongs to another sign-in"), "Kode berasal dari link login lain, atau "
      "disalin tanpa bagian setelah " + C("#"), "Buka lagi link dari jendela ini dan salin kode lengkapnya"],
+    ["Codex: <i>Please contact your workspace admin to enable device code authentication</i>, <b>Continue</b> "
+     "abu-abu", "Workspace ChatGPT mematikan login dengan kode perangkat", "Login tanpa " + C("--device")
+     + " (default), atau pilih <b>Browser on this computer</b> di halaman. Atau minta owner menyalakan <i>Enable "
+     "device code sign-in for Codex</i>; bisa butuh waktu sebelum berlaku"],
+    ["Codex: browser berakhir di halaman " + C("localhost:1455") + " yang tidak terbuka", "Browser ada di komputer "
+     "lain, atau login di Hermes sudah berakhir", "Halaman: tempel seluruh alamat itu di dialog. Terminal: pakai "
+     "halaman, " + C("--device") + ", atau tunnel SSH yang ditampilkan Hermes"],
+    ["Login Codex di halaman: " + C("Port 1455 on this computer is taken"), "Login Codex CLI atau "
+     + C("hermes auth add openai-codex --browser") + " sedang menunggu di port itu", "Selesaikan atau hentikan yang "
+     "itu, atau tempel alamat tujuan browser"],
+    ["Codex: " + C("OpenAI refused the sign-in") + " atau " + C("Token exchange failed"), "Anda membatalkan di "
+     "halaman OpenAI, atau link sudah lebih dari beberapa menit", "Mulai login lagi"],
+    ["Codex: " + C("This address belongs to another sign-in"), "Alamat yang ditempel berasal dari link login yang "
+     "lebih lama", "Buka lagi link dari dialog ini dan tempel alamat tujuannya"],
 ], [0.24, 0.34, 0.42])
 
 H1("16. Tanya jawab")
@@ -1317,8 +1397,11 @@ LI(["Pemakaian berasal dari <b>endpoint yang tidak didokumentasikan resmi</b>: "
     "Endpoint ini bisa berubah atau membatasi permintaan tanpa pemberitahuan. Plugin mengirim header klien yang sama "
     "dengan pembaca pemakaian milik Hermes.",
     "Kuota mingguan Anthropic tidak tersedia untuk akun Team, jadi balance untuk " + C("anthropic") + " memakai jendela 5 jam.",
-    "Adapter Codex baru diuji read-only pada akun ChatGPT Team asli; " + C("add") + " dengan login Codex sungguhan "
-    "belum pernah dijalankan. Perintah umum untuk provider lain baru dites dengan akun API key.",
+    "Codex diuji dengan akun ChatGPT Business asli: login lewat browser, " + C("check") + ", " + C("usage") + ", "
+    + C("who") + ", " + C("report") + ", " + C("sessions") + ", " + C("log") + ", " + C("doctor") + ", dan "
+    + C("balance --dry-run") + ". Park, unpark, refresh token akun parkir, balance, dan login dari halaman diuji di "
+    "sandbox dengan token palsu (" + C("tests/codex_sandbox.py") + ", " + C("tests/api_sandbox.py") + "). Perintah "
+    "umum untuk provider lain baru dites dengan akun API key.",
     "Hitungan token dimulai saat pelacak 1.1.0 pertama kali jalan dan hanya mencakup Hermes di komputer ini. "
     "Disimpan 8 hari dalam blok 15 menit, jadi awal periode dibulatkan ke seperempat jam terdekat. Pembagian per "
     "profil dan model dimulai dengan pelacak 1.3.0; bot memakai pelacak baru setelah gateway atau sesinya di-restart.",
@@ -1336,9 +1419,11 @@ LI(["Pemakaian berasal dari <b>endpoint yang tidak didokumentasikan resmi</b>: "
     + ", Hermes tidak mendaftarkan perintah CLI plugin, jadi " + C("hermes account") + " (termasuk " + C("balance")
     + " dari timer) tidak ada, pelacak tidak mencatat apa pun, dan backend halaman Accounts berjalan di plugin host, yang belum "
     "diuji.",
-    C("add") + " dan " + C("relogin") + " butuh terminal atau halaman Accounts untuk menempel kode login atau "
-    "mengetik key; tanpa itu mereka langsung berhenti. Login Codex dari halaman baru diuji sampai kode perangkat muncul; login Codex penuh belum pernah "
-    "dijalankan.",
+    C("add") + " dan " + C("relogin") + " butuh terminal atau halaman Accounts untuk menampilkan link login, menempel "
+    "kode, atau mengetik key; tanpa itu mereka langsung berhenti.",
+    "Login Codex lewat browser butuh browser di komputer yang menjalankan Hermes (atau halaman Accounts, yang "
+    "menerima alamat yang ditempel). OpenAI hanya menerima " + C("http://localhost:1455/auth/callback") + " sebagai "
+    "alamat kembali untuk client Codex, jadi port-nya tidak bisa diganti.",
     "Halaman Accounts mengikuti SDK desktop plugin Hermes versi Hermes Agent 0.21.5. Perubahan SDK di masa depan bisa "
     "merusak halaman; perintahnya tidak terpengaruh.",
     "Timer hanya untuk Linux dengan systemd. Perintahnya sendiri jalan di mana pun Hermes jalan."])
@@ -1375,6 +1460,12 @@ table([
 H1("19. Riwayat versi")
 table([
     ["Versi", "Perubahan"],
+    ["3.10.2", "Akun Codex dari workspace ChatGPT Business dan Enterprise bisa ditambahkan: " + C("add")
+     + " dan " + C("relogin") + " untuk " + C("openai-codex") + " login lewat browser (kembali ke "
+     + C("localhost:1455") + "), " + C("--device") + " untuk kode perangkat. Halaman Accounts menawarkan keduanya, "
+     "menerima alamat yang ditempel bila browser di komputer lain, dan kembali ke langkah pertama bila login ditolak. "
+     "Login tidak bisa selesai dua kali; " + C("doctor") + " tidak lagi menulis " + C("-0 min ago") + ". Tes baru "
+     + C("tests/codex_sandbox.py") + " untuk semua fitur Codex."],
     ["3.10.1", "Dipasang dari repo ini, bukan dari katalog plugin Hermes; perilaku tidak berubah. Plugin tetap "
      "mengurus login sendiri (park, usage live, cek email, login di halaman Accounts), jadi tidak memenuhi aturan "
      "katalog 11. Dokumentasi: alasan tidak masuk katalog, instalasi dengan " + C("install.sh") + " atau "

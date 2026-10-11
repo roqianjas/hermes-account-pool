@@ -1712,7 +1712,7 @@ def _doctor_checks(provider: str) -> list:
     if hist is None:
         pass
     elif hist:
-        age = (time.time() - hist[-1]["ts"]) / 60
+        age = max(0.0, (time.time() - hist[-1]["ts"]) / 60)      # a run that just wrote it: not "-0"
         add("ok" if age < 15 else "warn", f"usage history last written {age:.0f} min ago")
     else:
         add("warn", "no usage history in the last hour (report needs the timer running)")
@@ -1788,12 +1788,66 @@ def _cmd_doctor(args) -> int:
     return 1 if fails else 0
 
 
-def _signin_needs_tty(provider: str, action: str, target: str, key: bool = False) -> bool:
-    """True (after saying why) when a sign-in cannot run here: the code or the key is pasted in a terminal.
-    `--yes` does not change that, so cron, the gateway and an agent's shell get an answer instead of a hang."""
+def _codex_browser_signin() -> bool:
+    """True when this Hermes can sign in to OpenAI Codex in the browser (`hermes auth add openai-codex --browser`)."""
+    import importlib.util
+    try:
+        return importlib.util.find_spec("hermes_cli.auth_codex_browser") is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def _signin_method(provider: str, args) -> str:
+    """How `hermes auth add` signs in: "code" (paste a code), "browser" or "device" (openai-codex).
+
+    Codex signs in through the browser by default: ChatGPT Business and Enterprise workspaces turn
+    device codes off, and the browser sign-in works with or without them. --device picks the device
+    code; Hermes before 0.21.6 knows only that one."""
+    if provider != "openai-codex":
+        if getattr(args, "device", False):
+            raise SystemExit("--device is only for openai-codex. Nothing changed.")
+        return "code"
+    if getattr(args, "device", False) or not _codex_browser_signin():
+        return "device"
+    return "browser"
+
+
+def _signin_cmd(provider: str, label: str, method: str) -> list:
+    cmd = [_hermes_bin(), "auth", "add", provider, "--type", "oauth", "--label", label]
+    if method == "browser":
+        cmd += ["--browser", "--no-browser"]     # print the link: the user picks the browser profile
+    return cmd
+
+
+def _signin_steps(provider: str, label: str, method: str) -> None:
+    if method == "browser":
+        _p("  1. Open the sign-in link in a browser ON THIS COMPUTER that is signed in to ChatGPT as THIS")
+        _p("     account: its own Chrome profile, or a private / incognito window.")
+        _p("  2. Pick the workspace and authorize. The browser then opens a localhost:1455 page that says")
+        _p("     \"authorization received\", and the sign-in finishes here by itself.")
+        _p("     Browser on another computer? Use the Accounts page in Hermes Desktop (it takes the")
+        _p("     address the browser ends on), or sign in with a code: add --device.")
+    elif method == "device":
+        _p("  1. Open https://auth.openai.com/codex/device in a browser signed in to ChatGPT as THIS account.")
+        _p("  2. Enter the code shown below and authorize. The sign-in finishes here by itself.")
+        _p("     \"Contact your workspace admin to enable device code authentication\": the ChatGPT")
+        _p("     workspace turned device codes off. Sign in without --device instead.")
+    else:
+        _p("  1. Open the sign-in link in a browser that is signed in as THIS account:")
+        _p("     its own Chrome profile, or a private / incognito window.")
+        _p(f"  2. Make sure the page says: Logged in as {label}  (otherwise: Switch account)")
+        _p("     \"Sign in again to continue\" is normal when that browser login is old.")
+        _p("  3. Authorize, then paste the code back here.")
+
+
+def _signin_needs_tty(provider: str, action: str, target: str, key: bool = False, method: str = "code") -> bool:
+    """True (after saying why) when a sign-in cannot run here: the link is shown and the code or the key
+    is pasted in a terminal. `--yes` does not change that, so cron, the gateway and an agent's shell get
+    an answer instead of a hang."""
     if _tty():
         return False
-    what = "the API key is typed" if key else "the authorization code is pasted"
+    what = ("the API key is typed" if key else "the authorization code is pasted" if method == "code"
+            else "the sign-in link is shown")
     _p(f"{action} needs a terminal: {what} there. Nothing changed.")
     _p(f"Run it in a terminal: hermes account {provider} {action} {target}{' --key' if key else ''}")
     if not key and providers.get(provider).has_web_signin and _oauth_provider(provider):
@@ -1867,15 +1921,12 @@ def _accept_relogin(provider: str, label: str, old_id: str, old_priority: int, f
 def _cmd_relogin(args) -> int:
     provider = _norm(args.provider)
     label, old_id, old_priority = _relogin_target(provider, args.target)
-    if _signin_needs_tty(provider, "relogin", label):
+    method = _signin_method(provider, args)
+    if _signin_needs_tty(provider, "relogin", label, method=method):
         return 1
     verify = providers.get(provider).has_identity
     _p(f"Re-login {label} ({provider}, id={old_id})")
-    _p("  1. Open the sign-in link in a browser that is signed in as THIS account:")
-    _p("     its own Chrome profile, or a private / incognito window.")
-    _p(f"  2. Make sure the page says: Logged in as {label}  (otherwise: Switch account)")
-    _p("     \"Sign in again to continue\" is normal when that browser login is old.")
-    _p("  3. Authorize, then paste the code back here.")
+    _signin_steps(provider, label, method)
     _p("The old entry is replaced only if the new sign-in really is that account."
           if verify else
           f"NOTE: {provider} has no identity adapter, so the account cannot be verified. Sign in carefully.")
@@ -1883,7 +1934,7 @@ def _cmd_relogin(args) -> int:
         _p("Cancelled. Nothing changed.")
         return 1
     before = {e.id for e in _pool(provider).entries()}
-    rc = _signin([_hermes_bin(), "auth", "add", provider, "--type", "oauth", "--label", label], provider, before)
+    rc = _signin(_signin_cmd(provider, label, method), provider, before)
     if rc is None:
         _p("The old entry is unchanged.")
         return 130
@@ -2819,18 +2870,15 @@ def _cmd_add(args) -> int:
     entries = _pool(provider).entries()
 
     use_key = bool(args.key) or not _oauth_provider(provider)
-    if _signin_needs_tty(provider, "add", label, key=use_key):
+    method = "key" if use_key else _signin_method(provider, args)
+    if _signin_needs_tty(provider, "add", label, key=use_key, method=method):
         return 1
     verify = providers.get(provider).has_identity and not use_key
     _p(f"Add {label} to {provider}")
     if use_key:
         _p("  You will be asked for the API key (input is hidden).")
     else:
-        _p("  1. Open the sign-in link in a browser that is signed in as THIS account:")
-        _p("     its own Chrome profile, or a private / incognito window.")
-        _p(f"  2. Make sure the page says: Logged in as {label}  (otherwise: Switch account)")
-        _p("     \"Sign in again to continue\" is normal when that browser login is old.")
-        _p("  3. Authorize, then paste the code back here.")
+        _signin_steps(provider, label, method)
         _p("  The account is kept only if the sign-in really is that account and not a duplicate."
               if verify else
               f"  NOTE: {provider} has no identity adapter, so the account cannot be verified.")
@@ -2842,7 +2890,8 @@ def _cmd_add(args) -> int:
     if use_key and _in_root():
         rc = _add_key_in_process(provider, label)
     else:
-        cmd = [_hermes_bin(), "auth", "add", provider, "--type", "api-key" if use_key else "oauth", "--label", label]
+        cmd = ([_hermes_bin(), "auth", "add", provider, "--type", "api-key", "--label", label] if use_key
+               else _signin_cmd(provider, label, method))
         rc = _signin(cmd, provider, before)
     if rc is None:
         return 130
@@ -3170,7 +3219,7 @@ ACTIONS = [
     ("unpark", "<target>", "Return a parked account to rotation"),
     ("schedule", "[<target> --every SPEC]", 'Park on a weekly schedule; SPEC = "mon-fri 09:00-17:00"'),
     ("unschedule", "<target>", "Remove an account's park schedule"),
-    ("relogin", "<target> [--yes]", "Sign an account in again, verified, same label and position"),
+    ("relogin", "<target> [--device] [--yes]", "Sign an account in again, verified, same label and position"),
     ("balance", "[--dry-run] [--threshold N]", "Order by usage, bench >= N% (90), auto-recover, alerts"),
     ("strategy", "[<name>] [--only P,...]", "Hermes' rotation strategy per profile; set it (balance needs fill_first)"),
     ("doctor", "", "Check the whole setup: strategy, timer, files, pools, alerts"),
@@ -3189,6 +3238,7 @@ HELP = "\n".join([
     *[f"  {a:10s} {arg:28s} {d}" for a, arg, d in ACTIONS],
     "",
     "Targets: account label (email), list number, or id. unpark accepts label or id.",
+    "openai-codex add/relogin sign in through the browser on this computer; --device: with a device code.",
     "",
     "Examples:",
     "  hermes account anthropic add carol@example.com",
@@ -3306,6 +3356,8 @@ def _setup(parser) -> None:
     parser.add_argument("--minutes", type=float, default=None, help="who: activity window (default 30)")
     parser.add_argument("--yes", action="store_true", help="add/remove/relogin/strategy/setup: skip the confirmation prompt")
     parser.add_argument("--key", action="store_true", help="add: add an API key instead of a sign-in")
+    parser.add_argument("--device", action="store_true",
+                        help="add/relogin (openai-codex): sign in with a device code instead of the browser")
     parser.add_argument("--every", default=None, help='schedule: days and hours, e.g. "mon-fri 09:00-17:00"')
     parser.add_argument("--chart", action="store_true", help="report: load by hour for the last 7 days")
     parser.add_argument("--only", default=None, help="strategy: only these profiles (comma-separated)")

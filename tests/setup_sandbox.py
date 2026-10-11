@@ -237,6 +237,11 @@ rc, text = run(core._cmd_add, target="carol@example.com", yes=True, key=True)
 check(rc == 1 and "the API key is typed" in text and "add carol@example.com --key" in text, "add --key without a terminal: refused")
 rc, text = run(core._cmd_relogin, target="alice@example.com", yes=True)
 check(rc == 1 and "relogin needs a terminal" in text, "relogin --yes without a terminal: refused")
+rc, text = run(core._cmd_add, provider="openai-codex", target="cara@example.com", yes=True)
+check(rc == 1 and "add needs a terminal: the sign-in link is shown there" in text
+      and "hermes account openai-codex add cara@example.com" in text, "codex add without a terminal: refused")
+rc, text = run(core._cmd_add, target="dora@example.com", yes=True, device=True)
+check(rc == 1 and "--device is only for openai-codex" in text, "--device refused for anthropic")
 rc, text = run(core._cmd_remove, target="bob@example.com")
 check(rc == 1 and "no terminal to answer, so no" in text and len(load_pool("anthropic").entries()) == 2,
       "remove without --yes and without a terminal: answered no at once")
@@ -245,6 +250,42 @@ real_input = builtins.input
 builtins.input = lambda prompt="": "y"
 try:
     check(core._confirm("Delete it?", False) is True, "with a terminal the prompt is asked")
+
+    # codex add / relogin from the terminal: Hermes' browser sign-in by default, --device on request
+    CMDS = []
+    SIGNED = {}
+
+    def fake_signin(cmd, provider, before):
+        CMDS.append(cmd)
+        label = cmd[cmd.index("--label") + 1]
+        tok = f"cx-{len(CMDS)}"
+        SIGNED[tok] = label
+        load_pool(provider).add_entry(PooledCredential(
+            provider=provider, id=f"cx{len(CMDS):04d}", label=label, auth_type="oauth", priority=0,
+            source="manual:loopback_pkce", access_token=tok, refresh_token="rt"))
+        return 0
+
+    core._signin = fake_signin
+    core._identity = lambda provider, entry: SIGNED.get(entry.access_token)
+    core._has_usage = lambda provider: False
+    rc, text = run(core._cmd_add, provider="openai-codex", target="cara@example.com", yes=True)
+    check(rc == 0 and CMDS[-1][-4:] == ["--label", "cara@example.com", "--browser", "--no-browser"]
+          and "ON THIS COMPUTER" in text and "paste the code" not in text,
+          "codex add: Hermes' browser sign-in, link printed, no pasted code")
+    rc, text = run(core._cmd_add, provider="openai-codex", target="dan@example.com", yes=True, device=True)
+    check(rc == 0 and CMDS[-1][-2:] == ["--label", "dan@example.com"] and "codex/device" in text,
+          "codex add --device: the device code sign-in")
+    rc, text = run(core._cmd_relogin, provider="openai-codex", target="cara@example.com", yes=True)
+    labels = [e.label for e in sorted(load_pool("openai-codex").entries(), key=lambda e: e.priority)]
+    check(rc == 0 and "--browser" in CMDS[-1] and labels == ["cara@example.com", "dan@example.com"],
+          "codex relogin: browser sign-in, same label and position")
+    real_spec = core._codex_browser_signin
+    core._codex_browser_signin = lambda: False
+    rc, text = run(core._cmd_add, provider="openai-codex", target="eve@example.com", yes=True)
+    check(rc == 0 and "--browser" not in CMDS[-1] and "codex/device" in text,
+          "codex add on a Hermes without the browser sign-in: device code")
+    core._codex_browser_signin = real_spec
+    print(f"info - this Hermes has the Codex browser sign-in: {core._codex_browser_signin()}")
 finally:
     builtins.input = real_input
 

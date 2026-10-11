@@ -12,7 +12,7 @@ Bug reports, fixes and adapters for more providers are welcome. This page covers
 | `plugins/account-pool/desktop/plugin.js` | The Accounts page in Hermes Desktop (one ES module, no build step) |
 | `plugins/account-pool/dashboard/plugin_api.py` | The page's backend: FastAPI routes under `/api/plugins/account-pool/` |
 | `plugins/account-pool/dashboard/manifest.json` | Tells Hermes to mount `plugin_api.py`; `dist/index.js` is a stub for the browser dashboard |
-| `tests/api_sandbox.py`, `tests/profile_backend.py`, `tests/tokens_sandbox.py`, `tests/features_sandbox.py`, `tests/insights_sandbox.py`, `tests/setup_sandbox.py`, `tests/ui/` | Backend tests in a sandbox (actions and sign-in; backend launched under a profile; token counting; the tracker check, tokens per session, bot alerts, the activity log and the forecast; tokens per bot and model, API prices, the hour chart, the daily summary and park schedules; `setup` and the refusals without a terminal), and the page in jsdom |
+| `tests/api_sandbox.py`, `tests/profile_backend.py`, `tests/tokens_sandbox.py`, `tests/features_sandbox.py`, `tests/insights_sandbox.py`, `tests/setup_sandbox.py`, `tests/codex_sandbox.py`, `tests/ui/` | Backend tests in a sandbox (actions and the page's sign-ins, Codex browser and device code included; backend launched under a profile; token counting; the tracker check, tokens per session, bot alerts, the activity log and the forecast; tokens per bot and model, API prices, the hour chart, the daily summary and park schedules; `setup`, the terminal's Codex sign-in and the refusals without a terminal; Codex identity, usage, park, parked-token refresh and balance), and the page in jsdom |
 | `tests/ui/fixture_api.py`, `tests/ui/screenshots.mjs` | A backend that answers from `tests/ui/fixtures.json`, and the script that takes `docs/screenshots/` from a Hermes Desktop running it |
 | `plugins/account-pool-tracker/` | The `post_api_request` hook behind `who`, with its own `README.md` |
 | `install.sh`, `uninstall.sh` | Install and remove from a git checkout. `install.sh` copies the plugins and runs `hermes account <provider> setup --yes`; the systemd units are written by `setup` (`_write_timer`) |
@@ -40,6 +40,21 @@ class MyProvider(Adapter):
         """Refresh a PARKED OAuth account's expired access token.
         Return {"access_token", "refresh_token", "expires_at_ms"}, or None."""
 
+    # Sign-in from the Accounts page (optional). signin_methods lists the methods, default first.
+    signin_methods = ("code",)
+
+    def signin_start(self, method=None):
+        """Start a sign-in: {"kind": "code" | "device" | "browser", "url", "user_code"?,
+        "listening"?, "state": dict kept by the page's backend, never sent to the page}."""
+
+    def signin_step(self, state, code=""):
+        """The login result `hermes auth add <provider>` stores, or None while a device or browser
+        sign-in is still waiting. Raise ValueError with a message for the user when it failed; set
+        state["used"] = True first when the sign-in cannot be finished any more."""
+
+    def signin_close(self, state):
+        """Free what a started sign-in holds (a callback listener). Called on cancel, expiry and finish."""
+
 
 ADAPTERS = {a.name: a for a in (Anthropic(), OpenAICodex(), MyProvider())}
 ```
@@ -51,6 +66,7 @@ Implement only what the provider allows. Methods you leave out stay off: `has_us
 | `usage` | `usage`, `report`, usage-based `balance`, the "every account above N%" alert |
 | `identity` | real-email column in `check`, verification in `add` and `relogin` |
 | `refresh_parked` | live usage for parked OAuth accounts whose token expired |
+| `signin_start`, `signin_step` (and `signin_close` for a listener) | **Add account** and **Sign in again** on the Accounts page. The result must have the shape Hermes' own `hermes auth add` login returns, because the core saves it through Hermes' `_OAUTH_ADD_SPECS` |
 
 When a request fails, set `self.last_error = self.explain(err, entry)` before returning `None`, and reset it to `""` at the start of `usage`. `explain()` turns the exception into the reason `usage` prints (`usage endpoint rate-limited, ...`, `sign-in rejected (401)`, `usage endpoint HTTP 500`, `usage endpoint unreachable (...)`). Rate-limited, unreachable and HTTP 5xx reasons count as temporary: the core then falls back to the last value the timer recorded.
 
@@ -105,7 +121,8 @@ Usage needs a real account, so test `usage` and `balance --dry-run` with one, a 
 The page has these tests, none needing a real account:
 
 ```bash
-# backend: fake API-key accounts and a fake sign-in, in a sandbox
+# backend: fake API-key accounts and fake sign-ins, in a sandbox. The Codex browser sign-in
+# listens on a free port for the test, never on the real 1455
 SB=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" hap-sandbox.XXXX)
 HERMES_HOME=$SB ~/.hermes/hermes-agent/venv/bin/python tests/api_sandbox.py
 rm -rf "$SB"
@@ -134,6 +151,12 @@ rm -rf "$SB"
 # `hermes plugins enable` are replaced by recorders, the units go to $SB/xdg)
 SB=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" hap-sandbox.XXXX)
 HERMES_HOME=$SB ~/.hermes/hermes-agent/venv/bin/python tests/setup_sandbox.py
+rm -rf "$SB"
+
+# openai-codex: identity, check, usage, park/unpark, parked-token refresh, balance, doctor
+# (own sandbox; fake ChatGPT tokens and a fake usage endpoint, nothing reaches OpenAI)
+SB=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" hap-sandbox.XXXX)
+HERMES_HOME=$SB ~/.hermes/hermes-agent/venv/bin/python tests/codex_sandbox.py
 rm -rf "$SB"
 
 # the page in jsdom, every tab, dialog and button, answered from tests/ui/fixtures.json

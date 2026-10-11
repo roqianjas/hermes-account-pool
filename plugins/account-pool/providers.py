@@ -13,11 +13,14 @@ Hermes credential pool. Anything that needs a provider's own API lives here:
     refresh_parked(record) -> new token fields for a PARKED OAuth account whose
                               access token expired (pool accounts are refreshed
                               by Hermes itself)
-    signin_start()         -> start a sign-in the desktop page can finish without
+    signin_start(method)   -> start a sign-in the desktop page can finish without
     signin_step(state, code)  a terminal: "code" (paste the code shown after
-                              authorizing) or "device" (enter a code on the
-                              provider's page, then the page waits). Returns the
-                              login result Hermes' own `auth add` stores
+    signin_close(state)       authorizing), "device" (enter a code on the
+                              provider's page, then the page waits) or "browser"
+                              (the provider sends the browser back to a listener
+                              on this computer). Returns the login result Hermes'
+                              own `auth add` stores. `signin_methods` lists the
+                              methods, the first one is the default
 
 `entry` is a Hermes PooledCredential, or any object with `access_token`,
 `auth_type` and `expires_at_ms`. Every method may return None ("not available");
@@ -30,7 +33,12 @@ instance to ADAPTERS. See CONTRIBUTING.md.
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
+import html
 import json
+import secrets
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -44,6 +52,7 @@ class Adapter:
     window_seconds = None         # length of the window `reset` ends, when it is fixed (tokens per window)
     oauth_only = True             # only OAuth entries carry account-level data
     last_error = ""               # why the last usage() returned None (shown next to "n/a")
+    signin_methods = ()           # page sign-in methods, the first is the default
 
     def identity(self, entry):
         return None
@@ -66,15 +75,20 @@ class Adapter:
     def refresh_parked(self, record: dict):
         return None
 
-    def signin_start(self):
-        """{"kind": "code" | "device", "url", "user_code"?, "state": private dict kept by the server}."""
+    def signin_start(self, method=None):
+        """{"kind": "code" | "device" | "browser", "url", "user_code"?, "listening"?,
+        "state": private dict kept by the server}."""
         return None
 
     def signin_step(self, state: dict, code: str = ""):
-        """Login result (as `hermes auth add` gets it), or None while a device sign-in is pending.
+        """Login result (as `hermes auth add` gets it), or None while a device or browser sign-in is pending.
 
         Raises ValueError with a message for the user when the sign-in failed.
         """
+        return None
+
+    def signin_close(self, state: dict) -> None:
+        """Free what a started sign-in holds (the browser method's callback listener). Safe to call twice."""
         return None
 
     @property
@@ -121,6 +135,7 @@ class Anthropic(Adapter):
     window_short = "5h"
     window_seconds = 5 * 3600
     base = "https://api.anthropic.com"
+    signin_methods = ("code",)
 
     def _get(self, entry, path: str) -> dict:
         # Same headers as Hermes' own usage fetcher (agent/account_usage.py). Without a client
@@ -175,8 +190,7 @@ class Anthropic(Adapter):
 
     # Same PKCE flow as Hermes' run_hermes_oauth_login_pure(), split in two steps so a page can
     # show the link and take the pasted code (the CLI version reads it with input()).
-    def signin_start(self):
-        import secrets
+    def signin_start(self, method=None):
         from urllib.parse import urlencode
         from agent import anthropic_credentials as ac
         verifier, challenge = ac._generate_pkce()
@@ -274,21 +288,165 @@ class OpenAICodex(Adapter):
             out["last_refresh"] = new["last_refresh"]
         return out
 
-    # Same device-code flow as Hermes' _codex_device_code_login(), but each signin_step() checks
-    # once instead of blocking, so the page polls and the user can cancel at any time.
+    # Two sign-ins, both ending in the login result Hermes' `auth add openai-codex` stores:
+    # - "browser" (default): authorization code + PKCE, OpenAI sends the browser back to
+    #   http://localhost:1455/auth/callback, the only redirect it accepts for the Codex client (as
+    #   Hermes' `auth add openai-codex --browser`). Works for ChatGPT workspaces that turned device
+    #   codes off. When the browser runs on another computer, or the port is taken, the user pastes
+    #   the address the browser was sent to.
+    # - "device": as Hermes' _codex_device_code_login(), but each signin_step() checks once instead
+    #   of blocking, so the page polls and the user can cancel at any time.
     issuer = "https://auth.openai.com"
+    signin_methods = ("browser", "device")
+    callback_port = 1455
+    callback_path = "/auth/callback"
+    listen_seconds = 15 * 60
 
-    def signin_start(self):
+    def signin_start(self, method=None):
+        method = method or self.signin_methods[0]
+        if method == "browser":
+            return self._browser_start()
+        if method != "device":
+            raise ValueError(f"Unknown sign-in method {method!r}.")
         from hermes_cli import auth_codex as ac
         d = ac._codex_request_device_code(self.issuer, ac.CODEX_OAUTH_CLIENT_ID)
         return {"kind": "device", "url": f"{self.issuer}/codex/device", "user_code": d["user_code"],
-                "state": {"device_auth_id": d["device_auth_id"], "user_code": d["user_code"],
+                "state": {"method": "device", "device_auth_id": d["device_auth_id"], "user_code": d["user_code"],
                           "interval": max(3.0, float(d.get("interval") or 5)), "last": 0.0}}
 
+    def _browser_start(self):
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        from urllib.parse import parse_qs, urlencode, urlparse
+        from hermes_cli import auth_codex as ac
+        verifier = base64.urlsafe_b64encode(secrets.token_bytes(64)).decode().rstrip("=")[:128]
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+        nonce = secrets.token_urlsafe(32)
+        got: dict = {}
+        path = self.callback_path
+
+        class Callback(BaseHTTPRequestHandler):
+            def do_GET(self):
+                url = urlparse(self.path)
+                if url.path != path:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                q = {k: v[0] for k, v in parse_qs(url.query).items()}
+                ours = hmac.compare_digest(str(q.get("state") or ""), nonce)
+                if ours and not got:
+                    got.update(q)
+                if not ours:
+                    title, text = "Not this sign-in", "This link was not opened from the Hermes window that is waiting."
+                elif q.get("error"):
+                    title, text = "OpenAI Codex sign-in failed", str(q.get("error_description") or q["error"])
+                else:
+                    title, text = "Signed in to OpenAI Codex", "Go back to Hermes: the window there finishes by itself."
+                body = (f"<!doctype html><meta charset=utf-8><title>{html.escape(title)}</title>"
+                        f"<body style='font-family:sans-serif;margin:3em'><h2>{html.escape(title)}</h2>"
+                        f"<p>{html.escape(text)}</p><p>You can close this tab.</p></body>").encode()
+                self.send_response(200 if ours else 400)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                return
+
+        class Server(HTTPServer):
+            allow_reuse_address = True
+
+        try:
+            server = Server(("127.0.0.1", self.callback_port), Callback)
+        except OSError:
+            server = None
+        port = server.server_address[1] if server else self.callback_port
+        redirect = f"http://localhost:{port}{path}"
+        state = {"method": "browser", "verifier": verifier, "state": nonce, "redirect_uri": redirect,
+                 "got": got, "server": server, "used": False}
+        if server:
+            threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.2}, daemon=True).start()
+            timer = threading.Timer(self.listen_seconds, self.signin_close, args=(state,))
+            timer.daemon = True
+            timer.start()
+        url = f"{self.issuer}/oauth/authorize?" + urlencode({
+            "response_type": "code", "client_id": ac.CODEX_OAUTH_CLIENT_ID, "redirect_uri": redirect,
+            "scope": "openid profile email offline_access", "code_challenge": challenge,
+            "code_challenge_method": "S256", "id_token_add_organizations": "true", "state": nonce})
+        return {"kind": "browser", "url": url, "listening": server is not None, "state": state}
+
+    def signin_close(self, state: dict) -> None:
+        server = state.pop("server", None) if isinstance(state, dict) else None
+        if server is not None:
+            server.shutdown()
+            server.server_close()
+
     def signin_step(self, state: dict, code: str = ""):
+        if state.get("method") == "browser":
+            return self._browser_step(state, code)
+        return self._device_step(state)
+
+    def _browser_step(self, state: dict, pasted: str = ""):
+        from urllib.parse import parse_qs
+        if state.get("used"):
+            raise ValueError("This sign-in already ended. Start again.")
+        pasted = (pasted or "").strip()
+        if pasted:
+            query = pasted.split("?", 1)[1] if "?" in pasted else pasted
+            q = {k: v[0] for k, v in parse_qs(query.split("#", 1)[0]).items()}
+            if not q.get("code") and not q.get("error"):
+                raise ValueError("Paste the whole address from the browser's address bar: it starts with "
+                                 f"http://localhost:{self.callback_port}{self.callback_path}?code=")
+            if not hmac.compare_digest(str(q.get("state") or ""), state["state"]):
+                raise ValueError("This address belongs to another sign-in. Open the link from this window.")
+        elif state["got"]:
+            q = dict(state["got"])
+        else:
+            return None
+        state["used"] = True
+        self.signin_close(state)
+        if q.get("error"):
+            raise ValueError(f"OpenAI refused the sign-in: {q.get('error_description') or q['error']}. Start again.")
+        try:
+            tokens = self._exchange(q["code"], state["redirect_uri"], state["verifier"])
+        except Exception as x:
+            raise ValueError(f"Token exchange failed: {str(x)[:200] or type(x).__name__}. "
+                             "A sign-in link works once and only for a few minutes: start again.") from None
+        return self._login_result(tokens, "loopback_pkce")
+
+    def _exchange(self, code: str, redirect_uri: str, verifier: str) -> dict:
+        try:
+            from hermes_cli.auth_codex_browser import _codex_browser_exchange_code
+        except ImportError:                       # Hermes without its own browser sign-in
+            _codex_browser_exchange_code = None
+        if _codex_browser_exchange_code is not None:
+            return _codex_browser_exchange_code(code, redirect_uri=redirect_uri, code_verifier=verifier)
         import httpx
         from hermes_cli import auth_codex as ac
+        client = getattr(ac, "_codex_http_client", None) or httpx.Client
+        with client(timeout=httpx.Timeout(15.0)) as http:
+            r = http.post(f"{self.issuer}/oauth/token", data={
+                "grant_type": "authorization_code", "code": code, "redirect_uri": redirect_uri,
+                "client_id": ac.CODEX_OAUTH_CLIENT_ID, "code_verifier": verifier},
+                headers={"Content-Type": "application/x-www-form-urlencoded"})
+        if r.status_code != 200:
+            raise RuntimeError(f"HTTP {r.status_code}")
+        tokens = r.json()
+        if not tokens.get("access_token"):
+            raise RuntimeError("no access token in the answer")
+        return tokens
+
+    def _login_result(self, tokens: dict, source: str) -> dict:
+        from hermes_cli import auth_codex as ac
         from hermes_cli.auth import _utc_now_z
+        return {"tokens": {"access_token": tokens.get("access_token", ""),
+                           "refresh_token": tokens.get("refresh_token", "")},
+                "base_url": ac._codex_base_url(), "last_refresh": _utc_now_z(), "auth_mode": "chatgpt",
+                "source": source}
+
+    def _device_step(self, state: dict):
+        import httpx
+        from hermes_cli import auth_codex as ac
         if time.time() - state["last"] < state["interval"]:
             return None
         state["last"] = time.time()
@@ -301,16 +459,14 @@ class OpenAICodex(Adapter):
             raise ValueError(f"Could not reach the sign-in service ({type(x).__name__}).") from None
         if r.status_code in (403, 404):            # not finished yet
             return None
+        state["used"] = True                       # the device code is spent either way
         if r.status_code != 200:
             raise ValueError(f"The sign-in check answered HTTP {r.status_code}. Start again.")
         try:
             tokens = ac._codex_exchange_authorization_code(self.issuer, ac.CODEX_OAUTH_CLIENT_ID, r.json())
         except Exception as x:
             raise ValueError(f"Token exchange failed: {x}") from None
-        return {"tokens": {"access_token": tokens.get("access_token", ""),
-                           "refresh_token": tokens.get("refresh_token", "")},
-                "base_url": ac._codex_base_url(), "last_refresh": _utc_now_z(), "auth_mode": "chatgpt",
-                "source": "device-code"}
+        return self._login_result(tokens, "device-code")
 
 
 ADAPTERS: dict[str, Adapter] = {a.name: a for a in (Anthropic(), OpenAICodex())}

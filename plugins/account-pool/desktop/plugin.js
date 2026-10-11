@@ -224,7 +224,8 @@ const CSS = `
 .hap-muted{color:var(--ui-text-tertiary)}
 .hap-small{font-size:.6875rem}
 .hap-field{display:flex;flex-direction:column;gap:6px;margin-top:10px;font-size:.75rem}
-.hap-steps{margin:0;padding-left:18px;font-size:.75rem;line-height:1.5;color:var(--ui-text-secondary)}
+.hap-steps{margin:0;padding-left:18px;font-size:.75rem;line-height:1.5;color:var(--ui-text-secondary);list-style:decimal}
+.hap-steps li{margin:3px 0;padding-left:2px}
 .hap-steps b{color:var(--ui-text-primary);font-weight:600}
 .hap-code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:1.3rem;letter-spacing:.14em;font-weight:600;color:var(--ui-text-primary)}
 .hap-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
@@ -446,22 +447,42 @@ function ScheduleDialog({ provider, row, current, onClose, onDone }) {
   valid ? null : h('span', { className: 'hap-small', style: { color: 'var(--ui-orange)' } }, 'Pick at least one day and two different times (HH:MM).'))
 }
 
-function SignInDialog({ provider, mode, row, verify, onClose }) {
+const SIGNIN_METHODS = {
+  browser: {
+    label: 'Browser on this computer',
+    note: 'OpenAI sends the browser back to Hermes on this computer. Works for ChatGPT Business and Enterprise workspaces too.'
+  },
+  device: {
+    label: 'Device code',
+    note: 'Enter a code on OpenAI\'s page. ChatGPT Business and Enterprise workspaces often turn this off.'
+  }
+}
+
+function SignInDialog({ provider, mode, row, verify, methods, onClose }) {
   const invalidate = useInvalidate()
+  const choices = (methods || []).filter(m => SIGNIN_METHODS[m])
+  const [method, setMethod] = useState(choices[0] || null)
   const [email, setEmail] = useState('')
   const [flow, setFlow] = useState(null)
   const [code, setCode] = useState('')
-  const [phase, setPhase] = useState('intro')      // intro | starting | code | device | finishing | done | rejected
+  const [phase, setPhase] = useState('intro')      // intro | starting | code | device | browser | finishing | done | rejected
   const [error, setError] = useState('')
   const [output, setOutput] = useState('')
   const label = mode === 'add' ? email.trim() : row.label
   const finished = phase === 'done' || phase === 'rejected'
+  const kind = flow ? flow.kind : (method === 'browser' || method === 'device' ? method : 'code')
 
   const handle = r => {
     if (r.status === 'pending') return
     if (r.status === 'error') {
       setError(r.message)
-      setPhase(flow && flow.kind === 'device' ? 'device' : 'code')
+      if (r.final) {                                 // the flow is gone on the server: start again
+        setFlow(null)
+        setCode('')
+        setPhase('intro')
+      } else {
+        setPhase(kind === 'code' ? 'code' : kind)
+      }
       return
     }
     setOutput(r.output || '')
@@ -473,9 +494,12 @@ function SignInDialog({ provider, mode, row, verify, onClose }) {
     setError('')
     setPhase('starting')
     try {
-      const r = await post('/signin/start', { provider, mode, target: mode === 'add' ? label : row.id })
+      const body = { provider, mode, target: mode === 'add' ? label : row.id }
+      if (method) body.method = method
+      const r = await post('/signin/start', body)
       setFlow(r)
-      setPhase(r.kind === 'device' ? 'device' : 'code')
+      setCode('')
+      setPhase(r.kind === 'device' || r.kind === 'browser' ? r.kind : 'code')
     } catch (e) {
       setError(errText(e))
       setPhase('intro')
@@ -483,18 +507,19 @@ function SignInDialog({ provider, mode, row, verify, onClose }) {
   }
 
   const finish = async () => {
+    const back = kind === 'browser' ? 'browser' : 'code'
     setError('')
     setPhase('finishing')
     try {
       handle(await post('/signin/step', { flow: flow.flow, code: code.trim() }))
     } catch (e) {
       setError(errText(e))
-      setPhase('code')
+      setPhase(back)
     }
   }
 
   useEffect(() => {
-    if (phase !== 'device' || !flow) return undefined
+    if ((phase !== 'device' && phase !== 'browser') || !flow) return undefined
     let stop = false
     const t = setInterval(async () => {
       try {
@@ -503,7 +528,7 @@ function SignInDialog({ provider, mode, row, verify, onClose }) {
       } catch (e) {
         if (!stop) setError(errText(e))
       }
-    }, 4000)
+    }, phase === 'browser' ? 2000 : 4000)
     return () => {
       stop = true
       clearInterval(t)
@@ -515,19 +540,35 @@ function SignInDialog({ provider, mode, row, verify, onClose }) {
     onClose()
   }
 
+  const who = h('b', null, label || 'this account')
   const title = mode === 'add' ? 'Add account' : `Sign in again: ${row.label}`
-  const steps = flow && flow.kind === 'device'
+  const steps = kind === 'device'
     ? h('ol', { className: 'hap-steps' },
-      h('li', null, 'Open the page below in a browser that is signed in as ', h('b', null, label),
+      h('li', null, 'Open the page below in a browser that is signed in as ', who,
         ' (its own browser profile, or a private window).'),
-      h('li', null, 'Enter this code:'),
+      h('li', null, 'Enter the code shown here and authorize.'),
       h('li', null, 'This window finishes by itself once you confirm.'))
-    : h('ol', { className: 'hap-steps' },
-      h('li', null, 'Open the sign-in link in a browser that is signed in as ', h('b', null, label || 'this account'),
-        ': its own browser profile, or a private window. Copy the link for that.'),
-      h('li', null, 'Check that the page says ', h('b', null, `Logged in as ${label || '…'}`),
-        '. "Sign in again to continue" is normal when that browser login is old.'),
-      h('li', null, 'Authorize, copy the code and paste it here.'))
+    : kind === 'browser'
+      ? h('ol', { className: 'hap-steps' },
+        h('li', null, 'Open the sign-in link in a browser on this computer that is signed in to ChatGPT as ', who,
+          ': its own browser profile, or a private window. Copy the link for that.'),
+        h('li', null, 'Pick the workspace and authorize. The browser lands on a localhost:1455 page that says ',
+          h('b', null, 'authorization received'), ', and this window finishes by itself.'),
+        h('li', null, 'Browser on another computer? Its last page does not load. Copy the whole address it ended on ',
+          '(it starts with http://localhost:1455/auth/callback?code=) and paste it here.'))
+      : h('ol', { className: 'hap-steps' },
+        h('li', null, 'Open the sign-in link in a browser that is signed in as ', who,
+          ': its own browser profile, or a private window. Copy the link for that.'),
+        h('li', null, 'Check that the page says ', h('b', null, `Logged in as ${label || '…'}`),
+          '. "Sign in again to continue" is normal when that browser login is old.'),
+        h('li', null, 'Authorize, copy the code and paste it here.'))
+
+  const linkRow = text => h('div', { className: 'hap-field' },
+    h('div', { className: 'hap-row' },
+      h(CopyButton, { text: flow.url, label: text, showLabel: true, buttonSize: 'sm', buttonVariant: 'outline' }),
+      h(Button, { size: 'sm', variant: 'ghost', onClick: () => openExternal(flow.url) },
+        h(Codicon, { name: 'link-external', size: '0.8rem' }), 'Open in default browser')),
+    flow.kind === 'device' ? null : h('div', { className: 'hap-link' }, flow.url))
 
   let body
   if (phase === 'intro' || phase === 'starting') {
@@ -541,6 +582,16 @@ function SignInDialog({ provider, mode, row, verify, onClose }) {
             onKeyDown: e => e.key === 'Enter' && label && start()
           }))
         : null,
+      choices.length > 1
+        ? h('div', { className: 'hap-field', 'data-field': 'method' },
+          h('span', null, 'Sign in with'),
+          h(SegmentedControl, {
+            options: choices.map(m => ({ id: m, label: SIGNIN_METHODS[m].label })),
+            value: method,
+            onChange: v => { setMethod(v); setError('') }
+          }),
+          h('span', { className: 'hap-small hap-muted' }, SIGNIN_METHODS[method].note))
+        : null,
       h('div', { className: 'hap-field' }, steps),
       h('p', { className: 'hap-small hap-muted', style: { marginTop: 10 } },
         verify
@@ -548,15 +599,26 @@ function SignInDialog({ provider, mode, row, verify, onClose }) {
             ? 'The account is kept only if the sign-in really is this email and not one already in the pool.'
             : 'The old login is replaced only if the new sign-in really is this account. Its place in the order stays.')
           : 'This provider cannot report the account email, so the sign-in is not verified.'))
+  } else if (kind === 'browser' && (phase === 'browser' || phase === 'finishing')) {
+    body = h(Fragment, null,
+      h('div', { className: 'hap-field' }, steps),
+      linkRow('Copy link'),
+      flow.listening === false
+        ? h('div', { className: 'hap-banner', style: { marginBottom: 10 } }, h(Codicon, { name: 'info' }),
+          h('span', null, 'Port 1455 on this computer is taken (another Codex sign-in is waiting, maybe in a terminal), ',
+            'so this window cannot hear the browser. Paste the address the browser ends on.'))
+        : h('div', { className: 'hap-row hap-muted' }, h(Loader, { type: 'lemniscate-bloom' }), 'Waiting for the browser…'),
+      h('div', { className: 'hap-field' },
+        h('span', null, 'Address the browser ended on (only when it is on another computer)'),
+        h(Input, {
+          value: code, placeholder: 'http://localhost:1455/auth/callback?code=…',
+          onChange: e => setCode(e.target.value),
+          onKeyDown: e => e.key === 'Enter' && code.trim() && finish()
+        })))
   } else if (phase === 'code' || phase === 'finishing') {
     body = h(Fragment, null,
       h('div', { className: 'hap-field' }, steps),
-      h('div', { className: 'hap-field' },
-        h('div', { className: 'hap-row' },
-          h(CopyButton, { text: flow.url, label: 'Copy link', showLabel: true, buttonSize: 'sm', buttonVariant: 'outline' }),
-          h(Button, { size: 'sm', variant: 'ghost', onClick: () => openExternal(flow.url) },
-            h(Codicon, { name: 'link-external', size: '0.8rem' }), 'Open in default browser')),
-        h('div', { className: 'hap-link' }, flow.url)),
+      linkRow('Copy link'),
       h('div', { className: 'hap-field' },
         h('span', null, 'Code'),
         h(Input, {
@@ -575,7 +637,12 @@ function SignInDialog({ provider, mode, row, verify, onClose }) {
           h(CopyButton, { text: flow.url, label: 'Copy page link', showLabel: true, buttonSize: 'sm', buttonVariant: 'outline' }),
           h(Button, { size: 'sm', variant: 'ghost', onClick: () => openExternal(flow.url) },
             h(Codicon, { name: 'link-external', size: '0.8rem' }), 'Open in default browser')),
-        h('div', { className: 'hap-row hap-muted' }, h(Loader, { type: 'lemniscate-bloom' }), 'Waiting for you to confirm…')))
+        h('div', { className: 'hap-row hap-muted' }, h(Loader, { type: 'lemniscate-bloom' }), 'Waiting for you to confirm…')),
+      choices.includes('browser')
+        ? h('p', { className: 'hap-small hap-muted' },
+          '"Contact your workspace admin to enable device code authentication"? The workspace turned device codes off: ',
+          'cancel and sign in with the browser instead.')
+        : null)
   } else {
     body = h(Fragment, null,
       h('div', { className: 'hap-row', style: { marginBottom: 8 } },
@@ -584,6 +651,8 @@ function SignInDialog({ provider, mode, row, verify, onClose }) {
       h('pre', { className: 'hap-pre' }, output || '(no output)'))
   }
 
+  const pasting = phase === 'code' || (phase === 'finishing' && kind === 'code')
+  const browsing = phase === 'browser' || (phase === 'finishing' && kind === 'browser')
   const footer = finished
     ? h(Button, { size: 'sm', onClick: onClose }, 'Close')
     : h(Fragment, null,
@@ -591,7 +660,7 @@ function SignInDialog({ provider, mode, row, verify, onClose }) {
       phase === 'intro' || phase === 'starting'
         ? h(Button, { size: 'sm', disabled: phase === 'starting' || !label, onClick: start },
           phase === 'starting' ? 'Starting…' : 'Start sign-in')
-        : phase === 'code' || phase === 'finishing'
+        : pasting || browsing
           ? h(Button, { size: 'sm', disabled: phase === 'finishing' || !code.trim(), onClick: finish },
             phase === 'finishing' ? 'Checking…' : 'Finish')
           : null)
@@ -1218,7 +1287,9 @@ function AccountsPage() {
         }
       })
     } else if (dialog.type === 'add' || dialog.type === 'relogin') {
-      modal = h(SignInDialog, { provider, mode: dialog.type, row: dialog.row, verify: data.has_identity, onClose: close })
+      modal = h(SignInDialog, {
+        provider, mode: dialog.type, row: dialog.row, verify: data.has_identity, methods: data.signin_methods, onClose: close
+      })
     } else if (dialog.type === 'result') {
       modal = h(ResultDialog, { title: dialog.title, text: dialog.text, onClose: close })
     }
