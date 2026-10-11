@@ -16,7 +16,7 @@ from reportlab.platypus import (CondPageBreak, Image, KeepTogether, PageBreak, P
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 from reportlab.platypus.tableofcontents import TableOfContents
 
-VERSION = "3.10.3"
+VERSION = "3.10.4"
 REPO = "github.com/roqianjas/hermes-account-pool"
 FOOTER = f"Hermes plugin account-pool {VERSION} · {REPO}"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hermes-account-pool.pdf")
@@ -1487,6 +1487,8 @@ table([
 H1("19. Riwayat versi")
 table([
     ["Versi", "Perubahan"],
+    ["3.10.4", "Unit timer dan perintah yang dijalankan plugin memakai " + C("hermes") + " yang Anda pasang ("
+     + C("~/.local/bin/hermes") + "), bukan launcher internal di dalam " + C("~/.hermes") + "."],
     ["3.10.3", "Timer menyeimbangkan semua provider yang punya akun (" + C("hermes account all balance") + "), jadi "
      "akun Codex atau provider lain yang ditambahkan belakangan ikut tanpa " + C("setup") + " kedua. Ringkasan "
      "harian tidak dikirim untuk provider yang diam seharian. " + C("install.sh --help") + " tidak lagi mencetak "

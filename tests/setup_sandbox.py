@@ -140,6 +140,20 @@ check(len([a for a in acts if a["kind"] == "setup"]) == 9 and all(a["by"] == "cl
 rc, text = run(core._cmd_setup, yes=True)
 check(rc == 0 and "Nothing to change." in text and "active in 4 of 4 profile(s)" in text, "a second run changes nothing")
 
+# ── which hermes the unit runs: the one the user installed, not Hermes' internal launcher ──
+import tempfile  # noqa: E402
+OUT = Path(tempfile.mkdtemp(dir=SB.parent, prefix="hap-bin-"))
+for d in (SB / "launcher", OUT):
+    d.mkdir(exist_ok=True)
+    (d / "hermes").write_text("#!/bin/sh\n")
+    (d / "hermes").chmod(0o755)
+real_path = os.environ["PATH"]
+os.environ["PATH"] = f"{SB / 'launcher'}{os.pathsep}{OUT}{os.pathsep}{real_path}"
+check(core._hermes_bin() == str(OUT / "hermes"), "the timer runs the hermes outside the Hermes home, even when the internal one is first on PATH")
+os.environ["PATH"] = real_path
+shutil.rmtree(OUT)
+shutil.rmtree(SB / "launcher")
+
 # ── --timer ──────────────────────────────────────────────────────────────────
 POOL = ["anthropic"]                      # the providers with accounts, as _pool_providers() reads them
 real_pool_providers = core._pool_providers

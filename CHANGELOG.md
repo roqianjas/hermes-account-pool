@@ -2,6 +2,10 @@
 
 All releases of the `account-pool` plugin and its session tracker `account-pool-tracker` (now 1.5.0).
 
+## 3.10.4
+
+- The timer unit and the commands the plugin starts (`hermes auth add`, `hermes send`, `hermes config set`, ...) use the `hermes` command you installed (`~/.local/bin/hermes`, or any other outside the Hermes home). While Hermes runs, its internal launcher inside `~/.hermes` comes first on `PATH`, so `setup --timer` wrote that path into the unit; Hermes' installer keeps `~/.local/bin/hermes` up to date across updates, not units that point inside its own folder.
+
 ## 3.10.3
 
 The balance timer covers every provider with accounts, so a Codex account (or any other provider) added later is balanced without a second `setup`.

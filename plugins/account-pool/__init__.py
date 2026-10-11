@@ -160,7 +160,21 @@ def _root() -> Path:
 
 
 def _hermes_bin() -> str:
-    return shutil.which("hermes") or str(Path.home() / ".local/bin/hermes")
+    """The `hermes` command for the timer unit and for child commands. While Hermes runs, its own launcher
+    directory inside ~/.hermes comes first on PATH; that launcher is Hermes' internal layout. Prefer the command
+    the user installed (~/.local/bin/hermes, or any other outside the Hermes home), which Hermes' installer keeps
+    pointing at the right place across updates."""
+    inside = {Path.home() / ".hermes", _root()}
+    found = []
+    for d in os.environ.get("PATH", "").split(os.pathsep):
+        p = shutil.which("hermes", path=d) if d else None
+        if p and p not in found:
+            found.append(p)
+    for p in found:
+        if not any(Path(p).absolute().is_relative_to(h.absolute()) for h in inside):
+            return p
+    local = Path.home() / ".local/bin/hermes"
+    return str(local) if local.exists() or not found else found[0]
 
 
 def _hermes_env() -> dict:
