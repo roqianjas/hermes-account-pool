@@ -11,6 +11,7 @@ Every command follows one pattern:
     hermes account <provider> unpark <target>  put a parked account back into rotation
     hermes account <provider> balance          order accounts by live usage, bench nearly-full ones
     hermes account <provider> who|report|relogin|doctor|notify   (see `hermes account help`)
+    hermes account <provider> setup            profiles, tracker and timer after a catalog install
     hermes account help | hermes account <provider> help
 
 `balance` is meant to run on a timer with `credential_pool_strategies.<provider>:
@@ -35,6 +36,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from collections import Counter, defaultdict
@@ -1421,9 +1423,13 @@ STRATEGY_TEXT = {
 
 
 def _set_strategy(home: Path, provider: str, value: str) -> None:
-    """Write credential_pool_strategies.<provider> into one profile's config.yaml with Hermes' own writer
-    (`hermes config set`), so the file keeps Hermes' format and checks. Raises RuntimeError on failure."""
-    key = f"credential_pool_strategies.{provider}"
+    """Write credential_pool_strategies.<provider> into one profile's config.yaml. Raises RuntimeError on failure."""
+    _set_config_value(home, f"credential_pool_strategies.{provider}", value)
+
+
+def _set_config_value(home: Path, key: str, value: str) -> None:
+    """Write one key into one profile's config.yaml with Hermes' own writer (`hermes config set`), so the
+    file keeps Hermes' format and checks. Raises RuntimeError on failure."""
     try:
         from hermes_cli.config import set_config_value
         from hermes_constants import reset_hermes_home_override, set_hermes_home_override
@@ -1639,7 +1645,7 @@ def _doctor_checks(provider: str) -> list:
             missing.append(name)
     add("ok" if not missing else "warn",
         "session tracker active in every profile" if not missing else
-        f"session tracker missing in: {', '.join(missing)} (`who` will not show them)")
+        f"session tracker missing in: {', '.join(missing)} (`who` will not show them). Fix: hermes account {provider} setup")
 
     # processes that loaded the tracker before its last update
     tr = _tracker_status(provider)
@@ -1671,7 +1677,7 @@ def _doctor_checks(provider: str) -> list:
         add("ok" if not missing else "warn",
             "Accounts page backend enabled in every profile" if not missing else
             f"Accounts page backend not enabled in: {', '.join(missing)} (Hermes Desktop shows "
-            "'backend did not answer' while it runs one of them). Fix: run install.sh again")
+            f"'backend did not answer' while it runs one of them). Fix: hermes account {provider} setup")
 
     # file permissions
     for path in (root / "auth.json", root / "account-pool-parked.json"):
@@ -1687,7 +1693,7 @@ def _doctor_checks(provider: str) -> list:
             raise RuntimeError(timer["error"])
         active = timer["active"]
         if not active:
-            add("fail", "balance timer is NOT active. Fix: systemctl --user enable --now hermes-account-balance.timer")
+            add("fail", f"balance timer is NOT active. Fix: hermes account {provider} setup --timer")
         elif timer["result"] != "success" and not timer["running"]:
             add("fail", f"balance timer active but the last run failed ({timer['result']}). "
                         f"See: journalctl --user -u hermes-account-balance.service -n 20")
@@ -1697,9 +1703,7 @@ def _doctor_checks(provider: str) -> list:
                                capture_output=True, text=True, timeout=10).stdout
         if active and not re.search(rf"account\s+{re.escape(provider)}\s+balance", execs):
             add("warn", f"the balance timer does not run {provider} (timed unparks, cooldown recovery and alerts "
-                        f"for {provider} wait for a manual balance). Fix: ./install.sh --provider {provider} "
-                        f"(repeat --provider for each one), or add an ExecStart line: "
-                        f"{_hermes_bin()} account {provider} balance")
+                        f"for {provider} wait for a manual balance). Fix: hermes account {provider} setup --timer")
     except Exception as x:
         add("warn", f"could not query systemd: {x}")
 
@@ -1784,6 +1788,19 @@ def _cmd_doctor(args) -> int:
     return 1 if fails else 0
 
 
+def _signin_needs_tty(provider: str, action: str, target: str, key: bool = False) -> bool:
+    """True (after saying why) when a sign-in cannot run here: the code or the key is pasted in a terminal.
+    `--yes` does not change that, so cron, the gateway and an agent's shell get an answer instead of a hang."""
+    if _tty():
+        return False
+    what = "the API key is typed" if key else "the authorization code is pasted"
+    _p(f"{action} needs a terminal: {what} there. Nothing changed.")
+    _p(f"Run it in a terminal: hermes account {provider} {action} {target}{' --key' if key else ''}")
+    if not key and providers.get(provider).has_web_signin and _oauth_provider(provider):
+        _p("Or use Add account / Sign in again on the Accounts page in Hermes Desktop.")
+    return True
+
+
 def _signin(cmd, provider: str, before: set):
     """Run a `hermes auth add` child. Returns its exit code, or None when the user pressed Ctrl+C.
 
@@ -1850,6 +1867,8 @@ def _accept_relogin(provider: str, label: str, old_id: str, old_priority: int, f
 def _cmd_relogin(args) -> int:
     provider = _norm(args.provider)
     label, old_id, old_priority = _relogin_target(provider, args.target)
+    if _signin_needs_tty(provider, "relogin", label):
+        return 1
     verify = providers.get(provider).has_identity
     _p(f"Re-login {label} ({provider}, id={old_id})")
     _p("  1. Open the sign-in link in a browser that is signed in as THIS account:")
@@ -1860,14 +1879,9 @@ def _cmd_relogin(args) -> int:
     _p("The old entry is replaced only if the new sign-in really is that account."
           if verify else
           f"NOTE: {provider} has no identity adapter, so the account cannot be verified. Sign in carefully.")
-    if not args.yes:
-        try:
-            answer = input("Continue? [y/N] ").strip().lower()
-        except EOFError:
-            answer = ""
-        if answer not in ("y", "yes"):
-            _p("Cancelled. Nothing changed.")
-            return 1
+    if not _confirm("Continue?", args.yes):
+        _p("Cancelled. Nothing changed.")
+        return 1
     before = {e.id for e in _pool(provider).entries()}
     rc = _signin([_hermes_bin(), "auth", "add", provider, "--type", "oauth", "--label", label], provider, before)
     if rc is None:
@@ -2663,9 +2677,21 @@ def _find_parked(provider: str, target: str):
                  and t in (str(p.get("id", "")).lower(), str(p.get("label") or "").lower())), None)
 
 
+def _tty() -> bool:
+    try:
+        return sys.stdin.isatty()
+    except (AttributeError, ValueError, OSError):
+        return False
+
+
 def _confirm(question: str, yes: bool) -> bool:
+    """yes/no prompt. Without a terminal (cron, the gateway, an agent's shell) it answers no at once
+    instead of waiting for input nobody can give."""
     if yes:
         return True
+    if not _tty():
+        _p(f"{question} [y/N] no terminal to answer, so no. Add --yes to confirm without a prompt.")
+        return False
     try:
         return input(f"{question} [y/N] ").strip().lower() in ("y", "yes")
     except EOFError:
@@ -2793,6 +2819,8 @@ def _cmd_add(args) -> int:
     entries = _pool(provider).entries()
 
     use_key = bool(args.key) or not _oauth_provider(provider)
+    if _signin_needs_tty(provider, "add", label, key=use_key):
+        return 1
     verify = providers.get(provider).has_identity and not use_key
     _p(f"Add {label} to {provider}")
     if use_key:
@@ -2881,6 +2909,251 @@ def _cmd_remove(args) -> int:
     return 0
 
 
+# ── setup: what a catalog install leaves out ────────────────────────────────
+
+UNIT_NAME = "hermes-account-balance"
+
+
+def _unit_dir() -> Path:
+    return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "systemd" / "user"
+
+
+def _systemctl(*args: str) -> None:
+    """`systemctl --user <args>`; RuntimeError with its message on failure."""
+    r = subprocess.run(["systemctl", "--user", *args], capture_output=True, text=True, timeout=60)
+    if r.returncode:
+        raise RuntimeError((r.stderr or r.stdout).strip() or f"systemctl --user {' '.join(args)}: exit {r.returncode}")
+
+
+def _run_hermes(profile: str, *args: str) -> None:
+    """`hermes [-p <profile>] <args>` against the shared root; RuntimeError with its last line on failure."""
+    cmd = [_hermes_bin()] + ([] if profile == "default" else ["-p", profile]) + list(args)
+    r = subprocess.run(cmd, env=_hermes_env(), capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL)
+    if r.returncode:
+        lines = [ln for ln in (r.stderr + "\n" + r.stdout).splitlines() if ln.strip()]
+        raise RuntimeError(lines[-1] if lines else f"exit code {r.returncode}")
+
+
+def _plugin_lists(home: Path) -> tuple:
+    """(plugins.enabled, plugins.disabled) of one profile's config.yaml."""
+    import yaml
+    try:
+        cfg = yaml.safe_load((home / "config.yaml").read_text()) or {}
+    except Exception:
+        cfg = {}
+    plugins = cfg.get("plugins") if isinstance(cfg, dict) else None
+    plugins = plugins if isinstance(plugins, dict) else {}
+
+    def names(v):
+        return [str(x) for x in v] if isinstance(v, list) else []
+    return names(plugins.get("enabled")), names(plugins.get("disabled"))
+
+
+def _set_enabled(home: Path, name: str, on: bool) -> None:
+    """Add or remove one name in plugins.enabled, read fresh so another change in between is kept."""
+    enabled = _plugin_lists(home)[0]
+    new = (enabled + [name]) if on else [n for n in enabled if n != name]
+    if new != enabled:
+        _set_config_value(home, "plugins.enabled", json.dumps(new))
+
+
+def _timer_lines() -> dict:
+    """{provider: its ExecStart line} of the installed balance service, in order (empty without the unit file).
+    Lines are kept as written, so options added by hand (--threshold 85) survive a rewrite."""
+    try:
+        text = (_unit_dir() / f"{UNIT_NAME}.service").read_text()
+    except OSError:
+        return {}
+    return {m.group(1): m.group(0) for m in re.finditer(r"^ExecStart=.*?\baccount\s+(\S+)\s+balance\b.*$", text, re.M)}
+
+
+def _timer_providers() -> list:
+    return list(_timer_lines())
+
+
+def _write_timer(provs: list) -> None:
+    """Write the balance service (one ExecStart per provider, run in order) and, when missing, its 5-minute
+    timer. An existing timer file is left alone (its interval may have been changed by hand)."""
+    d = _unit_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    root = _root()
+    keep = _timer_lines()
+    env = "" if root.resolve() == (Path.home() / ".hermes").resolve() else f"Environment=HERMES_HOME={root}\n"
+    execs = "".join((keep.get(p) or f"ExecStart={_hermes_bin()} account {p} balance") + "\n" for p in provs)
+    (d / f"{UNIT_NAME}.service").write_text(
+        f"[Unit]\nDescription=Hermes account pool: balance {' '.join(provs)} accounts by live usage\n\n"
+        f"[Service]\nType=oneshot\n{env}{execs}TimeoutStartSec={120 * len(provs)}\n")
+    timer = d / f"{UNIT_NAME}.timer"
+    if not timer.exists():
+        timer.write_text(
+            "[Unit]\nDescription=Run hermes account balance every 5 minutes\n\n[Timer]\nOnBootSec=2min\n"
+            "OnUnitActiveSec=5min\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n")
+
+
+def _timer_on(provs: list) -> None:
+    _write_timer(provs)
+    _systemctl("daemon-reload")
+    _systemctl("enable", "--now", f"{UNIT_NAME}.timer")
+    _systemctl("start", "--no-block", f"{UNIT_NAME}.service")       # first run now, in the background
+
+
+def _timer_drop(provider: str, provs: list) -> None:
+    rest = [p for p in provs if p != provider]
+    if rest:
+        _write_timer(rest)
+        _systemctl("daemon-reload")
+        return
+    try:
+        _systemctl("disable", "--now", f"{UNIT_NAME}.timer")
+    except RuntimeError:
+        pass                                    # already off: the files still go
+    for suffix in ("service", "timer"):
+        (_unit_dir() / f"{UNIT_NAME}.{suffix}").unlink(missing_ok=True)
+    _systemctl("daemon-reload")
+
+
+def _link_tracker(link: Path, target: Path) -> None:
+    link.parent.mkdir(parents=True, exist_ok=True)
+    if link.is_symlink() and not link.exists():  # dangling link from an older install
+        link.unlink()
+    link.symlink_to(target)
+
+
+def _cmd_setup(args) -> int:
+    """Set up what a catalog install leaves out (install.sh does the same after copying the plugins):
+    the Accounts page backend and the session tracker in every profile; with --timer the balance timer,
+    with --strategy fill_first. --undo takes the profile and timer parts back. Shows the plan first."""
+    provider = _norm(args.provider)
+    undo, want_timer, want_strategy = (bool(getattr(args, k, False)) for k in ("undo", "timer", "strategy"))
+    if undo and (want_timer or want_strategy):
+        _p("--undo cannot be combined with --timer or --strategy.")
+        return 2
+    root = _root()
+    homes = _profile_homes()
+    named = homes[1:]
+    home_of = dict(homes)
+    lists = {name: _plugin_lists(home) for name, home in homes}
+    tracker = root / "plugins" / "account-pool-tracker"
+    status, changes = [], []
+
+    def change(text, fn):
+        changes.append((text, fn))
+
+    if undo:
+        linked = [n for n, h in named if (h / "plugins" / "account-pool-tracker").is_symlink()
+                  and (h / "plugins" / "account-pool-tracker").resolve() == tracker.resolve()]
+        for n in linked:
+            link = home_of[n] / "plugins" / "account-pool-tracker"
+            change(f"remove the session tracker from {n} (plugins.enabled and the link {link})",
+                   lambda n=n, link=link: (_set_enabled(home_of[n], "account-pool-tracker", False), link.unlink()))
+        listed = [n for n, _ in named if "account-pool" in lists[n][0]]
+        for n in listed:
+            change(f"unlist account-pool from plugins.enabled of {n}",
+                   lambda n=n: _set_enabled(home_of[n], "account-pool", False))
+        provs = _timer_providers()
+        if provider in provs:
+            rest = [p for p in provs if p != provider]
+            change(f"take {provider} out of the balance timer (it keeps running {', '.join(rest)})" if rest else
+                   f"remove the balance timer ({_unit_dir()}/{UNIT_NAME}.service and .timer)",
+                   lambda: _timer_drop(provider, provs))
+        status.append(("Session tracker", f"linked into {len(linked)} profile(s)"))
+        status.append(("Accounts page", f"listed in {len(listed)} profile(s)"))
+        status.append(("Balance timer", f"runs {', '.join(provs)}" if provs else "not installed"))
+    else:
+        # Accounts page: Hermes Desktop mounts the backend only for profiles that list the plugin
+        off = [n for n, _ in named if "account-pool" in lists[n][1]]
+        unlisted = [n for n, _ in named if "account-pool" not in lists[n][0] and n not in off]
+        if named:
+            status.append(("Accounts page", f"backend listed in {len(named) - len(unlisted) - len(off)} of {len(named)} "
+                           f"other profile(s)" + (f"; skipped, in plugins.disabled: {', '.join(off)}" if off else "")))
+        for n in unlisted:
+            change(f"list account-pool in plugins.enabled of {n} (Hermes Desktop serves the page's backend from there; "
+                   f"the profile gets no command and no tools)", lambda n=n: _set_enabled(home_of[n], "account-pool", True))
+        # session tracker: one copy in the default profile, linked into every other profile
+        if not (tracker / "plugin.yaml").is_file():
+            status.append(("Session tracker", "not installed, so `who`, tokens and sessions stay empty. Install it, "
+                           "then run setup again: hermes plugins install account-pool-tracker"))
+        else:
+            ver = (re.search(r"^version:\s*['\"]?([\w.]+)", (tracker / "plugin.yaml").read_text(), re.M) or [None, "?"])[1]
+            todo = 0
+            if "account-pool-tracker" not in lists["default"][0]:
+                todo += 1
+                change("enable the session tracker in the default profile (hermes plugins enable account-pool-tracker)",
+                       lambda: _run_hermes("default", "plugins", "enable", "account-pool-tracker"))
+            for n, h in named:
+                link = h / "plugins" / "account-pool-tracker"
+                need_link = not link.exists()
+                need_on = "account-pool-tracker" not in lists[n][0]
+                if need_link:
+                    change(f"link the session tracker into {n} ({link} -> {tracker})",
+                           lambda link=link: _link_tracker(link, tracker))
+                if need_on:
+                    note = " (it is in plugins.disabled there now)" if "account-pool-tracker" in lists[n][1] else ""
+                    change(f"enable the session tracker in {n}{note} (hermes -p {n} plugins enable account-pool-tracker)",
+                           lambda n=n: _run_hermes(n, "plugins", "enable", "account-pool-tracker"))
+                todo += bool(need_link or need_on)
+            status.append(("Session tracker", f"{ver}, active in {len(homes) - todo} of {len(homes)} profile(s)"))
+        # balance timer (opt-in: a background job every 5 minutes)
+        provs, active = _timer_providers(), _timer_active()
+        state = (f"runs {', '.join(provs)}, {'active' if active else 'NOT active'}" if provs else
+                 "active, but not from this setup (no unit file found)" if active else "not installed")
+        if want_timer and not shutil.which("systemctl"):
+            status.append(("Balance timer", f"systemd not found: run `hermes account {provider} balance` every few "
+                           "minutes some other way (cron)"))
+        elif want_timer and provider not in provs:
+            new = provs + [provider]
+            change(f"{'add ' + provider + ' to' if provs else 'install'} the balance timer: systemd user units in "
+                   f"{_unit_dir()}, every 5 minutes runs: {'; '.join('hermes account ' + p + ' balance' for p in new)}",
+                   lambda: _timer_on(new))
+        elif want_timer and not active:
+            change("start the balance timer (systemctl --user enable --now)", lambda: _timer_on(provs))
+        if not want_timer and provider not in provs:
+            state += f"; add --timer to run `hermes account {provider} balance` every 5 minutes"
+        status.append(("Balance timer", state))
+        # rotation strategy: Hermes' setting, written only on request
+        rows = _strategies(provider)
+        bad = [n for n, v in rows if v and v.strip().lower() != "fill_first"]
+        if want_strategy and bad:
+            change(f"set credential_pool_strategies.{provider}: fill_first in {', '.join(bad)} (balance needs it)",
+                   lambda: [_set_strategy(home_of[n], provider, "fill_first") for n in bad])
+        status.append(("Rotation", f"fill_first in all {len(rows)} profile(s)" if not bad else
+                       f"not fill_first in {', '.join(bad)}" + ("" if want_strategy else "; add --strategy to set it")))
+
+    _p(f"[{provider}] {'Undo setup' if undo else 'Setup'}: the default profile and {len(named)} other profile(s) in {root}")
+    for name, text in status:
+        _p(f"  {name:16s} {text}")
+    if not changes:
+        _p("Nothing to change." + ("" if undo else f" Check the whole setup with: hermes account {provider} doctor"))
+        return 0
+    _p("Changes:")
+    for text, _ in changes:
+        _p(f"  - {text}")
+    if not _confirm("Apply these changes?", getattr(args, "yes", False)):
+        _p("Nothing changed.")
+        return 1
+    failed = 0
+    for text, fn in changes:
+        try:
+            fn()
+            _p(f"  done: {text}")
+            _log(provider, "setup", text[0].upper() + text[1:] + ".")
+        except Exception as x:  # noqa: BLE001  (report each step, keep going)
+            failed += 1
+            _p(f"  FAILED: {text}: {x}")
+    if undo:
+        _p("Kept: account-pool and account-pool-tracker in the default profile (remove them with "
+           "`hermes plugins remove <name>`), the accounts, parked accounts, settings and data files, "
+           "and credential_pool_strategies.")
+        parked = [it.get("label") or it.get("id") for it in _read_parked() if it.get("_provider") == provider]
+        if parked:
+            _p(f"{len(parked)} {provider} account(s) are parked and stay out of rotation: {', '.join(map(str, parked))}. "
+               f"Unpark them before you remove the plugin, or their logins stay in account-pool-parked.json only.")
+    else:
+        _p("Running sessions load the tracker after /reset; the gateway after `hermes gateway restart`; "
+           "Hermes Desktop after a restart (also needed for the Accounts page in newly listed profiles).")
+    return 1 if failed else 0
+
+
 # ── registration ─────────────────────────────────────────────────────────────
 
 ACTIONS = [
@@ -2901,6 +3174,7 @@ ACTIONS = [
     ("balance", "[--dry-run] [--threshold N]", "Order by usage, bench >= N% (90), auto-recover, alerts"),
     ("strategy", "[<name>] [--only P,...]", "Hermes' rotation strategy per profile; set it (balance needs fill_first)"),
     ("doctor", "", "Check the whole setup: strategy, timer, files, pools, alerts"),
+    ("setup", "[--timer] [--strategy] [--undo]", "Profiles, tracker and (--timer) the balance timer; shows the plan first"),
     ("notify", "[status|test|summary|...]", "Alert channels (desktop, Telegram) and the daily summary"),
     ("help", "", "Show this help"),
 ]
@@ -2929,6 +3203,7 @@ HELP = "\n".join([
     "  hermes account anthropic notify daily=08:00",
     "  hermes account anthropic strategy",
     "  hermes account anthropic doctor",
+    "  hermes account anthropic setup --timer",
     "  hermes account anthropic notify test",
     "",
     "Every provider in the credential pool: list, check, add, remove, park, unpark, schedule, relogin, who, sessions,",
@@ -2945,14 +3220,16 @@ def _print_help(_args=None) -> int:
 HANDLERS = {"add": _cmd_add, "remove": _cmd_remove, "list": _cmd_list, "check": _cmd_check, "usage": _cmd_usage, "who": _cmd_who,
             "report": _cmd_report, "park": _cmd_park, "unpark": _cmd_unpark, "relogin": _cmd_relogin,
             "balance": _cmd_balance, "doctor": _cmd_doctor, "notify": _cmd_notify, "schedule": _cmd_schedule,
-            "unschedule": _cmd_unschedule, "strategy": _cmd_strategy, "sessions": _cmd_sessions, "log": _cmd_log}
+            "unschedule": _cmd_unschedule, "strategy": _cmd_strategy, "sessions": _cmd_sessions, "log": _cmd_log,
+            "setup": _cmd_setup}
 NEEDS_TARGET = {"park", "unpark", "relogin", "add", "remove", "unschedule"}
 OPTIONAL_TARGET = {"notify", "schedule", "strategy"}
 OPTIONS = {"threshold": ("--threshold", {"balance"}), "dry_run": ("--dry-run", {"balance"}),
            "until": ("--until", {"park"}), "hours": ("--hours", {"report", "sessions", "log"}),
-           "minutes": ("--minutes", {"who"}), "yes": ("--yes", {"relogin", "add", "remove", "strategy"}),
+           "minutes": ("--minutes", {"who"}), "yes": ("--yes", {"relogin", "add", "remove", "strategy", "setup"}),
            "key": ("--key", {"add"}), "every": ("--every", {"schedule"}), "chart": ("--chart", {"report"}),
-           "only": ("--only", {"strategy"})}
+           "only": ("--only", {"strategy"}), "timer": ("--timer", {"setup"}), "strategy": ("--strategy", {"setup"}),
+           "undo": ("--undo", {"setup"})}
 
 
 def _dispatch(args) -> int:
@@ -3027,11 +3304,14 @@ def _setup(parser) -> None:
     parser.add_argument("--until", default=None, help="park: return automatically (17:00, +2h, 90m)")
     parser.add_argument("--hours", type=float, default=None, help="report, sessions, log: period in hours (default 24)")
     parser.add_argument("--minutes", type=float, default=None, help="who: activity window (default 30)")
-    parser.add_argument("--yes", action="store_true", help="add/remove/relogin/strategy: skip the confirmation prompt")
+    parser.add_argument("--yes", action="store_true", help="add/remove/relogin/strategy/setup: skip the confirmation prompt")
     parser.add_argument("--key", action="store_true", help="add: add an API key instead of a sign-in")
     parser.add_argument("--every", default=None, help='schedule: days and hours, e.g. "mon-fri 09:00-17:00"')
     parser.add_argument("--chart", action="store_true", help="report: load by hour for the last 7 days")
     parser.add_argument("--only", default=None, help="strategy: only these profiles (comma-separated)")
+    parser.add_argument("--timer", action="store_true", help="setup: install the balance timer (every 5 minutes)")
+    parser.add_argument("--strategy", action="store_true", help="setup: set fill_first in every profile")
+    parser.add_argument("--undo", action="store_true", help="setup: take the profile and timer changes back")
     parser.set_defaults(func=_dispatch)
 
 
@@ -3041,8 +3321,8 @@ def _in_profile() -> bool:
 
 
 def register(ctx) -> None:
-    # The command lives in the default profile only. install.sh also lists account-pool in every
-    # profile's plugins.enabled, so Hermes Desktop mounts the Accounts page backend whichever
+    # The command lives in the default profile only. `setup` (and install.sh) also lists account-pool
+    # in every profile's plugins.enabled, so Hermes Desktop mounts the Accounts page backend whichever
     # profile it runs; if a profile ever loads this plugin, it registers nothing there.
     if _in_profile():
         return

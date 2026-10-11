@@ -12,10 +12,10 @@ Bug reports, fixes and adapters for more providers are welcome. This page covers
 | `plugins/account-pool/desktop/plugin.js` | The Accounts page in Hermes Desktop (one ES module, no build step) |
 | `plugins/account-pool/dashboard/plugin_api.py` | The page's backend: FastAPI routes under `/api/plugins/account-pool/` |
 | `plugins/account-pool/dashboard/manifest.json` | Tells Hermes to mount `plugin_api.py`; `dist/index.js` is a stub for the browser dashboard |
-| `tests/api_sandbox.py`, `tests/profile_backend.py`, `tests/tokens_sandbox.py`, `tests/features_sandbox.py`, `tests/insights_sandbox.py`, `tests/ui/` | Backend tests in a sandbox (actions and sign-in; backend launched under a profile; token counting; the tracker check, tokens per session, bot alerts, the activity log and the forecast; tokens per bot and model, API prices, the hour chart, the daily summary and park schedules), and the page in jsdom |
-| `plugins/account-pool-tracker/` | The `post_api_request` hook behind `who` |
-| `systemd/` | Service and timer templates, filled in by `install.sh` |
-| `install.sh`, `uninstall.sh` | Install and remove everything |
+| `tests/api_sandbox.py`, `tests/profile_backend.py`, `tests/tokens_sandbox.py`, `tests/features_sandbox.py`, `tests/insights_sandbox.py`, `tests/setup_sandbox.py`, `tests/ui/` | Backend tests in a sandbox (actions and sign-in; backend launched under a profile; token counting; the tracker check, tokens per session, bot alerts, the activity log and the forecast; tokens per bot and model, API prices, the hour chart, the daily summary and park schedules; `setup` and the refusals without a terminal), and the page in jsdom |
+| `tests/ui/fixture_api.py`, `tests/ui/screenshots.mjs` | A backend that answers from `tests/ui/fixtures.json`, and the script that takes `docs/screenshots/` from a Hermes Desktop running it |
+| `plugins/account-pool-tracker/` | The `post_api_request` hook behind `who`, with its own `README.md` |
+| `install.sh`, `uninstall.sh` | Install and remove from a git checkout. `install.sh` copies the plugins and runs `hermes account <provider> setup --yes`; the systemd units are written by `setup` (`_write_timer`) |
 | `docs/make_doc.py` | Generates `docs/hermes-account-pool.pdf` (Indonesian guide) |
 
 ## Adding a provider adapter
@@ -73,7 +73,7 @@ Rules for the page:
 1. **No tokens in responses.** Return labels, ids, states and numbers. A sign-in's secret state stays in the backend's `_FLOWS`.
 2. **No provider request on a GET.** Views read files only (pool, parked file, history, sessions). Buttons that call the provider go through a POST and a rate limit: `LIVE_MIN_GAP` for live usage, `NET_MIN_GAP` for balance and check.
 3. **One action at a time.** POST routes that change the pool run inside `_exclusive()`, which also points `HERMES_HOME` at the default root, so every profile sees the shared pool.
-4. **The command stays in the default profile.** `install.sh` lists `account-pool` in every profile's `plugins.enabled`, because Hermes Desktop mounts the page's routes only for plugins enabled in the profile it runs. `register()` returns early in a profile (`_in_profile()`); keep anything you add to `register()` behind that check.
+4. **The command stays in the default profile.** `setup` lists `account-pool` in every profile's `plugins.enabled`, because Hermes Desktop mounts the page's routes only for plugins enabled in the profile it runs. `register()` returns early in a profile (`_in_profile()`); keep anything you add to `register()` behind that check.
 5. **Plain ESM in `plugin.js`.** Import only from `@hermes/plugin-sdk`, `react` and `react/jsx-runtime`, write elements with `createElement`, and style with the desktop's `--ui-*` variables so themes keep working. An identifier that is not imported is a runtime `ReferenceError`; `tests/ui/run.mjs` catches it.
 6. **Use the SDK's controls.** `Select`, `Switch`, `Input`, `Button` and `SegmentedControl` follow the theme. A native `<select>` opens a list that Chromium draws in system colors, white on a dark theme. Reach SDK exports that older Hermes versions lack through `import * as sdk`, with a fallback, so a missing export cannot stop the page from loading. Use `MTip` instead of `Tip` for labels with line breaks: the desktop's tooltip collapses them.
 
@@ -130,13 +130,21 @@ SB=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" hap-sandbox.XXXX)
 HERMES_HOME=$SB ~/.hermes/hermes-agent/venv/bin/python tests/insights_sandbox.py
 rm -rf "$SB"
 
+# setup, setup --undo and the refusals without a terminal (own sandbox; systemctl and
+# `hermes plugins enable` are replaced by recorders, the units go to $SB/xdg)
+SB=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" hap-sandbox.XXXX)
+HERMES_HOME=$SB ~/.hermes/hermes-agent/venv/bin/python tests/setup_sandbox.py
+rm -rf "$SB"
+
 # the page in jsdom, every tab, dialog and button, answered from tests/ui/fixtures.json
 node tests/ui/run.mjs
 ```
 
 `tests/ui/run.mjs` borrows React, jsdom and Testing Library from the `node_modules` of your Hermes Agent checkout (`~/.hermes/hermes-agent`, or set `HERMES_AGENT_DIR`). All of them print one line per check and exit 1 on a failure.
 
-Testing `install.sh` or `uninstall.sh` in a sandbox needs care: `HERMES_HOME` isolates the plugins and configs, but the timer's systemd units live in your real `~/.config/systemd/user`. Run `install.sh --no-timer`, and run `uninstall.sh` only as a copy without its `systemctl` and `~/.config/systemd` lines, or it disables your real timer.
+Testing `install.sh`, `setup --timer` or `uninstall.sh` in a sandbox needs care: `HERMES_HOME` isolates the plugins and configs, but systemd user services do not follow it. Set `XDG_CONFIG_HOME=$SB/xdg` so the unit files go into the sandbox, and run `install.sh --no-timer` and `uninstall.sh` only as a copy without its `systemctl` lines, or they start, stop or disable your real timer. Do not run `hermes plugins enable` or `hermes account ... add` in an empty `HERMES_HOME`: Hermes' first-run bootstrap waits there. Copy a `config.yaml` in first, as `tests/setup_sandbox.py` does.
+
+Screenshots for `docs/screenshots/` come from a second Hermes Desktop with its own `HERMES_HOME`, profile directory and debugging port, showing the fixtures through `tests/ui/fixture_api.py`. The steps are at the top of `tests/ui/screenshots.mjs`. Never take them from your own Hermes: they would show your accounts.
 
 A quick static check before committing:
 
@@ -162,6 +170,7 @@ python3 -m pyflakes plugins/        # if pyflakes is installed
 - [ ] Version bumped in `plugins/account-pool/plugin.yaml` and in `docs/make_doc.py`, with an entry in `CHANGELOG.md`.
 - [ ] README and the PDF updated for user-visible changes.
 - [ ] Tested in a sandbox outside `~/.hermes`; real-account tests named in the description.
-- [ ] For changes to the page or its backend: `tests/api_sandbox.py` and `tests/ui/run.mjs` pass, and the page was checked in Hermes Desktop.
+- [ ] For changes to the page or its backend: `tests/api_sandbox.py` and `tests/ui/run.mjs` pass, and the page was checked in Hermes Desktop. Visible changes: new screenshots with `tests/ui/screenshots.mjs`.
+- [ ] Commands that ask (`[y/N]`) or read input still stop at once without a terminal (catalog rule 12); `tests/setup_sandbox.py` checks it.
 - [ ] No real emails, tokens, hostnames or home paths in code, docs or the PDF (`git grep -nI '@' -- ':!*.pdf'` is a good start).
 - [ ] No state files: `.gitignore` excludes `*.json`, `*.jsonl` and `.env` (except the page's `manifest.json` and the UI test fixtures); keep it that way.

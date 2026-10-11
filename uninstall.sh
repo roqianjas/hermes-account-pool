@@ -16,8 +16,9 @@ if [ -s "$ROOT/account-pool-parked.json" ] && grep -q '"id"' "$ROOT/account-pool
   [ "$a" = y ] || [ "$a" = Y ] || exit 1
 fi
 
+UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 systemctl --user disable --now hermes-account-balance.timer 2>/dev/null || true
-rm -f "$HOME/.config/systemd/user/hermes-account-balance.service" "$HOME/.config/systemd/user/hermes-account-balance.timer"
+rm -f "$UNIT_DIR/hermes-account-balance.service" "$UNIT_DIR/hermes-account-balance.timer"
 systemctl --user daemon-reload 2>/dev/null || true
 echo "timer removed"
 

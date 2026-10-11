@@ -2,7 +2,11 @@
 
 Run several accounts of one provider in [Hermes Agent](https://hermes-agent.nousresearch.com/docs) and manage them from one command, `hermes account`, or from an Accounts page in Hermes Desktop. Add accounts with a verified email, see live usage per account, spread the load before an account runs out, park accounts for a while or on a weekly schedule, see which bot is on which account and how many tokens each bot uses, and get an alert or a daily summary.
 
-Version 3.9.1 · MIT · Hermes Agent ≥ 0.21 · Linux with systemd · Indonesian PDF guide in [`docs/`](docs/hermes-account-pool.pdf)
+Version 3.10.0 · MIT · Hermes Agent ≥ 0.21.5 · Linux with systemd · Indonesian PDF guide in [`docs/`](docs/hermes-account-pool.pdf)
+
+![The Accounts page in Hermes Desktop: eight accounts in rotation with their 5-hour usage, the bots on each account, one parked account, two park schedules and the forecast](docs/screenshots/accounts.png)
+
+More of the page: [Report](docs/screenshots/report.png) · [tokens by session and load by hour](docs/screenshots/sessions.png) · [Activity](docs/screenshots/activity.png) · [Alerts](docs/screenshots/alerts.png) · [Add account](docs/screenshots/add-account.png). All screenshots show made-up accounts from the test fixtures.
 
 ## Contents
 
@@ -19,6 +23,7 @@ Version 3.9.1 · MIT · Hermes Agent ≥ 0.21 · Linux with systemd · Indonesia
 - [The timer](#the-timer)
 - [Providers](#providers)
 - [Files and security](#files-and-security)
+- [Security and privacy disclosure](#security-and-privacy-disclosure)
 - [Troubleshooting](#troubleshooting)
 - [FAQ](#faq)
 - [Limitations](#limitations)
@@ -46,9 +51,9 @@ The plugin changes the pool only through Hermes' own `CredentialPool` API and us
 ## Quick start
 
 ```bash
-git clone https://github.com/roqianjas/hermes-account-pool.git
-cd hermes-account-pool
-./install.sh --set-strategy                      # plugins, fill_first strategy, 5-minute timer
+hermes plugins install account-pool --enable           # the command and the Accounts page
+hermes plugins install account-pool-tracker --enable   # the session tracker
+hermes account anthropic setup --timer --strategy      # every profile, 5-minute timer, fill_first
 
 hermes account anthropic add alice@example.com   # one sign-in per account, verified
 hermes account anthropic add bob@example.com
@@ -56,18 +61,36 @@ hermes account anthropic doctor                  # everything OK?
 hermes account anthropic usage                   # live usage per account
 ```
 
-From then on the timer keeps the pool ordered. Day to day you mostly need `usage`, `who`, `park` and `doctor`. In Hermes Desktop, restart the app once and switch the page on in Capabilities > Plugins to get the same in a page ([Hermes Desktop page](#hermes-desktop-page)).
+The first three lines can also be one script from a git checkout: `./install.sh --set-strategy` (see [Install from git](#install-from-git)). From then on the timer keeps the pool ordered. Day to day you mostly need `usage`, `who`, `park` and `doctor`. In Hermes Desktop, restart the app once and switch the page on in Capabilities > Plugins to get the same in a page ([Hermes Desktop page](#hermes-desktop-page)).
 
 ## Requirements
 
-- Hermes Agent ≥ 0.21 on Linux. The timer needs systemd user services (`systemctl --user`).
+- Hermes Agent ≥ 0.21.5 on Linux. The timer needs systemd user services (`systemctl --user`).
 - Two or more accounts of the same provider. Built-in usage support: Claude Pro / Max / Team (`anthropic`) and ChatGPT Plus / Pro / Team (`openai-codex`). Other providers get the generic commands (see [Providers](#providers)).
 - Optional: `notify-send` (package `libnotify-bin`) for desktop alerts, and a Telegram bot configured in Hermes with `TELEGRAM_ALLOWED_USERS` for Telegram alerts.
 - Optional: Hermes Desktop with desktop plugins, for the Accounts page. Tested with Hermes Agent 0.21.5.
 
 ## Install, update, uninstall
 
-### Install
+A plugin install puts a plugin into one profile. This project needs a little more: the session tracker in every profile (so `who` sees every bot), `account-pool` listed in every profile (so Hermes Desktop can show the page whichever profile it runs) and, if you want it, the timer. `hermes account <provider> setup` does that part, after either way of installing.
+
+### Install from the Hermes plugin catalog
+
+```bash
+hermes plugins install account-pool --enable
+hermes plugins install account-pool-tracker --enable
+hermes account anthropic setup --timer --strategy
+```
+
+Run them in the default profile (without `-p`): the command lives there, and `setup` links the tracker from there into the other profiles. Without the catalog (Hermes then warns that the source is unreviewed), install the same two folders straight from this repository:
+
+```bash
+hermes plugins install roqianjas/hermes-account-pool#plugins/account-pool --enable
+hermes plugins install roqianjas/hermes-account-pool#plugins/account-pool-tracker --enable
+hermes account anthropic setup --timer --strategy
+```
+
+### Install from git
 
 ```bash
 git clone https://github.com/roqianjas/hermes-account-pool.git
@@ -75,14 +98,7 @@ cd hermes-account-pool
 ./install.sh --set-strategy
 ```
 
-`install.sh` does six things:
-
-1. Copies `account-pool` (with the Hermes Desktop page) and `account-pool-tracker` to `$HERMES_HOME/plugins/` (default `~/.hermes/plugins/`) and enables `account-pool` in the **default profile**, where the command lives.
-2. Adds `account-pool` to `plugins.enabled` of every profile under `$HERMES_HOME/profiles/`, for the Accounts page in Hermes Desktop ([why](#why-every-profile-lists-account-pool)). Profiles get no command and no tools from it. A profile with `account-pool` in `plugins.disabled` is skipped.
-3. Symlinks and enables `account-pool-tracker` in every profile, so `who` can see every bot and tokens are counted for every bot.
-4. With `--set-strategy`: sets `credential_pool_strategies.<provider>: fill_first` in the default profile and every other profile. `balance` needs this (see [Concepts](#concepts)).
-5. Installs and starts `hermes-account-balance.timer`, which runs `balance` every 5 minutes, and runs it once right away.
-6. Runs `hermes account <provider> doctor`.
+`install.sh` copies `account-pool` (with the Hermes Desktop page) and `account-pool-tracker` to `$HERMES_HOME/plugins/` (default `~/.hermes/plugins/`), enables `account-pool` in the default profile, runs `hermes account <provider> setup --yes --timer` for each provider (`--strategy` too with `--set-strategy`), then `doctor`.
 
 | Option | Effect |
 |---|---|
@@ -92,7 +108,42 @@ cd hermes-account-pool
 | `--no-timer` | Skip the timer. Run `balance` yourself. |
 | `-h`, `--help` | Show the options. |
 
-A custom `HERMES_HOME` is respected and written into the service unit. Running sessions load the tracker after `/reset` or after a gateway or desktop restart. After an update, `doctor` and the Accounts page name each process that still runs the older tracker. The Accounts page needs two more steps in Hermes Desktop, see [Turn the page on](#turn-the-page-on). A profile created after the install needs `./install.sh` again (or `hermes -p <profile> config set plugins.enabled` with `account-pool` added) before Hermes Desktop can show the page while it runs that profile; `doctor` names such profiles.
+### What setup does
+
+```
+$ hermes account anthropic setup --timer
+[anthropic] Setup: the default profile and 2 other profile(s) in /home/you/.hermes
+  Accounts page    backend listed in 0 of 2 other profile(s)
+  Session tracker  1.5.0, active in 1 of 3 profile(s)
+  Balance timer    not installed
+  Rotation         fill_first in all 3 profile(s)
+Changes:
+  - list account-pool in plugins.enabled of worker-1 (Hermes Desktop serves the page's backend from there; the profile gets no command and no tools)
+  - list account-pool in plugins.enabled of worker-2 (...)
+  - link the session tracker into worker-1 (/home/you/.hermes/profiles/worker-1/plugins/account-pool-tracker -> /home/you/.hermes/plugins/account-pool-tracker)
+  - enable the session tracker in worker-1 (hermes -p worker-1 plugins enable account-pool-tracker)
+  - link the session tracker into worker-2 (...)
+  - enable the session tracker in worker-2 (...)
+  - install the balance timer: systemd user units in /home/you/.config/systemd/user, every 5 minutes runs: hermes account anthropic balance
+Apply these changes? [y/N] y
+  done: list account-pool in plugins.enabled of worker-1 (...)
+  ...
+```
+
+It shows what it found and every change it would make, asks once, then makes them one by one; each one is a line in the [activity log](#log). A second run says `Nothing to change.`
+
+| Part | What setup changes |
+|---|---|
+| Accounts page | Adds `account-pool` to `plugins.enabled` of every profile under `$HERMES_HOME/profiles/` ([why](#why-every-profile-lists-account-pool)). Profiles get no command and no tools from it. A profile with `account-pool` in `plugins.disabled` is skipped and named. |
+| Session tracker | Enables `account-pool-tracker` in the default profile. In every other profile it links `plugins/account-pool-tracker` to the default profile's copy and enables it there with `hermes -p <profile> plugins enable`. One copy means one update for every profile. |
+| `--timer` | Writes `hermes-account-balance.service` and `hermes-account-balance.timer` to `~/.config/systemd/user/`, enables the timer and starts a first run in the background. The service runs `hermes account <provider> balance` every 5 minutes; run `setup --timer` once per provider and each gets its own line. A custom `HERMES_HOME` is written into the service. Options you added to a line by hand (`--threshold 85`) and a changed interval are kept. |
+| `--strategy` | Sets `credential_pool_strategies.<provider>: fill_first` in every profile that has another value. `balance` needs it (see [Concepts](#concepts)). |
+| `--undo` | Removes the tracker links and the `plugins.enabled` entries in the other profiles, and takes the provider out of the timer (the timer goes when no provider is left). It keeps both plugins in the default profile, the accounts, parked accounts, settings, data files and strategies, and names parked accounts that would stay out of rotation. |
+| `--yes` | No question. Without a terminal (cron, an agent's shell) `setup` shows the plan and changes nothing unless `--yes` is given. |
+
+Every config change goes through `hermes config set` or `hermes plugins enable`, so the files keep Hermes' own format and checks. Without the tracker installed, `setup` says how to install it and leaves that part out. On a system without systemd, `--timer` says so; run `balance` some other way (cron).
+
+A custom `HERMES_HOME` is respected. Running sessions load the tracker after `/reset` or after a gateway or desktop restart. After an update, `doctor` and the Accounts page name each process that still runs the older tracker. The Accounts page needs two more steps in Hermes Desktop, see [Turn the page on](#turn-the-page-on). A profile created later needs `setup` again before Hermes Desktop can show the page while it runs that profile; `doctor` names such profiles.
 
 Check the result:
 
@@ -103,21 +154,45 @@ systemctl --user list-timers hermes-account-balance.timer
 
 ### Update
 
+Catalog or repository install:
+
+```bash
+hermes plugins update account-pool
+hermes plugins update account-pool-tracker
+hermes account anthropic setup        # usually "Nothing to change"
+```
+
+Hermes replaces the plugin folder in the default profile. The tracker links in the other profiles point at that folder, so every profile gets the new tracker with one update.
+
+Git install:
+
 ```bash
 cd hermes-account-pool
 git pull
 ./install.sh                # add the same --provider options you installed with
 ```
 
-The previous plugin folder is backed up to `$HERMES_HOME/plugin-backups/<name>.<timestamp>` (outside `plugins/`, so Hermes never loads it twice). Accounts, parked accounts, history and settings are kept. `install.sh` without `--set-strategy` leaves your strategy as it is. Restart Hermes Desktop after an update so it loads the new page and its backend.
+The previous plugin folder is backed up to `$HERMES_HOME/plugin-backups/<name>.<timestamp>` (outside `plugins/`, so Hermes never loads it twice). Accounts, parked accounts, history and settings are kept. `install.sh` without `--set-strategy` leaves your strategy as it is. Restart Hermes Desktop after any update so it loads the new page and its backend.
 
 ### Uninstall
+
+Unpark parked accounts first if you want them back in rotation (`hermes account <provider> unpark <account>`): while the plugin is gone, their logins sit only in `account-pool-parked.json`.
+
+Catalog or repository install:
+
+```bash
+hermes account anthropic setup --undo     # tracker links, page entries, the timer
+hermes plugins remove account-pool-tracker
+hermes plugins remove account-pool
+```
+
+Git install:
 
 ```bash
 ./uninstall.sh
 ```
 
-It removes the timer, both plugins (the Accounts page included), the tracker symlinks and the `account-pool` entry in each profile's `plugins.enabled`. Your accounts in the credential pool are not touched. Parked accounts are **not** returned to rotation: the script warns you and asks first, so unpark them before uninstalling if you want them back. Data files and `credential_pool_strategies` stay; the script lists the files you can delete by hand.
+It removes the timer, both plugins (the Accounts page included), the tracker symlinks and the `account-pool` entry in each profile's `plugins.enabled`. Your accounts in the credential pool are not touched. Parked accounts are **not** returned to rotation: the script warns you and asks first. Data files and `credential_pool_strategies` stay; the script lists the files you can delete by hand.
 
 ## Concepts
 
@@ -248,6 +323,8 @@ hermes account <provider> <action> [target] [options]
   balance  [--dry-run] [--threshold N]  order by usage, bench >= N% (90), auto-recover, alerts
   strategy [<name>] [--only P,...]      Hermes' rotation strategy per profile: show it, or set it
   doctor                                check strategy, timer, files, pools, alerts
+  setup    [--timer] [--strategy] [--undo] [--yes]
+                                        profiles, tracker and timer after an install
   notify   [status|test|summary|...]    alert channels (desktop, Telegram) and the daily summary
   help                                  show the help
 ```
@@ -526,6 +603,10 @@ $ hermes account anthropic doctor
 
 Run it after installing, after a Hermes update, or when bots behave oddly. Every FAIL or WARN line includes the fix. A process loads the session tracker when it starts, so after an update the gateway, Hermes Desktop and long sessions keep the old one; doctor then warns `session tracker 1.5.0 is not loaded yet by: the gateway (...); Hermes Desktop (...)` with the restart each one needs. Tokens without a bot name in the last half hour mean a tracker 1.2.0 or older is still running. A profile on another strategy is a FAIL (`Fix: hermes account <provider> strategy fill_first`); a value Hermes does not know is only a WARN, because Hermes then uses `fill_first`. Exit code 1 when there is a FAIL. For a provider with no accounts it says `not in use, nothing to check`.
 
+### setup
+
+Sets up what a plugin install leaves out: the Accounts page backend and the session tracker in every profile, with `--timer` the balance timer, with `--strategy` `fill_first` everywhere; `--undo` takes the profile and timer parts back. It shows the plan and asks first. See [What setup does](#what-setup-does).
+
 ### notify
 
 ```bash
@@ -559,7 +640,7 @@ Unknown provider 'anthorpic'. Providers in your pool: anthropic. All providers: 
 | Exit code | Meaning |
 |---|---|
 | 0 | Done |
-| 1 | The command ran and found a problem: `check` or `doctor` failures, a discarded or failed sign-in, a refused remove, a confirmation answered with no (or Ctrl+D), `notify test` or `notify summary` reached no channel, `unschedule` of an account without a schedule, a `strategy` that could not be written to a profile |
+| 1 | The command ran and found a problem: `check` or `doctor` failures, a discarded or failed sign-in, a refused remove, a confirmation answered with no (or Ctrl+D, or no terminal to answer), `add` or `relogin` without a terminal, `notify test` or `notify summary` reached no channel, `unschedule` of an account without a schedule, a `strategy` or `setup` step that could not be written |
 | 2 | Wrong usage: missing or unknown action, provider, target or option |
 | 130 | Cancelled with Ctrl+C |
 
@@ -569,7 +650,7 @@ Unknown provider 'anthorpic'. Providers in your pool: anthropic. All providers: 
 
 ### Turn the page on
 
-1. Run `install.sh` (it copies the page and lists `account-pool` in every profile).
+1. Install the plugin and run `hermes account <provider> setup` (or `install.sh`, which runs it). The page comes with `account-pool`; `setup` lists `account-pool` in every profile.
 2. Restart Hermes Desktop. The desktop starts the page's backend together with the other enabled plugins, so the page has no data until this restart.
 3. In **Capabilities > Plugins**, find **account-pool** (Agent + Desktop; its desktop name is Accounts) and switch on its **Desktop** half. The page ships switched off, so nothing appears until you do.
 
@@ -579,7 +660,7 @@ Unknown provider 'anthorpic'. Providers in your pool: anthropic. All providers: 
 
 Hermes Desktop runs its backend under the profile you last used (`hermes --profile <name> serve`), and a backend loads a plugin's page routes only when the plugin is in `plugins.enabled` of **that** profile. With `account-pool` in the default profile alone, the page works while Desktop runs the default profile and shows `The account-pool backend did not answer` while it runs any other.
 
-So `install.sh` adds `account-pool` to `plugins.enabled` of every profile. Nothing else changes in those profiles:
+So `setup` (and `install.sh`, which runs it) adds `account-pool` to `plugins.enabled` of every profile. Nothing else changes in those profiles:
 
 - The agent in a profile loads plugins from that profile's own `plugins/` folder, and `account-pool` is not there (no symlink, unlike the tracker). Bots get no command, no tool and no hook from it.
 - If a profile ever does load it, `register()` sees the profile and registers nothing. `hermes -p <profile> account ...` stays an unknown command.
@@ -737,7 +818,8 @@ systemctl --user enable --now hermes-account-balance.timer          # start agai
 
 - **Interval**: `systemctl --user edit --full hermes-account-balance.timer`, change `OnUnitActiveSec=5min`. Every run reads each account's usage once, so do not go much below 5 minutes.
 - **Threshold**: `systemctl --user edit --full hermes-account-balance.service`, add `--threshold 85` to the `ExecStart` line.
-- **More providers**: re-run `./install.sh --provider anthropic --provider openai-codex`, or add one more `ExecStart=... account <provider> balance` line. `doctor` warns when the timer does not cover a provider that has accounts.
+- **More providers**: `hermes account openai-codex setup --timer` adds a second `ExecStart` line and keeps the first. `doctor` warns when the timer does not cover a provider that has accounts.
+- **Remove**: `hermes account <provider> setup --undo` takes that provider out, and removes the timer with the last one.
 
 The timer uses no AI tokens; it only calls the usage endpoints (and, for alerts and the daily summary, your notification channels).
 
@@ -765,7 +847,9 @@ Adding an adapter for another provider is a single class; see [CONTRIBUTING.md](
 | `plugins/account-pool/desktop/` | The Accounts page for Hermes Desktop (`plugin.js`). Hermes Desktop copies it to `$HERMES_HOME/desktop-plugins/account-pool/`. |
 | `plugins/account-pool/dashboard/` | The page's backend (`plugin_api.py`) and its manifest. `dist/index.js` only tells the browser dashboard that the page lives in Hermes Desktop. |
 | `plugins/account-pool-tracker/` | A `post_api_request` hook that records `{profile, session, platform, model, account label, tracker version, process id, Kanban task}` and adds each call's token counts to its account, profile and model. No commands, no tools, no credentials; it swallows every error so it can never break a bot. |
-| `systemd/` | The service and timer templates used by `install.sh`. |
+| `plugins/account-pool-tracker/README.md` | The tracker's own page: what it records, and why it needs in-process plugins. |
+| `install.sh`, `uninstall.sh` | Install and remove from a git checkout. `install.sh` copies the plugins and runs `setup`; the systemd units are written by `setup`. |
+| `docs/screenshots/` | Screenshots of the Accounts page, taken by `tests/ui/screenshots.mjs` from a Hermes Desktop that shows the test fixtures. |
 
 Data files, all mode `600`, in `$HERMES_HOME`:
 
@@ -789,6 +873,52 @@ How tokens are handled:
 - API keys for `add --key` are read without echo inside the plugin, never from the command line.
 - The repository's `.gitignore` excludes `*.json`, `*.jsonl` and `.env`, so state files cannot be committed by accident.
 
+## Security and privacy disclosure
+
+What the plugins do outside their own files, in one place. The [Hermes plugin catalog rules](https://hermes-agent.nousresearch.com/docs/developer-guide/plugins/catalog-submission) ask for this (rules 11 and 13), and it is what you should know before you run them.
+
+**It writes credentials.** Managing accounts is the point of `account-pool`, so unlike a read-only plugin it changes logins in Hermes' credential pool (`$HERMES_HOME/auth.json`):
+
+- `add`, `relogin`, `remove`, `park`, `unpark`, `schedule` and `balance` change the pool through Hermes' own `CredentialPool` API (`load_pool`, `add_entry`, `remove_index`) or through `hermes auth add` and `hermes auth remove`. Nothing edits `auth.json` as text.
+- `park` moves an account's pool entry, OAuth tokens included, into `account-pool-parked.json` (mode 600, written under a file lock) and `unpark` moves it back. While an account is parked, `balance` refreshes its access token when it expires, with Hermes' own refresh functions (`refresh_anthropic_oauth_pure`, `refresh_codex_oauth_pure`), and writes the new tokens back at once, because refresh tokens can be single use.
+- `add` and `relogin` in a terminal run `hermes auth add`. **Add account** and **Sign in again** on the Accounts page run the same OAuth flows in the page's backend, with Hermes' own client ids and token functions: the PKCE code flow at `claude.ai` for Anthropic, the device code flow at `auth.openai.com` for Codex. The PKCE verifier and the device id stay in the backend's memory for at most 15 minutes.
+- `add --key` reads an API key without echo and stores it through the pool API.
+- Usage and profile requests send the same client headers as Hermes' own usage fetcher: `User-Agent: claude-code/2.1.0` with `anthropic-beta: oauth-2025-04-20` for Anthropic, `codex_cli_rs/0.0.0 (Hermes Agent)` with `originator: codex_cli_rs` for Codex. Without them Anthropic rate-limits the usage endpoint far sooner.
+- It uses these Hermes internals, checked against Hermes 0.21.5: `hermes_cli.auth_commands` (`_OAUTH_ADD_SPECS`, `_unsuppress_provider_sources`, `_normalize_provider`, `auth_add_command`, `auth_remove_command`), `agent.anthropic_credentials` (`_OAUTH_CLIENT_ID`, `_OAUTH_REDIRECT_URI`, `_OAUTH_SCOPES`, `_generate_pkce`, `_post_oauth_token`, `_oauth_token_state`, `refresh_anthropic_oauth_pure`), `hermes_cli.auth_codex` (`CODEX_OAUTH_CLIENT_ID`, `_codex_request_device_code`, `_codex_exchange_authorization_code`, `_codex_http_client`, `_codex_base_url`, `refresh_codex_oauth_pure`), `agent.codex_headers.codex_account_headers`, `hermes_cli.auth` (`PROVIDER_REGISTRY`, `_utc_now_z`, `mark_provider_active_if_unset`), `agent.credential_pool` (`load_pool`, `PooledCredential`), `hermes_constants` (the Hermes home and its per-profile override), `hermes_cli.secret_prompt.masked_secret_prompt`, `hermes_cli.config.set_config_value`, and `agent.usage_pricing` (`_lookup_official_docs_pricing`, `resolve_billing_route`) with `agent.models_dev._load_disk_cache` for API prices. A Hermes update that changes them breaks the affected command with an error; it cannot corrupt the pool, because every write still goes through the pool API.
+- Tokens are never printed, logged, returned to the page, or sent anywhere but the provider's own endpoints.
+
+**Network.** Only these, and only when a command, the timer or a page button asks:
+
+| Host | What | When |
+|---|---|---|
+| `api.anthropic.com` | `/api/oauth/usage`, `/api/oauth/profile` | `usage`, `check`, `balance` (every 5 minutes with the timer), the email check after a sign-in, **Live usage**, **Run doctor** |
+| Anthropic's OAuth token endpoint, through Hermes' `_post_oauth_token` | code exchange, token refresh | page sign-in, refresh of parked accounts |
+| `claude.ai/oauth/authorize` | the sign-in link you open yourself | page sign-in |
+| `chatgpt.com/backend-api/wham/usage` | Codex usage | as for Anthropic usage |
+| `auth.openai.com` | device code, token exchange and refresh | Codex page sign-in, refresh of parked Codex accounts |
+| Telegram, through `hermes send` | alerts and the daily summary | when an alert fires or the summary is due, if Telegram alerts are on |
+
+There is no telemetry, no update check and no other host. Opening the page or switching tabs makes no request at all.
+
+**Background work.** Nothing runs on its own unless you install the timer (`setup --timer`, or `install.sh` without `--no-timer`). The timer is a systemd user unit that runs `hermes account <provider> balance` every 5 minutes: it reads every account's usage, reorders the pool, benches and releases accounts, applies timed parks and schedules, retries token refreshes and sends alerts. The tracker runs inside every Hermes process that loads it, as a `post_api_request` hook (see its [README](plugins/account-pool-tracker/README.md)).
+
+**Commands it runs.**
+
+| Command | Why |
+|---|---|
+| `systemctl --user` | timer state for `doctor` and the page; `setup --timer` and `--undo` install, start and remove the units |
+| `notify-send` | desktop alerts |
+| `hermes config set` | `strategy`, `setup` (`plugins.enabled`, `credential_pool_strategies`) |
+| `hermes plugins enable account-pool-tracker` | `setup`, once per profile |
+| `hermes auth add`, `hermes auth remove` | `add`, `relogin` and `remove` in a terminal |
+| `hermes send` | Telegram alerts and the daily summary |
+
+**Reads outside its own files.** Every profile's `config.yaml` (strategy and plugin lists), every profile's `state.db` read-only (session titles for `sessions`), `/proc/self/cgroup` (whether the process is the timer's service, so the activity log says `timer` rather than `cli`), `/proc/<pid>/cmdline` of Hermes processes (`doctor`: which process still runs an older tracker), Hermes' price files, and the state of the systemd units. `hermes plugins validate` lists the `/proc/self/cgroup` read as a `caution`; that is all it is for.
+
+**Writes outside its own files.** `auth.json`, as above. `config.yaml` of the profiles, only through `hermes config set` and `hermes plugins enable`, only from `setup`, `strategy` and the page's rotation dialog. The tracker links `profiles/<name>/plugins/account-pool-tracker`. The systemd units in `~/.config/systemd/user/`.
+
+**Who can use it.** The command registers in the default profile only, so bots in other profiles cannot run it, and it registers no tools. The page is part of Hermes Desktop and its backend requires Desktop's session token. One account action runs at a time.
+
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |
@@ -801,11 +931,11 @@ How tokens are handled:
 | `check`: `DEAD` | Login revoked, or the token was used by another app or machine | `hermes account anthropic relogin <email>` |
 | `check`: `WRONG LABEL` or `DUPLICATE` | Added with plain `hermes auth add` while signed in as another account | `relogin` the right account, or `remove <id>` the extra entry |
 | `sessions` lists nothing | The bots still run a tracker older than 1.5.0 | `hermes gateway restart`, restart Hermes Desktop; `doctor` names the processes |
-| `who` is empty | Sessions started before the tracker was installed | `/reset` the session, or restart the gateway or desktop |
+| `who` is empty | Sessions started before the tracker was installed, or Hermes runs plugins with `plugins.isolation: host` | `/reset` the session, or restart the gateway or desktop. Under `host` isolation the tracker cannot see the account (see [Limitations](#limitations)) |
 | `doctor`: session tracker X is not loaded yet by ... | The gateway, Hermes Desktop or a long session started before the tracker was updated | `hermes gateway restart`; restart Hermes Desktop; a session switches when it ends |
 | No Telegram alert | The bot token of the sending profile is invalid | `notify test`; switch with `notify telegram-via=<profile>` |
 | `report`: not enough history | The timer is off or was just installed | `doctor`, then wait for a few runs |
-| A `--until` park did not end | The timer is off | `systemctl --user enable --now hermes-account-balance.timer` |
+| A `--until` park did not end | The timer is off | `hermes account <provider> setup --timer` |
 | A schedule did not park its account | The timer is off, it is the last working account, or you unparked it by hand inside the window | `hermes account <provider> schedule` shows the state of each schedule |
 | No daily summary | The timer is off, no alert channel is on, or it was turned on after its time today | `notify` shows the time and the last day it was sent; `notify summary` tests delivery |
 | `report`: `API $` shows `-` or ends in `+` | The model has no price in Hermes' price list, or the tokens were counted before tracker 1.3.0 | Nothing to fix; those tokens are left out of the price |
@@ -813,7 +943,10 @@ How tokens are handled:
 | `doctor`: profiles with their OWN pool | Someone ran `hermes -p <profile> auth add` | Remove those entries in that profile (`hermes -p <profile> auth remove ...`) and add the accounts from the default profile |
 | `doctor`: last run failed | The timer's last `balance` failed | `journalctl --user -u hermes-account-balance.service -n 20` |
 | `hermes account`: unknown command | Run with `-p <profile>`; the plugin is in the default profile only | Run it without `-p` |
-| Accounts page: `The account-pool backend did not answer` | Hermes Desktop runs a profile that does not list `account-pool` (a profile created after the install, or an install older than 3.5.1), or was not restarted after the install | `./install.sh` again, then restart Hermes Desktop. `doctor` names the profiles that miss it |
+| Accounts page: `The account-pool backend did not answer` | Hermes Desktop runs a profile that does not list `account-pool` (a profile created after the install, or an install older than 3.5.1), or was not restarted after the install | `hermes account <provider> setup`, then restart Hermes Desktop. `doctor` names the profiles that miss it |
+| `add needs a terminal` or `relogin needs a terminal` | It ran from cron, an agent's shell or another place without a terminal, where nobody can paste the sign-in code | Run it in a terminal, or use **Add account** / **Sign in again** on the Accounts page |
+| `no terminal to answer, so no` | A command that asks first ran without a terminal | Run it in a terminal, or add `--yes` |
+| `setup`: session tracker not installed | Only `account-pool` was installed | `hermes plugins install account-pool-tracker --enable`, then `setup` again |
 | No Accounts entry in the sidebar | The Desktop half of the plugin is off | Capabilities > Plugins, account-pool, switch on Desktop. After an update: Ctrl+K, `Reload desktop plugins` |
 | Live usage button greyed out | Live usage ran less than 2 minutes ago | Wait for the countdown on the button |
 | Sign-in in the page: `This code belongs to another sign-in` | The code came from another sign-in link, or was copied without the part after `#` | Open the link from this window again and copy the whole code |
@@ -836,7 +969,7 @@ That is balance working. A session started on the account that was #1 at the tim
 Hermes has one (`round_robin`), next to `fill_first`, `least_used` and `random`; the plugin has no mode of its own. You can switch with `strategy` or on the page, but with this plugin keep `fill_first`: balance then rotates by quota left instead of by turn. The table under [Concepts](#concepts) compares the four.
 
 **Does the plugin change my fallback provider or models?**
-No. Fallback, models and which provider a profile uses stay in your Hermes configuration. The only setting the project writes is `credential_pool_strategies`, and only when you ask: `install.sh --set-strategy`, `hermes account <provider> strategy`, or the page's rotation dialog.
+No. Fallback, models and which provider a profile uses stay in your Hermes configuration. The only model-related setting the project writes is `credential_pool_strategies`, and only when you ask: `setup --strategy`, `install.sh --set-strategy`, `hermes account <provider> strategy`, or the page's rotation dialog. `setup` also writes `plugins.enabled` of each profile, for the page and the tracker.
 
 **Can I use the same account in claude.ai, Claude Code or Codex CLI at the same time?**
 Yes, with a separate sign-in there. The quota is shared, so that use shows up in `usage`. Never copy Hermes' tokens to another app or machine.
@@ -863,8 +996,8 @@ At least two. `report` tells you when the whole pool was nearly full at the same
 - Adapters exist for `anthropic` and `openai-codex`. The generic commands were tested for other providers with API-key entries only. The Codex adapter was verified read-only against a real ChatGPT Team account; `add` with a real Codex sign-in has not been run yet.
 - Token counts start when tracker 1.1.0 first runs and cover Hermes on this computer only. They are kept for 8 days, in 15-minute buckets, so a period starts at the nearest quarter hour. The split by profile and model starts with tracker 1.3.0; bots pick up a new tracker when their gateway or session restarts.
 - `API $` uses list prices for the standard context length; long-context surcharges and batch discounts are not applied.
-- `who` finds the agent object by scanning running thread frames. A future Hermes refactor may leave `who` empty, but it can never break the bots.
-- `add` and `relogin` with OAuth need an interactive terminal or the Accounts page to paste the code. The page's Codex sign-in was tested up to the device code; a full Codex sign-in has not been run yet.
+- `who` finds the agent object by scanning running thread frames, because Hermes' `post_api_request` hook does not name the pool entry a call used. That needs Hermes' default `plugins.isolation: in_process`: under `host` isolation the tracker records nothing, so `who`, token counts, the session list and the bot alert stay empty, while usage, balance, park, schedules and the forecast keep working. A future Hermes refactor may also leave `who` empty, but it can never break the bots.
+- `add` and `relogin` need a terminal (or the Accounts page) to paste the code or type the key. Without one they stop at once with the command to run, instead of waiting for input. The page's Codex sign-in was tested up to the device code; a full Codex sign-in has not been run yet.
 - The Accounts page follows the Hermes Desktop plugin SDK as of Hermes Agent 0.21.5. A future SDK change can break the page; the command is not affected.
 - Linux with systemd only, for the timer. The commands themselves work wherever Hermes runs.
 

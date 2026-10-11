@@ -56,6 +56,8 @@ function chart(window, busy) {
 for (const [path, rep] of Object.entries(fx)) {
   if (path.startsWith('/report?')) rep.chart = chart(rep.window, rep.snapshots > 0)
 }
+// a schedule window three days away: its day must show once, not twice
+fx['/status?provider=anthropic'].schedules[0].next = Math.floor(Date.now() / 1000) + 3 * 86400
 const calls = []
 let failNext = null
 const store = {}
@@ -138,6 +140,9 @@ ok(within(rows[1]).getByText(/Mon-Fri 09:00-17:00/), 'schedule chip on the sched
 const schedTable = document.querySelector('[data-table="schedules"]')
 ok(schedTable && schedTable.querySelectorAll('tbody tr').length === status.schedules.length, 'schedules table lists every schedule')
 ok(within(schedTable).getByText('not in the pool'), 'a schedule for an account no longer in the pool is flagged')
+ok(/next (Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d\d:\d\d/.test(schedTable.textContent) &&
+  !/(Mon|Tue|Wed|Thu|Fri|Sat|Sun) (Mon|Tue|Wed|Thu|Fri|Sat|Sun)/.test(schedTable.textContent),
+'a schedule window days away shows its day once')
 
 // live usage
 await click(screen.getByText('Live usage').closest('button'))

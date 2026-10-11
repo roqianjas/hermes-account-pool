@@ -2,6 +2,20 @@
 
 All releases of the `account-pool` plugin and its session tracker `account-pool-tracker` (now 1.5.0).
 
+## 3.10.0
+
+Ready for the Hermes plugin catalog: install with `hermes plugins install`, then one command for the rest.
+
+- New `hermes account <provider> setup [--timer] [--strategy] [--undo] [--yes]`. A plugin install puts a plugin into one profile; `setup` does the rest: lists `account-pool` in every profile (for the Accounts page), links the session tracker from the default profile into every other profile and enables it there, with `--timer` writes and starts the 5-minute balance timer, with `--strategy` sets `fill_first` everywhere. It shows what it found and every change, asks once, and logs each change in the activity log (`setup`). `--undo` takes the profile and timer parts back and names parked accounts that would stay out of rotation. A second run says `Nothing to change`.
+- The systemd units are written by `setup` instead of `install.sh` templates, so a catalog install can have the timer too. `setup --timer` for a second provider adds its own `ExecStart` line; lines edited by hand (`--threshold 85`) and a changed interval are kept; a custom `HERMES_HOME` goes into the service. The `systemd/` folder is gone.
+- `install.sh` copies the plugins and runs `setup --yes --timer` (with `--strategy` for `--set-strategy`, once per `--provider`), so a git install and a catalog install end up the same. `uninstall.sh` honours `XDG_CONFIG_HOME`.
+- Without a terminal (cron, an agent's shell), `add` and `relogin` stop at once with the command to run in a terminal or the page button to use, even with `--yes`; before, they could wait forever for a sign-in code. Every `[y/N]` question answers no without a terminal (`no terminal to answer, so no`) and exits 1; `--yes` still skips it where it did. Deliberate output change.
+- `doctor` and the Accounts page suggest `setup` where they suggested `./install.sh`.
+- Accounts page: a park schedule more than a day away showed its day twice (`next Mon Mon 09:00`).
+- `requires_hermes: ">=0.21.5"` in both manifests.
+- Docs: screenshots of the Accounts page (`docs/screenshots/`, from the test fixtures), install from the catalog, `setup`, a security and privacy disclosure (what is written, which hosts, which commands, which Hermes internals), and a README for the tracker with its known issue: under `plugins.isolation: host` it records nothing.
+- Tests: `tests/setup_sandbox.py` covers `setup`, `--undo`, the timer units and the refusals without a terminal. `tests/ui/fixture_api.py` and `tests/ui/screenshots.mjs` take the screenshots from a separate Hermes Desktop.
+
 ## 3.9.1
 
 Fixes after the first hours of real use of 3.9.0.

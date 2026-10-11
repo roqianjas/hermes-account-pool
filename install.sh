@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
-# Install the account-pool plugins for Hermes Agent.
+# Install the account-pool plugins for Hermes Agent from this checkout.
 #
 #   ./install.sh [--provider NAME]... [--set-strategy] [--no-tracker] [--no-timer]
 #
 # --provider      provider(s) the timer balances; repeat for several (default: anthropic)
-# --set-strategy  set credential_pool_strategies.<provider>=fill_first in the default
-#                 profile and every profile under $HERMES_HOME/profiles (needed by balance)
+# --set-strategy  set credential_pool_strategies.<provider>=fill_first in every profile
+#                 that has another value (needed by balance)
 # --no-tracker    skip the session tracker (`hermes account <provider> who` stays empty)
 # --no-timer      skip the systemd user timer that runs `balance` every 5 minutes
+#
+# After copying the plugins it runs `hermes account <provider> setup --yes`, the same
+# step that follows an install from the Hermes plugin catalog.
 set -euo pipefail
 
 PROVIDERS=()
@@ -20,7 +23,7 @@ while [ $# -gt 0 ]; do
     --set-strategy) SET_STRATEGY=1; shift ;;
     --no-tracker) TRACKER=0; shift ;;
     --no-timer) TIMER=0; shift ;;
-    -h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -35,7 +38,6 @@ HERMES_BIN="$(command -v hermes || true)"
 export HERMES_HOME="$ROOT"
 
 say() { printf '\n== %s\n' "$*"; }
-profiles() { [ -d "$ROOT/profiles" ] && find "$ROOT/profiles" -mindepth 1 -maxdepth 1 -type d -exec test -f '{}/config.yaml' ';' -printf '%f\n' | sort; }
 
 say "Installing plugins into $ROOT/plugins"
 mkdir -p "$ROOT/plugins"
@@ -54,72 +56,19 @@ for p in account-pool account-pool-tracker; do
 done
 "$HERMES_BIN" plugins enable account-pool >/dev/null && echo "  enabled account-pool (default profile: the command)"
 
-# Hermes Desktop mounts a plugin's page backend only when the plugin is in plugins.enabled of the
-# profile it runs. List account-pool in every profile for the Accounts page. No symlink: the agent
-# in a profile does not load the plugin, so profiles get no command and no tools.
-say "Accounts page backend in every profile"
-for prof in $(profiles); do
-  cur="$("$HERMES_BIN" -p "$prof" config get plugins.enabled --json 2>/dev/null || true)"
-  off="$("$HERMES_BIN" -p "$prof" config get plugins.disabled --json 2>/dev/null || true)"
-  case "$off" in *'"account-pool"'*) echo "  $prof: skipped, account-pool is in plugins.disabled"; continue ;; esac
-  case "$cur" in *'"account-pool"'*) echo "  $prof: already listed"; continue ;; esac
-  case "$cur" in
-    \[*\]) new="${cur%]}"; new="${new%"${new##*[![:space:]]}"}"
-           [ "$new" = "[" ] && new='["account-pool"]' || new="$new, \"account-pool\"]" ;;
-    *) new='["account-pool"]' ;;
-  esac
-  "$HERMES_BIN" -p "$prof" config set plugins.enabled "$new" >/dev/null && echo "  $prof: listed"
-done
-
-if [ "$TRACKER" = 1 ]; then
-  say "Session tracker"
-  "$HERMES_BIN" plugins enable account-pool-tracker >/dev/null && echo "  default: enabled"
-  for prof in $(profiles); do
-    mkdir -p "$ROOT/profiles/$prof/plugins"
-    ln -sfn "$ROOT/plugins/account-pool-tracker" "$ROOT/profiles/$prof/plugins/account-pool-tracker"
-    "$HERMES_BIN" -p "$prof" plugins enable account-pool-tracker >/dev/null && echo "  $prof: enabled (symlink)"
-  done
-fi
-
+# Profiles, tracker, timer and strategy: one implementation, shared with catalog installs.
+SETUP=(--yes)
+[ "$TIMER" = 1 ] && SETUP+=(--timer)
+[ "$SET_STRATEGY" = 1 ] && SETUP+=(--strategy)
 for PROVIDER in "${PROVIDERS[@]}"; do
-  say "Pool strategy for $PROVIDER"
-  if [ "$SET_STRATEGY" = 1 ]; then
-    "$HERMES_BIN" config set "credential_pool_strategies.$PROVIDER" fill_first >/dev/null && echo "  default: fill_first"
-    for prof in $(profiles); do
-      "$HERMES_BIN" -p "$prof" config set "credential_pool_strategies.$PROVIDER" fill_first >/dev/null && echo "  $prof: fill_first"
-    done
-  else
-    echo "  unchanged. balance needs fill_first; re-run with --set-strategy, or set it yourself:"
-    echo "  hermes [-p <profile>] config set credential_pool_strategies.$PROVIDER fill_first"
-  fi
+  say "hermes account $PROVIDER setup ${SETUP[*]}"
+  "$HERMES_BIN" account "$PROVIDER" setup "${SETUP[@]}" || echo "  setup reported a problem (see above); doctor below names it"
 done
-
-if [ "$TIMER" = 1 ]; then
-  say "systemd user timer (balance every 5 minutes)"
-  UNIT_DIR="$HOME/.config/systemd/user"
-  mkdir -p "$UNIT_DIR"
-  UNIT="$UNIT_DIR/hermes-account-balance.service"
-  grep -v '^ExecStart=' "$HERE/systemd/hermes-account-balance.service.in" \
-    | sed -e "s#@PROVIDER@#${PROVIDERS[*]}#g" > "$UNIT"
-  LINE="$(grep '^ExecStart=' "$HERE/systemd/hermes-account-balance.service.in")"
-  for PROVIDER in "${PROVIDERS[@]}"; do      # oneshot: one ExecStart per provider, run in order
-    printf '%s\n' "$LINE" | sed -e "s#@HERMES_BIN@#$HERMES_BIN#g" -e "s#@PROVIDER@#$PROVIDER#g" >> "$UNIT"
-  done
-  if [ "$ROOT" != "$HOME/.hermes" ]; then
-    sed -i "/^\[Service\]/a Environment=HERMES_HOME=$ROOT" "$UNIT"
-  fi
-  cp "$HERE/systemd/hermes-account-balance.timer" "$UNIT_DIR/"
-  systemctl --user daemon-reload
-  systemctl --user enable --now hermes-account-balance.timer >/dev/null 2>&1
-  systemctl --user start hermes-account-balance.service || echo "  first run failed; see: journalctl --user -u hermes-account-balance.service -n 20"
-  echo "  $(systemctl --user is-active hermes-account-balance.timer): hermes-account-balance.timer"
-fi
 
 say "Check"
 for PROVIDER in "${PROVIDERS[@]}"; do "$HERMES_BIN" account "$PROVIDER" doctor || true; done
 echo
 echo "Done. Start with: hermes account help"
-echo "Running sessions pick up the tracker after /reset or a gateway/desktop restart."
 echo
 echo "Hermes Desktop page (optional): restart Hermes Desktop so it loads the page's backend,"
 echo "then in Capabilities > Plugins switch on the Desktop half of account-pool. Accounts appears in the sidebar."

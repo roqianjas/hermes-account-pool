@@ -127,10 +127,11 @@ function tokLines(t) {
 
 const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
+// Day and time, e.g. "Mon 09:00". Not hhmm(): it adds the day itself for times far from now ("Mon Mon 09:00").
 function when(ts) {
   if (!ts) return '–'
   const d = new Date(ts * 1000)
-  return `${DAY_NAMES[(d.getDay() + 6) % 7]} ${hhmm(ts)}`
+  return `${DAY_NAMES[(d.getDay() + 6) % 7]} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
 }
 
 // Tokens of one account: last 24 h, with the current usage window in the tip.
@@ -931,7 +932,8 @@ function ReportView({ provider }) {
 }
 
 const KIND_ICON = { balance: 'arrow-swap', alert: 'bell', park: 'debug-pause', unpark: 'debug-start', schedule: 'calendar',
-  unschedule: 'calendar', strategy: 'settings-gear', notify: 'bell', add: 'add', remove: 'trash', relogin: 'key' }
+  unschedule: 'calendar', strategy: 'settings-gear', notify: 'bell', add: 'add', remove: 'trash', relogin: 'key',
+  setup: 'tools' }
 
 function ActivityView({ provider }) {
   const [hours, setHours] = useState('24')
@@ -1142,7 +1144,7 @@ function AccountsPage() {
       h(ErrorState, {
         title: 'The account-pool backend did not answer',
         description: /404|not found/i.test(msg)
-          ? 'Hermes Desktop loads this backend only for profiles that list account-pool in plugins.enabled, and only when it starts. Run ./install.sh again (it adds account-pool to every profile; the command stays in the default profile), then restart Hermes Desktop. "hermes account anthropic doctor" names the profiles that miss it.'
+          ? 'Hermes Desktop loads this backend only for profiles that list account-pool in plugins.enabled, and only when it starts. Run "hermes account anthropic setup" (it lists account-pool in every profile; the command stays in the default profile), then restart Hermes Desktop. "hermes account anthropic doctor" names the profiles that miss it.'
           : msg
       }))
   } else if (view === 'report') content = h(ReportView, { provider })

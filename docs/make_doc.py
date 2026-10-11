@@ -12,14 +12,15 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import (CondPageBreak, KeepTogether, PageBreak, Paragraph, Preformatted,
+from reportlab.platypus import (CondPageBreak, Image, KeepTogether, PageBreak, Paragraph, Preformatted,
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 from reportlab.platypus.tableofcontents import TableOfContents
 
-VERSION = "3.9.1"
+VERSION = "3.10.0"
 REPO = "github.com/roqianjas/hermes-account-pool"
 FOOTER = f"Hermes plugin account-pool {VERSION} · {REPO}"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hermes-account-pool.pdf")
+SHOTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "screenshots")
 
 D = "/usr/share/fonts/truetype/dejavu/"
 pdfmetrics.registerFont(TTFont("Sans", D + "DejaVuSans.ttf"))
@@ -74,6 +75,21 @@ def note(text):
     st.append(KeepTogether([t, Spacer(1, 8)]))
 
 
+def shot(name, caption, width=1.0):
+    """A screenshot from docs/screenshots/ (made-up accounts from the test fixtures), with a caption."""
+    path = os.path.join(SHOTS, name + ".png")
+    from reportlab.lib.utils import ImageReader
+    iw, ih = ImageReader(path).getSize()
+    w = W * width
+    img = Image(path, width=w, height=w * ih / iw)
+    frame = Table([[img]], colWidths=[w])
+    frame.setStyle(TableStyle([("BOX", (0, 0), (-1, -1), 0.5, LINE), ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                               ("RIGHTPADDING", (0, 0), (-1, -1), 0), ("TOPPADDING", (0, 0), (-1, -1), 0),
+                               ("BOTTOMPADDING", (0, 0), (-1, -1), 0)]))
+    cap = Paragraph(caption, ParagraphStyle("cap", parent=s_cell, textColor=MUTED, spaceBefore=3))
+    st.append(KeepTogether([frame, cap, Spacer(1, 8)]))
+
+
 def table(rows, widths, keep=False):
     data = [[Paragraph(c, s_cellb if r == 0 else s_cell) for c in row] for r, row in enumerate(rows)]
     t = Table(data, colWidths=[W * w for w in widths], repeatRows=1)
@@ -108,7 +124,7 @@ st += [Paragraph("Plugin account-pool untuk Hermes Agent", s_title),
                  "pemakaian, bagi beban sebelum akun habis, parkir akun sementara, lihat bot mana memakai akun apa, "
                  "dan terima peringatan.", s_sub)]
 table([["Versi", "Repo", "Butuh", "Lisensi"],
-       [VERSION, REPO, "Hermes Agent ≥ 0.21, Linux + systemd", "MIT"]], [0.12, 0.46, 0.30, 0.12])
+       [VERSION, REPO, "Hermes Agent ≥ 0.21.5, Linux + systemd", "MIT"]], [0.12, 0.46, 0.30, 0.12])
 st.append(Paragraph("Daftar isi", s_h2))
 toc = TableOfContents()
 toc.levelStyles = [s_toc]
@@ -141,21 +157,22 @@ code("hermes account <provider> <action> [target] [options]")
 
 H1("2. Mulai cepat")
 code("""
-git clone https://github.com/roqianjas/hermes-account-pool.git
-cd hermes-account-pool
-./install.sh --set-strategy                      # plugin, strategi fill_first, timer 5 menit
+hermes plugins install account-pool --enable           # perintah dan halaman Accounts
+hermes plugins install account-pool-tracker --enable   # pelacak sesi
+hermes account anthropic setup --timer --strategy      # semua profil, timer, fill_first
 
 hermes account anthropic add alice@example.com   # satu login per akun, terverifikasi
 hermes account anthropic add bob@example.com
 hermes account anthropic doctor                  # semua OK?
 hermes account anthropic usage                   # pemakaian live per akun
 """)
-P("Setelah itu timer menjaga urutan pool secara otomatis. Sehari-hari yang paling sering dipakai: " + C("usage")
+P("Tiga baris pertama bisa diganti satu skrip dari git: " + C("./install.sh --set-strategy") + " (bagian 4.2). "
+  "Setelah itu timer menjaga urutan pool secara otomatis. Sehari-hari yang paling sering dipakai: " + C("usage")
   + ", " + C("who") + ", " + C("park") + ", dan " + C("doctor") + ". Di Hermes Desktop, restart aplikasinya sekali "
   "lalu nyalakan halamannya di Capabilities &gt; Plugins untuk mendapat semua itu dalam satu halaman (bagian 8).")
 
 H1("3. Persyaratan")
-LI(["Hermes Agent ≥ 0.21 di Linux. Timer butuh systemd user service (" + C("systemctl --user") + ").",
+LI(["Hermes Agent ≥ 0.21.5 di Linux. Timer butuh systemd user service (" + C("systemctl --user") + ").",
     "Dua akun atau lebih dari provider yang sama. Dukungan pemakaian bawaan: Claude Pro / Max / Team ("
     + C("anthropic") + ") dan ChatGPT Plus / Pro / Team (" + C("openai-codex") + "). Provider lain mendapat "
     "perintah umum (bagian 12).",
@@ -164,25 +181,35 @@ LI(["Hermes Agent ≥ 0.21 di Linux. Timer butuh systemd user service (" + C("sy
     "Opsional: Hermes Desktop dengan dukungan desktop plugin, untuk halaman Accounts. Diuji dengan Hermes Agent 0.21.5."])
 
 H1("4. Instalasi, update, uninstall")
-H2("4.1 Instalasi")
+P("Instalasi plugin memasang plugin ke satu profil. Proyek ini butuh sedikit lebih: pelacak sesi di setiap profil "
+  "(supaya " + C("who") + " melihat semua bot), " + C("account-pool") + " tercantum di setiap profil (supaya Hermes "
+  "Desktop bisa menampilkan halamannya profil mana pun yang dijalankan), dan timer jika Anda mau. Bagian itu "
+  "dikerjakan " + C("hermes account &lt;provider&gt; setup") + ", setelah cara instalasi mana pun.")
+H2("4.1 Instalasi dari katalog plugin Hermes")
+code("""
+hermes plugins install account-pool --enable
+hermes plugins install account-pool-tracker --enable
+hermes account anthropic setup --timer --strategy
+""")
+P("Jalankan di profil default (tanpa " + C("-p") + "): perintahnya ada di sana, dan " + C("setup") + " menautkan "
+  "pelacak dari sana ke profil lain. Tanpa katalog, pasang dua folder yang sama langsung dari repo ini (Hermes lalu "
+  "memperingatkan bahwa sumbernya belum direview):")
+code("""
+hermes plugins install roqianjas/hermes-account-pool#plugins/account-pool --enable
+hermes plugins install roqianjas/hermes-account-pool#plugins/account-pool-tracker --enable
+hermes account anthropic setup --timer --strategy
+""")
+H2("4.2 Instalasi dari git")
 code("""
 git clone https://github.com/roqianjas/hermes-account-pool.git
 cd hermes-account-pool
 ./install.sh --set-strategy
 """)
-P(C("install.sh") + " mengerjakan enam hal:")
-OL(["Menyalin " + C("account-pool") + " (beserta halaman Hermes Desktop) dan " + C("account-pool-tracker") + " ke " + C("$HERMES_HOME/plugins/")
-    + " (biasanya " + C("~/.hermes/plugins/") + "), lalu mengaktifkan " + C("account-pool") + " di <b>profil default</b>, "
-    "tempat perintahnya berada.",
-    "Menambahkan " + C("account-pool") + " ke " + C("plugins.enabled") + " setiap profil di " + C("$HERMES_HOME/profiles/")
-    + ", untuk halaman Accounts di Hermes Desktop (alasannya di bagian 8.2). Profil itu tidak mendapat perintah atau "
-    "tool apa pun. Profil yang mencantumkan " + C("account-pool") + " di " + C("plugins.disabled") + " dilewati.",
-    "Membuat symlink dan mengaktifkan " + C("account-pool-tracker") + " di setiap profil"
-    + ", supaya " + C("who") + " bisa melihat semua bot dan token setiap bot ikut terhitung.",
-    "Dengan " + C("--set-strategy") + ": mengatur " + C("credential_pool_strategies.&lt;provider&gt;: fill_first")
-    + " di profil default dan semua profil lain. " + C("balance") + " membutuhkannya (bagian 5).",
-    "Memasang dan menyalakan " + C("hermes-account-balance.timer") + " (balance tiap 5 menit), lalu menjalankannya sekali.",
-    "Menjalankan " + C("hermes account &lt;provider&gt; doctor") + "."])
+P(C("install.sh") + " menyalin " + C("account-pool") + " (beserta halaman Hermes Desktop) dan "
+  + C("account-pool-tracker") + " ke " + C("$HERMES_HOME/plugins/") + " (biasanya " + C("~/.hermes/plugins/")
+  + "), mengaktifkan " + C("account-pool") + " di profil default, menjalankan "
+  + C("hermes account &lt;provider&gt; setup --yes --timer") + " untuk tiap provider (ditambah " + C("--strategy")
+  + " jika " + C("--set-strategy") + "), lalu " + C("doctor") + ".")
 table([
     ["Opsi", "Fungsi"],
     [C("--provider &lt;nama&gt;"), "Provider yang diseimbangkan timer (default " + C("anthropic") + "). Ulangi untuk "
@@ -194,16 +221,72 @@ table([
     [C("--no-timer"), "Tanpa timer. " + C("balance") + " dijalankan sendiri."],
     [C("-h") + ", " + C("--help"), "Tampilkan opsi."],
 ], [0.26, 0.74])
-P(C("HERMES_HOME") + " kustom dihormati dan ditulis ke file service. Sesi yang sedang berjalan baru memuat pelacak "
-  "setelah " + C("/reset") + ", atau setelah gateway/desktop di-restart. Halaman Accounts butuh dua langkah lagi di "
-  "Hermes Desktop (bagian 8.1). Setelah update, " + C("doctor") + " dan halaman Accounts menyebut proses yang masih "
-  "memakai pelacak lama. Profil yang dibuat setelah instalasi perlu " + C("./install.sh") + " lagi supaya "
-  "halaman tetap jalan saat Desktop memakai profil itu; " + C("doctor") + " menyebut profil seperti ini. Cek hasilnya:")
+H2("4.3 Yang dikerjakan setup", need=70)
+code("""
+$ hermes account anthropic setup --timer
+[anthropic] Setup: the default profile and 2 other profile(s) in /home/you/.hermes
+  Accounts page    backend listed in 0 of 2 other profile(s)
+  Session tracker  1.5.0, active in 1 of 3 profile(s)
+  Balance timer    not installed
+  Rotation         fill_first in all 3 profile(s)
+Changes:
+  - list account-pool in plugins.enabled of worker-1 (Hermes Desktop serves the page's ...)
+  - list account-pool in plugins.enabled of worker-2 (...)
+  - link the session tracker into worker-1 (.../profiles/worker-1/plugins/account-pool-tracker
+    -> /home/you/.hermes/plugins/account-pool-tracker)
+  - enable the session tracker in worker-1 (hermes -p worker-1 plugins enable account-pool-...)
+  - ... the same for worker-2 ...
+  - install the balance timer: systemd user units in /home/you/.config/systemd/user, every
+    5 minutes runs: hermes account anthropic balance
+Apply these changes? [y/N]
+""")
+P(C("setup") + " menampilkan keadaan sekarang dan setiap perubahan yang akan dibuat, bertanya sekali, lalu "
+  "mengerjakannya satu per satu; setiap perubahan dicatat di log aktivitas (bagian 7.14). Jalankan lagi dan "
+  "hasilnya " + C("Nothing to change") + ".")
+table([
+    ["Bagian", "Yang diubah"],
+    ["Halaman Accounts", "Menambahkan " + C("account-pool") + " ke " + C("plugins.enabled") + " setiap profil di "
+     + C("$HERMES_HOME/profiles/") + " (alasannya di bagian 8.2). Profil itu tidak mendapat perintah atau tool apa "
+     "pun. Profil yang mencantumkan " + C("account-pool") + " di " + C("plugins.disabled") + " dilewati dan disebut."],
+    ["Pelacak sesi", "Mengaktifkan " + C("account-pool-tracker") + " di profil default. Di profil lain, membuat "
+     "symlink " + C("plugins/account-pool-tracker") + " ke salinan profil default lalu mengaktifkannya dengan "
+     + C("hermes -p &lt;profil&gt; plugins enable") + ". Satu salinan berarti satu update untuk semua profil."],
+    [C("--timer"), "Menulis " + C("hermes-account-balance.service") + " dan " + C(".timer") + " ke "
+     + C("~/.config/systemd/user/") + ", menyalakan timer, dan menjalankan putaran pertama di latar belakang. "
+     "Service menjalankan " + C("hermes account &lt;provider&gt; balance") + " tiap 5 menit; " + C("setup --timer")
+     + " untuk provider kedua menambah baris sendiri. " + C("HERMES_HOME") + " kustom ditulis ke service. Opsi yang "
+     "Anda tambahkan sendiri (" + C("--threshold 85") + ") dan interval yang diubah tetap dipertahankan."],
+    [C("--strategy"), "Mengatur " + C("credential_pool_strategies.&lt;provider&gt;: fill_first") + " di profil yang "
+     "nilainya lain. " + C("balance") + " membutuhkannya (bagian 5)."],
+    [C("--undo"), "Menghapus symlink pelacak dan entri " + C("plugins.enabled") + " di profil lain, serta "
+     "mengeluarkan provider itu dari timer (timer hilang jika tidak ada provider tersisa). Kedua plugin di profil "
+     "default, akun, akun parkir, pengaturan, file data, dan strategi tetap. Akun parkir yang akan tetap di luar "
+     "rotasi disebut namanya."],
+    [C("--yes"), "Tanpa pertanyaan. Tanpa terminal (cron, shell milik agent), " + C("setup") + " hanya menampilkan "
+     "rencananya dan tidak mengubah apa pun kecuali dengan " + C("--yes") + "."],
+], [0.22, 0.78])
+P("Semua perubahan config lewat " + C("hermes config set") + " atau " + C("hermes plugins enable") + ", jadi format "
+  "dan pengecekan file tetap milik Hermes. Jika pelacak belum terpasang, " + C("setup") + " memberi tahu cara "
+  "memasangnya dan melewati bagian itu. Tanpa systemd, " + C("--timer") + " memberi tahu; jalankan " + C("balance")
+  + " dengan cara lain (cron).")
+P(C("HERMES_HOME") + " kustom dihormati. Sesi yang sedang berjalan baru memuat pelacak setelah " + C("/reset")
+  + ", atau setelah gateway/desktop di-restart. Halaman Accounts butuh dua langkah lagi di Hermes Desktop (bagian "
+  "8.1). Setelah update, " + C("doctor") + " dan halaman Accounts menyebut proses yang masih memakai pelacak lama. "
+  "Profil yang dibuat belakangan perlu " + C("setup") + " lagi supaya halaman tetap jalan saat Desktop memakai "
+  "profil itu; " + C("doctor") + " menyebut profil seperti ini. Cek hasilnya:")
 code("""
 hermes account anthropic doctor
 systemctl --user list-timers hermes-account-balance.timer
 """)
-H2("4.2 Update")
+H2("4.4 Update")
+P("Instalasi dari katalog atau repo:")
+code("""
+hermes plugins update account-pool
+hermes plugins update account-pool-tracker
+hermes account anthropic setup        # biasanya "Nothing to change"
+""")
+P("Hermes mengganti folder plugin di profil default. Symlink pelacak di profil lain menunjuk ke folder itu, jadi "
+  "semua profil mendapat pelacak baru dengan satu update. Instalasi dari git:")
 code("""
 cd hermes-account-pool
 git pull
@@ -211,15 +294,22 @@ git pull
 """)
 P("Folder plugin lama dicadangkan ke " + C("$HERMES_HOME/plugin-backups/&lt;nama&gt;.&lt;waktu&gt;") + " (di luar "
   + C("plugins/") + ", jadi tidak pernah dimuat dua kali). Akun, akun parkir, riwayat, dan pengaturan tetap. Tanpa "
-  + C("--set-strategy") + ", strategi tidak diubah. Restart Hermes Desktop setelah update supaya halaman dan "
-  "backend-nya yang baru ikut dimuat.")
-H2("4.3 Uninstall")
+  + C("--set-strategy") + ", strategi tidak diubah. Restart Hermes Desktop setelah update apa pun supaya halaman "
+  "dan backend-nya yang baru ikut dimuat.")
+H2("4.5 Uninstall")
+P("Unpark dulu akun yang diparkir jika ingin akun itu kembali ke rotasi: selama plugin tidak ada, loginnya hanya "
+  "tersimpan di " + C("account-pool-parked.json") + ". Instalasi dari katalog atau repo:")
+code("""
+hermes account anthropic setup --undo     # symlink pelacak, entri halaman, timer
+hermes plugins remove account-pool-tracker
+hermes plugins remove account-pool
+""")
+P("Instalasi dari git:")
 code("./uninstall.sh")
 P("Timer, kedua plugin (termasuk halaman Accounts), symlink pelacak, dan entri " + C("account-pool") + " di "
   + C("plugins.enabled") + " tiap profil dihapus. Akun di credential pool <b>tidak</b> disentuh. Akun yang "
-  "diparkir <b>tidak</b> dikembalikan ke rotasi: skrip memperingatkan dan meminta konfirmasi, jadi " + C("unpark")
-  + " dulu jika ingin akun itu kembali. File data dan " + C("credential_pool_strategies") + " tetap; skrip "
-  "menampilkan daftar file yang bisa dihapus manual.")
+  "diparkir <b>tidak</b> dikembalikan ke rotasi: skrip memperingatkan dan meminta konfirmasi. File data dan "
+  + C("credential_pool_strategies") + " tetap; skrip menampilkan daftar file yang bisa dihapus manual.")
 
 H1("5. Konsep dasar")
 H2("Credential pool dan strategi rotasi")
@@ -244,7 +334,7 @@ table([
 ], [0.17, 0.33, 0.50])
 P(C("fill_first") + " ditambah timer balance adalah rotasi berdasarkan kuota: posisi teratas berpindah ke akun yang "
   "paling longgar setiap 5 menit. " + C("hermes account &lt;provider&gt; strategy fill_first") + " dan "
-  + C("install.sh --set-strategy") + " memasang " + C("fill_first") + " di semua profil.")
+  + C("setup --strategy") + " (atau " + C("install.sh --set-strategy") + ") memasang " + C("fill_first") + " di semua profil.")
 H2("Sesi yang berjalan tetap di akunnya")
 P("Urutan menentukan tempat <b>sesi baru</b> mulai. Sesi yang sedang berjalan tetap di akunnya sampai akun itu kena "
   "limit; setelah itu Hermes memindahkannya ke akun berikutnya yang bisa dipakai, yang dijaga " + C("balance")
@@ -589,7 +679,10 @@ LI(["Dipakai setelah " + C("DEAD") + " atau " + C("WRONG LABEL") + ". Login baru
     "Jika cocok, entri lama dihapus dan entri baru menempati posisi yang sama dengan label yang sama. Jika berbeda, "
     "login baru dibuang dan entri lama tidak disentuh.",
     "Akun yang sedang diparkir harus di-" + C("unpark") + " dulu. " + C("--yes") + " melewati konfirmasi. "
-    "Ctrl+C membatalkan dengan bersih."])
+    "Ctrl+C membatalkan dengan bersih.",
+    "Tanpa terminal (cron, shell milik agent), " + C("add") + " dan " + C("relogin") + " langsung berhenti dengan "
+    "pesan " + C("needs a terminal") + " beserta perintah yang harus dijalankan di terminal atau tombol di halaman, "
+    "bahkan dengan " + C("--yes") + ". Tanpa itu, mereka bisa menunggu kode login selamanya."])
 H2("7.10 strategy", need=80)
 code("""
 $ hermes account anthropic strategy
@@ -696,7 +789,17 @@ LI(["Apa yang berubah di pool dan pengaturannya, dan siapa yang mengubah: " + C(
     "balance, yang berubah hampir di setiap putaran.",
     "Disimpan di " + C("account-pool-activity.jsonl") + ", izin 600, 30 hari. Isinya label, waktu, dan pesan perintah "
     "itu sendiri, tidak pernah kredensial."])
-H2("7.15 help, pesan salah, dan exit code")
+H2("7.15 setup", need=40)
+code("""
+hermes account anthropic setup                     # profil dan pelacak; rencana, lalu tanya
+hermes account anthropic setup --timer --strategy  # plus timer 5 menit dan fill_first
+hermes account anthropic setup --undo              # tarik kembali bagian profil dan timer
+""")
+P("Mengerjakan yang tidak dikerjakan instalasi plugin: backend halaman Accounts dan pelacak sesi di setiap profil, "
+  "timer, dan strategi. Penjelasan lengkap di bagian 4.3. Pertanyaan " + C("[y/N]") + " di semua perintah dijawab "
+  "<b>tidak</b> jika tidak ada terminal (" + C("no terminal to answer, so no") + ", exit 1); " + C("--yes")
+  + " tetap melewatinya.")
+H2("7.16 help, pesan salah, dan exit code")
 code("""
 hermes account                 # semua cara ini menampilkan bantuan yang sama
 hermes account help
@@ -716,7 +819,7 @@ table([
     ["Exit code", "Arti"],
     ["0", "Selesai"],
     ["1", "Perintah jalan dan menemukan masalah: " + C("check") + "/" + C("doctor") + " gagal, login dibuang atau "
-     "gagal, remove ditolak, konfirmasi dijawab tidak (atau Ctrl+D), " + C("notify test") + " atau " + C("notify summary") + " tidak sampai ke saluran mana pun, " + C("unschedule") + " untuk akun tanpa jadwal, " + C("strategy") + " yang gagal ditulis ke suatu profil"],
+     "gagal, remove ditolak, konfirmasi dijawab tidak (atau Ctrl+D, atau tanpa terminal), " + C("add") + "/" + C("relogin") + " tanpa terminal, " + C("notify test") + " atau " + C("notify summary") + " tidak sampai ke saluran mana pun, " + C("unschedule") + " untuk akun tanpa jadwal, " + C("strategy") + " atau langkah " + C("setup") + " yang gagal ditulis"],
     ["2", "Cara pakai salah: aksi, provider, target, atau opsi tidak ada atau tidak dikenal"],
     ["130", "Dibatalkan dengan Ctrl+C"],
 ], [0.14, 0.86], keep=True)
@@ -726,7 +829,9 @@ P("Plugin " + C("account-pool") + " juga membawa halaman <b>Accounts</b> untuk H
   "siapa memakai akun apa, dan semua aksi " + C("hermes account") + " dalam bentuk tombol. Perintahnya tetap jalan "
   "seperti biasa; halaman memakai kode yang sama.")
 H2("8.1 Menyalakan halaman")
-OL(["Jalankan " + C("install.sh") + " (menyalin halaman dan mencantumkan " + C("account-pool") + " di semua profil).",
+OL(["Pasang plugin lalu jalankan " + C("hermes account &lt;provider&gt; setup") + " (atau " + C("install.sh")
+    + ", yang menjalankannya). Halaman ikut " + C("account-pool") + "; " + C("setup") + " mencantumkan "
+    + C("account-pool") + " di semua profil.",
     "Restart Hermes Desktop. Desktop menjalankan backend halaman bersama plugin lain yang aktif, jadi sebelum "
     "restart ini halaman belum punya data.",
     "Di <b>Capabilities &gt; Plugins</b>, cari <b>account-pool</b> (Agent + Desktop; nama desktop-nya Accounts) dan "
@@ -739,7 +844,7 @@ P("Hermes Desktop menjalankan backend-nya dengan profil yang terakhir Anda pakai
   + "). Backend itu hanya memuat route halaman sebuah plugin jika plugin itu ada di " + C("plugins.enabled")
   + " <b>profil tersebut</b>. Jika " + C("account-pool") + " hanya ada di profil default, halaman jalan saat Desktop "
   "memakai profil default, dan menampilkan " + C("The account-pool backend did not answer") + " saat memakai profil lain.")
-P("Karena itu " + C("install.sh") + " menambahkan " + C("account-pool") + " ke " + C("plugins.enabled") + " semua profil. "
+P("Karena itu " + C("setup") + " (dan " + C("install.sh") + ") menambahkan " + C("account-pool") + " ke " + C("plugins.enabled") + " semua profil. "
   "Selain itu tidak ada yang berubah di profil-profil tersebut:")
 LI(["Agent di sebuah profil memuat plugin dari folder " + C("plugins/") + " milik profil itu sendiri, dan "
     + C("account-pool") + " tidak ada di sana (tanpa symlink, berbeda dengan pelacak). Bot tidak mendapat perintah, tool, "
@@ -749,7 +854,9 @@ LI(["Agent di sebuah profil memuat plugin dari folder " + C("plugins/") + " mili
     "Backend halaman selalu memakai pool bersama di Hermes home default, profil mana pun yang dijalankan Desktop."])
 P(C("doctor") + " memeriksa hal ini jika Hermes Desktop punya halamannya: " + C("Accounts page backend enabled in every profile")
   + ", atau peringatan berisi nama profil yang belum mencantumkannya.")
-H2("8.3 Isi halaman")
+H2("8.3 Isi halaman", need=120)
+shot("accounts", "Tab Accounts: delapan akun dalam rotasi beserta pemakaian 5 jam dan bot di tiap akun, satu akun "
+     "parkir, dua jadwal parkir, dan perkiraan. Semua akun di gambar adalah data contoh dari tes.")
 P("Header berisi pilihan provider, tombol <b>Live usage</b>, <b>Balance now</b>, dan <b>Add account</b>. Baris di "
   "bawahnya menunjukkan umur angka pemakaian dan kapan timer jalan berikutnya.")
 table([
@@ -782,6 +889,8 @@ table([
      "peringatan bot (sakelar dan dolar per jam), "
      "<b>Send a test alert</b>, <b>Send the summary now</b>, dan peringatan yang sedang aktif."],
 ], [0.14, 0.86])
+shot("report", "Tab Report: beban dan token per akun, token per bot dan per model dengan harga API.")
+shot("activity", "Tab Activity: apa yang diubah timer, perintah, dan halaman.")
 P("<b>Park</b> menanyakan kapan akun kembali: saat di-unpark, 1 jam lagi, 2 jam lagi, atau jam yang Anda ketik ("
   + C("17:00") + ", " + C("+90m") + ", " + C("2026-10-12 08:00") + ", format yang sama dengan " + C("--until")
   + "). <b>Park on a schedule</b> menanyakan hari dan jamnya (" + C("09:00") + " sampai " + C("17:00")
@@ -808,6 +917,8 @@ OL(["<b>Add account</b>, ketik email akun, <b>Start sign-in</b>. Untuk akun yang
 note("Tombol <b>Open in default browser</b> juga ada, tetapi browser default sering login sebagai akun lain. Cara aman: "
      "<b>Copy link</b> lalu buka di profil browser yang benar. Login yang tidak selesai dalam 15 menit kedaluwarsa, "
      "<b>Cancel</b> langsung membatalkannya, dan setiap login hanya bisa diselesaikan sekali.")
+shot("add-account", "Add account untuk Anthropic: salin link, buka di browser yang login sebagai akun itu, tempel "
+     "kodenya, Finish.", width=0.85)
 H2("8.5 Permintaan ke provider")
 table([
     ["Anda", "Permintaan"],
@@ -951,6 +1062,8 @@ P("Ambang 90% membuat akun diistirahatkan sebelum penuh, sehingga sesi baru tida
 
 H1("11. Timer otomatis")
 code("""
+hermes account anthropic setup --timer                             # pasang / tambah provider
+hermes account anthropic setup --undo                              # keluarkan provider
 systemctl --user list-timers hermes-account-balance.timer          # status, jadwal berikutnya
 journalctl --user -u hermes-account-balance.service -n 20 -o cat   # log
 systemctl --user start hermes-account-balance.service              # jalankan sekarang
@@ -961,9 +1074,11 @@ LI(["<b>Interval</b>: " + C("systemctl --user edit --full hermes-account-balance
     + C("OnUnitActiveSec=5min") + ". Setiap putaran membaca pemakaian semua akun sekali, jadi jangan jauh di bawah 5 menit.",
     "<b>Ambang</b>: " + C("systemctl --user edit --full hermes-account-balance.service") + ", tambahkan "
     + C("--threshold 85") + " di baris " + C("ExecStart") + ".",
-    "<b>Provider tambahan</b>: jalankan ulang " + C("./install.sh --provider anthropic --provider openai-codex")
-    + ", atau tambah satu baris " + C("ExecStart=... account &lt;provider&gt; balance") + ". " + C("doctor")
+    "<b>Provider tambahan</b>: " + C("hermes account openai-codex setup --timer") + " menambah baris "
+    + C("ExecStart") + " kedua dan mempertahankan yang pertama. " + C("doctor")
     + " memperingatkan jika timer tidak mencakup provider yang punya akun.",
+    "Timer hanya dipasang jika Anda minta (" + C("setup --timer") + ", atau " + C("install.sh") + " tanpa "
+    + C("--no-timer") + "). File unit ditulis oleh " + C("setup") + ", bukan diambil dari template.",
     "Timer tidak memakai token AI; ia hanya memanggil endpoint pemakaian (dan saluran notifikasi Anda untuk "
     "peringatan dan ringkasan harian)."])
 
@@ -1011,7 +1126,8 @@ table([
     [C("~/.hermes/account-pool-alerts.json"), "Peringatan yang sudah terkirim (satu pesan per kejadian)"],
     [C("~/.hermes/account-pool-state.json"), "Kapan ringkasan harian terakhir dikirim, dan jendela jadwal yang sudah dijalankan"],
     [C("~/.hermes/account-pool.json"), "Pengaturan: saluran peringatan, ringkasan harian, peringatan bot, jadwal parkir"],
-    [C("~/.config/systemd/user/") + "<br/>" + C("hermes-account-balance.{service,timer}"), "Timer 5 menit"],
+    [C("~/.config/systemd/user/") + "<br/>" + C("hermes-account-balance.{service,timer}"), "Timer 5 menit, ditulis "
+     + C("setup --timer")],
 ], [0.48, 0.52])
 P("Cara token diperlakukan:")
 LI(["Semua file data berizin 600. Token tidak pernah dicetak atau dicatat di log; token hanya masuk ke header "
@@ -1023,6 +1139,34 @@ LI(["Semua file data berizin 600. Token tidak pernah dicetak atau dicatat di log
     "Refresh token bisa sekali pakai. Setiap refresh langsung ditulis kembali, dengan file lock untuk akun parkir.",
     "API key untuk " + C("add --key") + " dibaca tanpa ditampilkan di dalam plugin, tidak pernah dari command line.",
     "Plugin utama hanya di profil default, jadi profil bot tidak bisa mengubah akun."])
+H2("Pengungkapan keamanan dan privasi", need=60)
+P("Ringkasan semua yang dilakukan plugin di luar file miliknya sendiri. Aturan katalog plugin Hermes memintanya "
+  "(aturan 11 dan 13), dan ini yang perlu Anda ketahui sebelum menjalankannya. Versi lengkapnya, termasuk daftar "
+  "fungsi internal Hermes yang dipakai, ada di README bagian <i>Security and privacy disclosure</i>.")
+table([
+    ["Hal", "Rincian"],
+    ["Menulis kredensial", C("add") + ", " + C("relogin") + ", " + C("remove") + ", " + C("park") + ", " + C("unpark")
+     + ", " + C("schedule") + ", dan " + C("balance") + " mengubah pool lewat API " + C("CredentialPool") + " milik "
+     "Hermes atau " + C("hermes auth add/remove") + ". " + C("park") + " memindahkan entri beserta token OAuth-nya ke "
+     + C("account-pool-parked.json") + " (600, file lock); " + C("balance") + " me-refresh token akun parkir dengan "
+     "fungsi refresh Hermes sendiri. Login dari halaman memakai client id dan fungsi token Hermes."],
+    ["Jaringan", C("api.anthropic.com") + " (usage, profile), endpoint token OAuth Anthropic lewat Hermes, "
+     + C("claude.ai/oauth/authorize") + " (link yang Anda buka sendiri), " + C("chatgpt.com/backend-api/wham/usage")
+     + ", " + C("auth.openai.com") + ", dan Telegram lewat " + C("hermes send") + ". Header klien sama dengan "
+     "pembaca pemakaian Hermes (" + C("claude-code/2.1.0") + ", " + C("codex_cli_rs") + "). Tanpa telemetri, tanpa "
+     "cek update."],
+    ["Kerja di latar belakang", "Hanya timer, jika dipasang: " + C("balance") + " tiap 5 menit. Pelacak berjalan "
+     "di dalam setiap proses Hermes sebagai hook " + C("post_api_request") + "."],
+    ["Perintah yang dijalankan", C("systemctl --user") + ", " + C("notify-send") + ", " + C("hermes config set")
+     + ", " + C("hermes plugins enable account-pool-tracker") + ", " + C("hermes auth add/remove") + ", "
+     + C("hermes send") + "."],
+    ["Dibaca di luar file sendiri", C("config.yaml") + " dan " + C("state.db") + " (read-only) setiap profil, "
+     + C("/proc/self/cgroup") + " (apakah proses ini service timer), " + C("/proc/&lt;pid&gt;/cmdline")
+     + " proses Hermes (" + C("doctor") + "), file harga Hermes, status unit systemd."],
+    ["Ditulis di luar file sendiri", C("auth.json") + "; " + C("config.yaml") + " profil hanya lewat "
+     + C("hermes config set") + "/" + C("plugins enable") + " dari " + C("setup") + ", " + C("strategy") + ", "
+     "dan dialog rotasi; symlink pelacak di " + C("profiles/*/plugins/") + "; unit systemd."],
+], [0.24, 0.76])
 
 H1("14. Memaksa akun tertentu")
 code("""
@@ -1052,7 +1196,9 @@ table([
     ["check: DEAD", "Login dicabut atau token dipakai aplikasi/perangkat lain", C("hermes account anthropic relogin &lt;email&gt;")],
     ["check: WRONG LABEL / DUPLICATE", "Ditambah lewat " + C("hermes auth add") + " saat browser login akun lain",
      C("relogin") + " akun yang benar, atau " + C("remove &lt;id&gt;") + " entri lebihnya"],
-    [C("who") + " kosong", "Sesi dimulai sebelum pelacak dipasang", C("/reset") + " sesi, atau restart gateway/desktop"],
+    [C("who") + " kosong", "Sesi dimulai sebelum pelacak dipasang, atau Hermes memakai " + C("plugins.isolation: host"),
+     C("/reset") + " sesi, atau restart gateway/desktop. Dengan isolasi " + C("host") + " pelacak tidak bisa melihat "
+     "akunnya (bagian 17)"],
     [C("sessions") + " kosong", "Bot masih memakai pelacak lebih lama dari 1.5.0", C("hermes gateway restart") + ", restart "
      "Hermes Desktop; " + C("doctor") + " menyebut prosesnya"],
     [C("doctor") + ": session tracker ... is not loaded yet", "Gateway, Hermes Desktop, atau sesi panjang dimulai sebelum "
@@ -1061,7 +1207,7 @@ table([
     [C("report") + ": not enough history", "Timer mati atau baru dipasang", C("doctor") + ", tunggu beberapa putaran"],
     ["Peringatan bot terlalu sering", "Batas bawah terlalu rendah untuk beban Anda", C("notify bots=30") + " (atau "
      + C("bots-off") + "); lihat " + C("sessions --hours 1") + " dulu"],
-    ["Akun " + C("--until") + " tidak kembali", "Timer mati", C("systemctl --user enable --now") + "<br/>" + C("hermes-account-balance.timer")],
+    ["Akun " + C("--until") + " tidak kembali", "Timer mati", C("hermes account &lt;provider&gt;") + "<br/>" + C("setup --timer")],
     ["Jadwal tidak memarkir akunnya", "Timer mati, akun itu akun aktif terakhir, atau Anda meng-unpark di tengah jendela",
      C("hermes account anthropic schedule") + " menampilkan keadaan tiap jadwal"],
     ["Ringkasan harian tidak datang", "Timer mati, tidak ada saluran aktif, atau dinyalakan setelah jamnya hari ini",
@@ -1076,7 +1222,14 @@ table([
     [C("hermes account") + " tidak dikenal", "Dijalankan dengan -p (plugin hanya di default)", "Jalankan tanpa -p"],
     ["Halaman: " + C("The account-pool backend did not answer"), "Desktop memakai profil yang belum mencantumkan "
      + C("account-pool") + " (profil baru, atau instalasi sebelum 3.5.1), atau belum di-restart setelah instalasi",
-     C("./install.sh") + " lagi, lalu restart Hermes Desktop. " + C("doctor") + " menyebut profil yang belum"],
+     C("hermes account &lt;provider&gt; setup") + ", lalu restart Hermes Desktop. " + C("doctor") + " menyebut profil yang belum"],
+    [C("add needs a terminal") + " / " + C("relogin needs a terminal"), "Dijalankan dari cron, shell agent, atau tempat "
+     "lain tanpa terminal, jadi tidak ada yang bisa menempel kode login", "Jalankan di terminal, atau pakai <b>Add "
+     "account</b> / <b>Sign in again</b> di halaman"],
+    [C("no terminal to answer, so no"), "Perintah yang bertanya dijalankan tanpa terminal", "Jalankan di terminal, "
+     "atau tambah " + C("--yes")],
+    [C("setup") + ": session tracker not installed", "Hanya " + C("account-pool") + " yang dipasang",
+     C("hermes plugins install account-pool-tracker --enable") + ", lalu " + C("setup") + " lagi"],
     ["Tidak ada Accounts di sidebar", "Bagian Desktop plugin masih mati", "Capabilities &gt; Plugins, account-pool, "
      "nyalakan Desktop. Setelah update: Ctrl+K, " + C("Reload desktop plugins")],
     ["Tombol Live usage abu-abu", "Live usage baru jalan kurang dari 2 menit lalu", "Tunggu hitungan mundurnya"],
@@ -1103,10 +1256,11 @@ qa = [
      "halaman, tetapi dengan plugin ini tetap pakai " + C("fill_first")
      + ": balance lalu merotasi berdasarkan sisa kuota, bukan giliran. Perbandingan keempatnya ada di bagian 5."),
     ("Apakah plugin mengubah fallback atau model?",
-     "Tidak. Fallback, model, dan provider yang dipakai profil tetap di pengaturan Hermes. Satu-satunya pengaturan yang "
-     "ditulis proyek ini adalah " + C("credential_pool_strategies") + ", dan hanya jika Anda minta: "
-     + C("install.sh --set-strategy") + ", " + C("hermes account &lt;provider&gt; strategy") + ", atau dialog rotasi "
-     "di halaman."),
+     "Tidak. Fallback, model, dan provider yang dipakai profil tetap di pengaturan Hermes. Satu-satunya pengaturan "
+     "terkait model yang ditulis proyek ini adalah " + C("credential_pool_strategies") + ", dan hanya jika Anda minta: "
+     + C("setup --strategy") + ", " + C("install.sh --set-strategy") + ", " + C("hermes account &lt;provider&gt; strategy")
+     + ", atau dialog rotasi di halaman. " + C("setup") + " juga menulis " + C("plugins.enabled") + " tiap profil, "
+     "untuk halaman dan pelacak."),
     ("Bolehkah akun yang sama dipakai di claude.ai, Claude Code, atau Codex CLI bersamaan?",
      "Boleh, dengan login terpisah di aplikasi itu. Kuotanya berbagi, jadi pemakaian itu ikut terlihat di "
      + C("usage") + ". Jangan menyalin token Hermes ke aplikasi atau perangkat lain."),
@@ -1146,10 +1300,14 @@ LI(["Pemakaian berasal dari <b>endpoint yang tidak didokumentasikan resmi</b>: "
     "perilaku bot.",
     C("API $") + " memakai harga daftar untuk panjang konteks standar; tarif konteks panjang dan diskon batch tidak "
     "dihitung.",
-    C("who") + " mencari sesi lewat stack thread yang sedang berjalan. Jika suatu update Hermes mengubah struktur "
-    "internalnya, " + C("who") + " kosong tetapi bot tidak terganggu (pelacak menelan semua error).",
-    C("add") + " dan " + C("relogin") + " dengan OAuth butuh terminal interaktif atau halaman Accounts untuk menempel "
-    "kode login. Login Codex dari halaman baru diuji sampai kode perangkat muncul; login Codex penuh belum pernah "
+    C("who") + " mencari sesi lewat stack thread yang sedang berjalan, karena hook " + C("post_api_request")
+    + " Hermes tidak menyebut entri pool yang dipakai. Itu butuh " + C("plugins.isolation: in_process") + " (default "
+    "Hermes): dengan isolasi " + C("host") + " pelacak tidak mencatat apa pun, jadi " + C("who") + ", token, daftar "
+    "sesi, dan peringatan bot kosong, sedangkan usage, balance, park, jadwal, dan perkiraan tetap jalan. Jika suatu "
+    "update Hermes mengubah struktur internalnya, " + C("who") + " kosong tetapi bot tidak terganggu (pelacak menelan "
+    "semua error).",
+    C("add") + " dan " + C("relogin") + " butuh terminal atau halaman Accounts untuk menempel kode login atau "
+    "mengetik key; tanpa itu mereka langsung berhenti. Login Codex dari halaman baru diuji sampai kode perangkat muncul; login Codex penuh belum pernah "
     "dijalankan.",
     "Halaman Accounts mengikuti SDK desktop plugin Hermes versi Hermes Agent 0.21.5. Perubahan SDK di masa depan bisa "
     "merusak halaman; perintahnya tidak terpengaruh.",
@@ -1180,12 +1338,19 @@ table([
     ["Strategi rotasi tiap profil", C("hermes account anthropic strategy")],
     ["Log timer", C("journalctl --user -u hermes-account-balance.service -n 20 -o cat")],
     ["Halaman di Desktop", "Sidebar <b>Accounts</b>, atau Ctrl+K " + C("Accounts: open the account pool")],
-    ["Update plugin", C("git pull && ./install.sh")],
+    ["Setup profil, pelacak, timer", C("hermes account anthropic setup --timer")],
+    ["Update plugin", C("hermes plugins update account-pool") + "<br/>(git: " + C("git pull && ./install.sh") + ")"],
 ], [0.30, 0.70])
 
 H1("19. Riwayat versi")
 table([
     ["Versi", "Perubahan"],
+    ["3.10.0", "Siap untuk katalog plugin Hermes. Perintah baru " + C("setup") + " (profil, pelacak, " + C("--timer")
+     + ", " + C("--strategy") + ", " + C("--undo") + "); unit systemd ditulis " + C("setup") + ", folder "
+     + C("systemd/") + " dihapus, " + C("install.sh") + " memanggil " + C("setup --yes") + ". Tanpa terminal, "
+     + C("add") + "/" + C("relogin") + " langsung berhenti dan semua pertanyaan " + C("[y/N]") + " dijawab tidak. "
+     "Perbaikan: jadwal parkir lebih dari sehari lagi menulis harinya dua kali. Dokumentasi: screenshot, instalasi "
+     "dari katalog, pengungkapan keamanan, README pelacak."],
     ["3.9.1", "Peringatan bot: sekali per bot per 6 jam (sebelumnya bisa berulang saat bot naik-turun di sekitar "
      "batas), dan batas dua kali lipat selama profil belum punya jam biasa. Perkiraan membaca ujung riwayat saja. "
      + C("sessions") + " untuk provider tanpa akun menyebutnya."],
