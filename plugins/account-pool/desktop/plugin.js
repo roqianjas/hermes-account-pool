@@ -795,7 +795,7 @@ function HourChart({ chart }) {
 function GroupTable({ title, kind, rows, total, extra }) {
   const shown = rows.filter(r => r.requests)
   if (!shown.length) return null
-  const name = r => r.name === '?' ? h(MTip, { label: 'Counted before the session tracker recorded profile and model (tracker 1.3.0). It leaves the report within 8 days.' }, h('span', { className: 'hap-muted' }, 'not split yet')) : r.name
+  const name = r => r.name === '?' ? h(MTip, { label: 'Counted by a session tracker older than 1.3.0, which did not record profile and model: before the update, or by a process that kept the old tracker until it restarted (Health > Run doctor names it). These tokens leave the report within 8 days.' }, h('span', { className: 'hap-muted' }, 'no name (older tracker)')) : r.name
   return h(Fragment, null,
     h('div', { className: 'hap-section' }, title, h('span', { className: 'hap-pill' }, shown.length)),
     h('table', { className: 'hap-table', 'data-table': kind },
@@ -1176,6 +1176,9 @@ function AccountsPage() {
             + 'Sessions there ignore the balance order.'),
           h(Button, { size: 'xs', variant: 'outline', disabled: !!busy, onClick: () => setDialog({ type: 'strategyfix' }) }, 'Use fill_first'))
         : null,
+      data && data.tracker && (data.tracker.stale.length || data.tracker.unnamed_since) && view === 'accounts'
+        ? h(TrackerBanner, { tracker: data.tracker })
+        : null,
       data && data.alerts.length && view === 'accounts'
         ? data.alerts.map(a => h('div', { className: 'hap-banner', key: a.key }, h(Codicon, { name: 'warning' }),
           h('span', { className: 'hap-grow' }, a.text),
@@ -1188,6 +1191,16 @@ function AccountsPage() {
         : null,
       content),
     modal)
+}
+
+// Processes that loaded the session tracker before its last update (gateway, Desktop, long sessions).
+function TrackerBanner({ tracker }) {
+  const name = g => g.kind === 'gateway' ? 'the gateway' : g.kind === 'desktop' ? 'Hermes Desktop' : `a ${g.platforms.join('/')} session`
+  const fixes = [...new Set(tracker.stale.map(g => g.fix))]
+  const text = tracker.stale.length
+    ? `Token counting: ${tracker.stale.map(g => `${name(g)} (${g.profiles.join(', ')})`).join(', ')} still ${tracker.stale.length === 1 ? 'runs' : 'run'} an older session tracker than ${tracker.version}, loaded before the update. Fix: ${fixes.join('; ')}.`
+    : `Token counting: a process with session tracker 1.2.0 or older counted tokens without a bot name until ${hhmm(tracker.unnamed_since + 900)}. Fix: hermes gateway restart, restart Hermes Desktop, or end long sessions.`
+  return h('div', { className: 'hap-banner', 'data-banner': 'tracker' }, h(Codicon, { name: 'info' }), h('span', { className: 'hap-grow' }, text))
 }
 
 // Hermes' own rotation setting (credential_pool_strategies). Hermes owns it; the page shows it and

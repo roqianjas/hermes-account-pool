@@ -16,7 +16,7 @@ from reportlab.platypus import (CondPageBreak, KeepTogether, PageBreak, Paragrap
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 from reportlab.platypus.tableofcontents import TableOfContents
 
-VERSION = "3.8.0"
+VERSION = "3.8.1"
 REPO = "github.com/roqianjas/hermes-account-pool"
 FOOTER = f"Hermes plugin account-pool {VERSION} · {REPO}"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hermes-account-pool.pdf")
@@ -196,7 +196,8 @@ table([
 ], [0.26, 0.74])
 P(C("HERMES_HOME") + " kustom dihormati dan ditulis ke file service. Sesi yang sedang berjalan baru memuat pelacak "
   "setelah " + C("/reset") + ", atau setelah gateway/desktop di-restart. Halaman Accounts butuh dua langkah lagi di "
-  "Hermes Desktop (bagian 8.1). Profil yang dibuat setelah instalasi perlu " + C("./install.sh") + " lagi supaya "
+  "Hermes Desktop (bagian 8.1). Setelah update, " + C("doctor") + " dan halaman Accounts menyebut proses yang masih "
+  "memakai pelacak lama. Profil yang dibuat setelah instalasi perlu " + C("./install.sh") + " lagi supaya "
   "halaman tetap jalan saat Desktop memakai profil itu; " + C("doctor") + " menyebut profil seperti ini. Cek hasilnya:")
 code("""
 hermes account anthropic doctor
@@ -496,8 +497,9 @@ P("<b>API $</b> adalah nilai token itu jika lewat API provider, dengan harga daf
   "tidak punya harga yang diketahui (model tanpa harga, atau token yang dihitung sebelum pelacak 1.3.0 yang belum "
   "mencatat model); token itu tidak dihitung, bukan ditebak.")
 P(C("By profile (bot)") + " dan " + C("By model") + " membagi token yang sama menurut profil Hermes yang "
-  "memanggil dan menurut modelnya. Token dari sebelum pelacak 1.3.0 tampil sebagai " + C("(before tracker 1.3.0)")
-  + " dan hilang dari laporan dalam 8 hari.")
+  "memanggil dan menurut modelnya. Token dari pelacak yang lebih lama dari 1.3.0 tampil sebagai " + C("(older tracker, no name)")
+  + ": dihitung sebelum update itu, atau oleh proses yang masih memakai pelacak lama sampai di-restart. Token ini "
+  "hilang dari laporan dalam 8 hari.")
 P(C("report --chart") + " menggambar beban per jam selama 7 hari terakhir: satu baris per hari, satu kolom per jam "
   "(waktu lokal). Makin gelap, makin besar bebannya; " + C("·") + " berarti kosong. Blok pertama adalah kuota "
   "terpakai (dari riwayat timer), blok kedua token lewat Hermes.")
@@ -615,6 +617,7 @@ $ hermes account anthropic doctor
   OK    strategy fill_first in 6 profiles
   OK    every profile uses the shared account pool
   OK    session tracker active in every profile
+  OK    running sessions count with tracker 1.4.0
   OK    Accounts page backend enabled in every profile
   OK    auth.json permissions 600
   OK    account-pool-parked.json permissions 600
@@ -626,7 +629,10 @@ $ hermes account anthropic doctor
   0 failure(s), 0 warning(s).
 """)
 P("Jalankan setelah instalasi, setelah update Hermes, atau saat bot berperilaku aneh. Setiap baris FAIL atau WARN "
-  "menyertakan perbaikannya. Profil dengan strategi lain adalah FAIL (perbaikan: " + C("strategy fill_first")
+  "menyertakan perbaikannya. Pelacak dimuat saat proses mulai, jadi setelah update gateway, Hermes Desktop, dan sesi "
+  "panjang masih memakai pelacak lama; doctor lalu memberi WARN " + C("session tracker 1.4.0 is not loaded yet by: ...")
+  + " beserta restart yang dibutuhkan masing-masing. Token tanpa nama bot dalam setengah jam terakhir berarti pelacak "
+  "1.2.0 atau lebih lama masih berjalan. Profil dengan strategi lain adalah FAIL (perbaikan: " + C("strategy fill_first")
   + "); nilai yang tidak dikenal Hermes hanya WARN, karena Hermes lalu memakai " + C("fill_first") + "."
   " Exit code 1 jika ada FAIL. Untuk provider tanpa akun: "
   + C("not in use, nothing to check") + ".")
@@ -710,7 +716,8 @@ table([
      "<b>Park on a schedule</b>, <b>Remove</b>. Ikon kalender di sebelah akun menunjukkan jadwalnya. Di bawahnya akun "
      "parkir: pemakaian terakhir, sejak kapan, kapan kembali (" + C("(schedule)") + " bila diparkir jadwal), tombol "
      "<b>Unpark</b>, <b>Park on a schedule</b>, dan <b>Remove</b>. Lalu tabel jadwal parkir beserta keadaannya "
-     "sekarang, dengan tombol ubah dan hapus. Peringatan aktif tampil sebagai banner di atas; akun mati mendapat tombol <b>Sign in again</b>."],
+     "sekarang, dengan tombol ubah dan hapus. Peringatan aktif tampil sebagai banner di atas; akun mati mendapat tombol <b>Sign in again</b>. Banner info "
+     "menyebut proses yang masih memakai pelacak lama beserta perbaikannya."],
     ["Report", "Angka " + C("report") + " untuk 24 jam, 3 hari, atau 7 hari: beban per akun, porsi, puncak, waktu "
      "≥ 90%, token dan harga API-nya, jam tersibuk, dan saran. Lalu token per profil (bot) dan per model, serta grafik "
      "beban per jam 7 hari terakhir (kuota terpakai atau token; arahkan kursor ke kotak untuk angkanya)."],
@@ -888,7 +895,7 @@ table([
     [C("~/.hermes/plugins/account-pool/desktop/"), "Halaman Accounts untuk Hermes Desktop. Desktop menyalinnya ke "
      + C("~/.hermes/desktop-plugins/account-pool/") + "."],
     [C("~/.hermes/plugins/account-pool/dashboard/"), "Backend halaman (" + C("plugin_api.py") + ") dan manifest-nya."],
-    [C("~/.hermes/plugins/account-pool-tracker/"), "Pelacak sesi dan penghitung token; di-symlink ke "
+    [C("~/.hermes/plugins/account-pool-tracker/"), "Pelacak sesi dan penghitung token (mencatat juga versinya, id proses, dan tugas Kanban); di-symlink ke "
      + C("profiles/*/plugins/") + ". Tanpa perintah, tanpa tool, tanpa kredensial."],
     [C("~/.hermes/auth.json"), "Credential pool bersama semua profil (milik Hermes)"],
     [C("~/.hermes/account-pool-parked.json"), "Akun yang diparkir. <b>Berisi token OAuth.</b>"],
@@ -941,6 +948,8 @@ table([
     ["check: WRONG LABEL / DUPLICATE", "Ditambah lewat " + C("hermes auth add") + " saat browser login akun lain",
      C("relogin") + " akun yang benar, atau " + C("remove &lt;id&gt;") + " entri lebihnya"],
     [C("who") + " kosong", "Sesi dimulai sebelum pelacak dipasang", C("/reset") + " sesi, atau restart gateway/desktop"],
+    [C("doctor") + ": session tracker ... is not loaded yet", "Gateway, Hermes Desktop, atau sesi panjang dimulai sebelum "
+     "pelacak di-update", C("hermes gateway restart") + "; restart Hermes Desktop; sesi berganti saat selesai"],
     ["Tidak ada pesan Telegram", "Token bot profil pengirim tidak valid", C("notify test") + "; ganti " + C("telegram-via")],
     [C("report") + ": not enough history", "Timer mati atau baru dipasang", C("doctor") + ", tunggu beberapa putaran"],
     ["Akun " + C("--until") + " tidak kembali", "Timer mati", C("systemctl --user enable --now") + "<br/>" + C("hermes-account-balance.timer")],
@@ -1063,6 +1072,9 @@ table([
 H1("19. Riwayat versi")
 table([
     ["Versi", "Perubahan"],
+    ["3.8.1", "Pelacak 1.4.0 mencatat versi, id proses, dan tugas Kanban. " + C("doctor") + " dan halaman menyebut "
+     "proses yang masih memakai pelacak lama (gateway, Hermes Desktop, sesi panjang) beserta perbaikannya. Token tanpa "
+     "nama bot berlabel " + C("(older tracker, no name)") + "."],
     ["3.8.0", "Strategi rotasi dari plugin: " + C("strategy") + " (lihat atau ubah per profil, lewat "
      + C("hermes config set") + " milik Hermes) dan dialog rotasi di halaman; tombol <b>Use fill_first</b> di banner. "
      + C("doctor") + ": nilai strategi yang tidak dikenal kini WARN. Kartu token tidak lagi terpotong."],

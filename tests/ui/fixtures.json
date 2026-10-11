@@ -1803,7 +1803,12 @@
     "parked_by_schedule": false,
     "until": null
    }
-  ]
+  ],
+  "tracker": {
+   "version": "1.4.0",
+   "stale": [],
+   "unnamed_since": null
+  }
  },
  "/status?provider=openai-codex": {
   "provider": "openai-codex",
@@ -1900,7 +1905,12 @@
    ],
    "other": []
   },
-  "schedules": []
+  "schedules": [],
+  "tracker": {
+   "version": "1.4.0",
+   "stale": [],
+   "unnamed_since": null
+  }
  },
  "/summary?provider=anthropic": {
   "provider": "anthropic",

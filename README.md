@@ -2,7 +2,7 @@
 
 Run several accounts of one provider in [Hermes Agent](https://hermes-agent.nousresearch.com/docs) and manage them from one command, `hermes account`, or from an Accounts page in Hermes Desktop. Add accounts with a verified email, see live usage per account, spread the load before an account runs out, park accounts for a while or on a weekly schedule, see which bot is on which account and how many tokens each bot uses, and get an alert or a daily summary.
 
-Version 3.8.0 · MIT · Hermes Agent ≥ 0.21 · Linux with systemd · Indonesian PDF guide in [`docs/`](docs/hermes-account-pool.pdf)
+Version 3.8.1 · MIT · Hermes Agent ≥ 0.21 · Linux with systemd · Indonesian PDF guide in [`docs/`](docs/hermes-account-pool.pdf)
 
 ## Contents
 
@@ -92,7 +92,7 @@ cd hermes-account-pool
 | `--no-timer` | Skip the timer. Run `balance` yourself. |
 | `-h`, `--help` | Show the options. |
 
-A custom `HERMES_HOME` is respected and written into the service unit. Running sessions load the tracker after `/reset` or after a gateway or desktop restart. The Accounts page needs two more steps in Hermes Desktop, see [Turn the page on](#turn-the-page-on). A profile created after the install needs `./install.sh` again (or `hermes -p <profile> config set plugins.enabled` with `account-pool` added) before Hermes Desktop can show the page while it runs that profile; `doctor` names such profiles.
+A custom `HERMES_HOME` is respected and written into the service unit. Running sessions load the tracker after `/reset` or after a gateway or desktop restart. After an update, `doctor` and the Accounts page name each process that still runs the older tracker. The Accounts page needs two more steps in Hermes Desktop, see [Turn the page on](#turn-the-page-on). A profile created after the install needs `./install.sh` again (or `hermes -p <profile> config set plugins.enabled` with `account-pool` added) before Hermes Desktop can show the page while it runs that profile; `doctor` names such profiles.
 
 Check the result:
 
@@ -360,7 +360,7 @@ $ hermes account anthropic report --hours 24
 - `peak`: the highest value seen. `time >= 90%`: how long the account was nearly full.
 - `tokens`: the tokens Hermes sent and received on the account in the period: input, output, cache read and cache write, summed. The two lines under the table split the total and count the requests. The session tracker counts them on every API call from version 1.1.0 on, so a period that starts earlier says `counted since`. `-`: no call counted.
 - `API $`: what those tokens would cost at the provider's API list prices, per model (input, output, cache read and cache write each at their own price). A subscription is billed flat, so this is what the use is worth, not a bill. Prices come from Hermes itself: its bundled price list, else its models.dev cache; the plugin makes no request for them. `+` means some tokens have no known price (a model without a listed price, or tokens counted before tracker 1.3.0, which did not record the model); those are left out, not guessed.
-- `By profile (bot)` and `By model` split the same tokens by the Hermes profile that made the call and by the model. Tokens counted before tracker 1.3.0 show as `(before tracker 1.3.0)`; they leave the report within 8 days.
+- `By profile (bot)` and `By model` split the same tokens by the Hermes profile that made the call and by the model. Tokens counted by a tracker older than 1.3.0 show as `(older tracker, no name)`: they were counted before that update, or by a process that kept the old tracker until it restarted. They leave the report within 8 days.
 - `used` and `tokens` measure different things. `used` is the provider's own percentage, which includes the account's use in other apps (claude.ai, Claude Code) and weights token types differently (a cache read costs much less than an output token). `tokens` covers only Hermes on this computer.
 - With at least 2 hours of data and some real load, the report adds advice: when every account was ≥ 90% at the same time, it suggests adding an account; when one account carried more than half the load, it points you to `who`.
 - The default window is 24 hours (`--hours N`). History covers at least the last 14 days.
@@ -471,6 +471,7 @@ $ hermes account anthropic doctor
   OK    strategy fill_first in 6 profiles
   OK    every profile uses the shared account pool
   OK    session tracker active in every profile
+  OK    running sessions count with tracker 1.4.0
   OK    Accounts page backend enabled in every profile
   OK    auth.json permissions 600
   OK    account-pool-parked.json permissions 600
@@ -482,7 +483,7 @@ $ hermes account anthropic doctor
   0 failure(s), 0 warning(s).
 ```
 
-Run it after installing, after a Hermes update, or when bots behave oddly. Every FAIL or WARN line includes the fix. A profile on another strategy is a FAIL (`Fix: hermes account <provider> strategy fill_first`); a value Hermes does not know is only a WARN, because Hermes then uses `fill_first`. Exit code 1 when there is a FAIL. For a provider with no accounts it says `not in use, nothing to check`.
+Run it after installing, after a Hermes update, or when bots behave oddly. Every FAIL or WARN line includes the fix. A process loads the session tracker when it starts, so after an update the gateway, Hermes Desktop and long sessions keep the old one; doctor then warns `session tracker 1.4.0 is not loaded yet by: the gateway (...); Hermes Desktop (...)` with the restart each one needs. Tokens without a bot name in the last half hour mean a tracker 1.2.0 or older is still running. A profile on another strategy is a FAIL (`Fix: hermes account <provider> strategy fill_first`); a value Hermes does not know is only a WARN, because Hermes then uses `fill_first`. Exit code 1 when there is a FAIL. For a provider with no accounts it says `not in use, nothing to check`.
 
 ### notify
 
@@ -550,7 +551,7 @@ The header has a provider switch (providers with accounts in the pool, plus the 
 
 | Tab | Content |
 |---|---|
-| Accounts | The header line shows Hermes' rotation strategy (hover for what each one does, click to change it); a banner names any profile that does not use `fill_first`, with a **Use fill_first** button. Five cards: accounts in rotation, parked accounts, the account the next session starts on with its usage, sessions in the last 30 minutes, tokens in the last 24 hours with their API price. Then the rotation table in pool order: status, 5-hour usage bar, trend over the last 5 hours, reset time (or `back HH:MM` while benched), tokens in the last 24 hours (hover for input, output, cache, requests, API price, the main model and the current 5-hour window), the profiles using the account (hover for session, platform, model, since when the session is on this account, and the account it moved from) and the row buttons **Sign in again**, **Park**, **Park on a schedule** and **Remove**. A calendar chip next to an account shows its schedule. Parked accounts follow with their last known usage, since when they are parked, when they return (`(schedule)` when a schedule parked them), and **Unpark**, **Park on a schedule** and **Remove**. Then the park schedules, with what each one does now (parked until, next window, or `not in the pool`) and buttons to change or remove it. Active alerts show as a banner on top, a dead account with a **Sign in again** button. |
+| Accounts | The header line shows Hermes' rotation strategy (hover for what each one does, click to change it); a banner names any profile that does not use `fill_first`, with a **Use fill_first** button. Five cards: accounts in rotation, parked accounts, the account the next session starts on with its usage, sessions in the last 30 minutes, tokens in the last 24 hours with their API price. Then the rotation table in pool order: status, 5-hour usage bar, trend over the last 5 hours, reset time (or `back HH:MM` while benched), tokens in the last 24 hours (hover for input, output, cache, requests, API price, the main model and the current 5-hour window), the profiles using the account (hover for session, platform, model, since when the session is on this account, and the account it moved from) and the row buttons **Sign in again**, **Park**, **Park on a schedule** and **Remove**. A calendar chip next to an account shows its schedule. Parked accounts follow with their last known usage, since when they are parked, when they return (`(schedule)` when a schedule parked them), and **Unpark**, **Park on a schedule** and **Remove**. Then the park schedules, with what each one does now (parked until, next window, or `not in the pool`) and buttons to change or remove it. Active alerts show as a banner on top, a dead account with a **Sign in again** button. An info banner names any process that still runs an older session tracker, with its fix. |
 | Report | The `report` numbers for 24 hours, 3 days or 7 days: load per account, share, peak, time at 90% or more, tokens and their API price, busiest hours and the advice line. Then tokens by profile (bot) and by model, and a chart of the load per hour for the last 7 days (quota used or tokens; hover a cell for its numbers). |
 | Health | Timer state, age of the usage history, active alerts. **Run doctor** runs the `doctor` checks; **Check accounts** runs `check` and shows its output. |
 | Alerts | Desktop and Telegram switches, the profile whose bot sends Telegram alerts, the daily summary (switch and time), **Send a test alert**, **Send the summary now**, and the alerts active now. |
@@ -689,7 +690,7 @@ Adding an adapter for another provider is a single class; see [CONTRIBUTING.md](
 | `plugins/account-pool/` | The `hermes account` command (`__init__.py`) and the provider adapters (`providers.py`). The command registers in the default profile only. |
 | `plugins/account-pool/desktop/` | The Accounts page for Hermes Desktop (`plugin.js`). Hermes Desktop copies it to `$HERMES_HOME/desktop-plugins/account-pool/`. |
 | `plugins/account-pool/dashboard/` | The page's backend (`plugin_api.py`) and its manifest. `dist/index.js` only tells the browser dashboard that the page lives in Hermes Desktop. |
-| `plugins/account-pool-tracker/` | A `post_api_request` hook that records `{profile, session, platform, model, account label}` and adds each call's token counts to its account, profile and model. No commands, no tools, no credentials; it swallows every error so it can never break a bot. |
+| `plugins/account-pool-tracker/` | A `post_api_request` hook that records `{profile, session, platform, model, account label, tracker version, process id, Kanban task}` and adds each call's token counts to its account, profile and model. No commands, no tools, no credentials; it swallows every error so it can never break a bot. |
 | `systemd/` | The service and timer templates used by `install.sh`. |
 
 Data files, all mode `600`, in `$HERMES_HOME`:
@@ -725,6 +726,7 @@ How tokens are handled:
 | `check`: `DEAD` | Login revoked, or the token was used by another app or machine | `hermes account anthropic relogin <email>` |
 | `check`: `WRONG LABEL` or `DUPLICATE` | Added with plain `hermes auth add` while signed in as another account | `relogin` the right account, or `remove <id>` the extra entry |
 | `who` is empty | Sessions started before the tracker was installed | `/reset` the session, or restart the gateway or desktop |
+| `doctor`: session tracker X is not loaded yet by ... | The gateway, Hermes Desktop or a long session started before the tracker was updated | `hermes gateway restart`; restart Hermes Desktop; a session switches when it ends |
 | No Telegram alert | The bot token of the sending profile is invalid | `notify test`; switch with `notify telegram-via=<profile>` |
 | `report`: not enough history | The timer is off or was just installed | `doctor`, then wait for a few runs |
 | A `--until` park did not end | The timer is off | `systemctl --user enable --now hermes-account-balance.timer` |

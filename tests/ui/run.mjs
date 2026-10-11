@@ -244,7 +244,7 @@ const rep24 = fx['/report?provider=anthropic&hours=24']
 ok(document.querySelectorAll('[data-table="accounts"] tbody tr').length === rep24.accounts.length, 'report rows match')
 ok(document.querySelectorAll('[data-table="bots"] tbody tr').length === rep24.by_profile.filter(r => r.requests).length, 'tokens per profile (bot) listed')
 ok(document.querySelectorAll('[data-table="models"] tbody tr').length === rep24.by_model.filter(r => r.requests).length, 'tokens per model listed')
-ok(screen.getAllByText('not split yet').length === 2, 'tokens counted before tracker 1.3.0 are labelled')
+ok(screen.getAllByText('no name (older tracker)').length === 2, 'tokens counted by a tracker older than 1.3.0 are labelled')
 ok(screen.getByText('At API list prices') && screen.getByText(/^\$[\d,.]+\+$/), 'API price card with the unpriced marker')
 const cells = document.querySelectorAll('.hap-heat > i')
 ok(cells.length === 7 * 24, 'hour chart has 7 x 24 cells')
@@ -320,6 +320,27 @@ await waitFor(() => {
     && posts.some(b => b.target === 'fill_first' && JSON.stringify(b.only) === '["worker-3"]'), 'strategy dialog posts one change per value')
 })
 fx['/status?provider=anthropic'].rotation_mode = savedMode
+cleanup()
+
+// processes that still run an older session tracker -> one info banner with the fixes
+const savedTracker = fx['/status?provider=anthropic'].tracker
+mount('page')
+await screen.findByText('Next session starts on')
+ok(!document.querySelector('[data-banner="tracker"]'), 'no tracker banner while every process is current')
+cleanup()
+fx['/status?provider=anthropic'].tracker = { version: '1.4.0', unnamed_since: null, stale: [
+  { kind: 'gateway', pid: null, profiles: ['worker-2'], platforms: ['telegram'], tracker: 'older than 1.4.0', last_seen: 0, fix: 'hermes gateway restart (it serves the Telegram bots and cron jobs)' },
+  { kind: 'desktop', pid: 7, profiles: ['default'], platforms: ['desktop'], tracker: '1.3.9', last_seen: 0, fix: 'restart Hermes Desktop' }] }
+mount('page')
+await waitFor(() => ok(document.querySelector('[data-banner="tracker"]'), 'tracker banner shown'))
+const tb = document.querySelector('[data-banner="tracker"]').textContent
+ok(/the gateway \(worker-2\), Hermes Desktop \(default\) still run an older session tracker than 1\.4\.0/.test(tb)
+  && tb.includes('Fix: hermes gateway restart') && tb.includes('restart Hermes Desktop'), 'tracker banner names the processes and the fixes')
+cleanup()
+fx['/status?provider=anthropic'].tracker = { version: '1.4.0', stale: [], unnamed_since: Math.floor(Date.now() / 1000) - 600 }
+mount('page')
+await waitFor(() => ok(/without a bot name until/.test(document.querySelector('[data-banner="tracker"]')?.textContent || ''), 'tracker banner for tokens without a bot name'))
+fx['/status?provider=anthropic'].tracker = savedTracker
 cleanup()
 
 // multi-line tooltips keep their line breaks

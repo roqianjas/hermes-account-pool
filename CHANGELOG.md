@@ -2,6 +2,13 @@
 
 All releases of the `account-pool` plugin and its session tracker `account-pool-tracker` (now 1.3.0).
 
+## 3.8.1
+
+- Session tracker 1.4.0 writes its version, its process id and the Kanban task (when there is one) into each session record.
+- `doctor` names every running process that still counts with an older tracker after an update: the gateway, Hermes Desktop or a long session, each with its fix (`hermes gateway restart`, restart Hermes Desktop, or wait for the session to end). It also warns about tokens without a bot name in the last half hour, the sign of a tracker 1.2.0 or older. The Accounts page shows the same as an info banner.
+- `report`: tokens without a bot name are labelled `(older tracker, no name)` instead of `(before tracker 1.3.0)`, because a process that kept the old tracker also writes them. The page says `no name (older tracker)`. Deliberate output change.
+- Tests: `tests/insights_sandbox.py` covers the tracker check; the UI test covers the banner.
+
 ## 3.8.0
 
 - Rotation strategy from the plugin. `hermes account <provider> strategy` lists Hermes' `credential_pool_strategies.<provider>` per profile and what each strategy does; `strategy <name>` sets it in every profile, `--only <profile>,...` in some. Values other than `fill_first` ask for confirmation (`--yes`). The value is written with Hermes' own `hermes config set` and read back; profiles that already have it are not touched. New sessions use it at once.

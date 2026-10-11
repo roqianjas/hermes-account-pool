@@ -1287,6 +1287,95 @@ def _cmd_strategy(args) -> int:
     return 1 if failed else 0
 
 
+# ── running processes with an older session tracker ─────────────────────────
+
+TRACKER_DIR = Path(__file__).resolve().parent.parent / "account-pool-tracker"
+MESSAGING_KIND = "gateway"
+
+
+def _tracker_installed() -> tuple:
+    """(version, time it was installed) of the session tracker next to this plugin; (None, None) without it."""
+    try:
+        m = re.search(r"^version:\s*['\"]?([\w.]+)", (TRACKER_DIR / "plugin.yaml").read_text(), re.M)
+        return (m[1] if m else None), (TRACKER_DIR / "__init__.py").stat().st_mtime
+    except OSError:
+        return None, None
+
+
+def _process_kind(pid):
+    """"gateway", "desktop" or "session" for a running process; None when it has ended."""
+    try:
+        pid = int(pid)
+        os.kill(pid, 0)
+    except (ProcessLookupError, ValueError, TypeError, OverflowError):
+        return None
+    except PermissionError:
+        pass
+    try:
+        args = [a.decode(errors="replace") for a in Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")]
+    except OSError:
+        return "session"
+    if "gateway" in args:
+        return "gateway"
+    if "serve" in args or "desktop" in args:
+        return "desktop"
+    return "session"
+
+
+TRACKER_FIX = {"gateway": "hermes gateway restart (it serves the Telegram bots and cron jobs)",
+               "desktop": "restart Hermes Desktop",
+               "session": "it loads the new tracker when it ends; restart it to switch sooner"}
+
+
+def _tracker_status(provider: str) -> dict:
+    """Which running processes still count with an older session tracker.
+
+    A tracker is loaded when its process starts, so after an update the gateway, Hermes Desktop and long
+    sessions keep the old one until they restart. Found from the session records written since the
+    update: tracker 1.4.0 and later write their version and process id; older ones write neither.
+    Keys: version, stale [{kind, pid, profiles, platforms, tracker, last_seen, fix}], unnamed_since (start of
+    the latest 15-minute bucket of the last half hour with tokens but no bot name: tracker 1.2.0 or older)."""
+    version, installed_at = _tracker_installed()
+    now = time.time()
+    out = {"version": version, "stale": [], "unnamed_since": None}
+    if not version:
+        return out
+    data = _load_json(_root() / "account-pool-sessions.json", {}) or {}
+    groups = {}
+    for r in (data.get("sessions") or {}).values():
+        seen = r.get("last_seen") or 0
+        if r.get("provider") != provider or seen < max(now - 1800, installed_at + 120) or r.get("tracker") == version:
+            continue
+        pid = r.get("pid")
+        if pid:
+            kind = _process_kind(pid)
+            if kind is None:                        # that process has ended
+                continue
+        else:
+            plat = (r.get("platform") or "").lower()
+            kind = "desktop" if plat == "desktop" else "session" if plat in ("cli", "") else MESSAGING_KIND
+        key = pid or f"{kind}:{r.get('profile')}"
+        g = groups.setdefault(key, {"kind": kind, "pid": pid, "profiles": [], "platforms": [],
+                                    "tracker": r.get("tracker") or "older than 1.4.0", "last_seen": 0})
+        for field, value in (("profiles", r.get("profile") or "?"), ("platforms", r.get("platform") or "-")):
+            if value not in g[field]:
+                g[field].append(value)
+        g["last_seen"] = max(g["last_seen"], seen)
+    out["stale"] = [dict(g, fix=TRACKER_FIX[g["kind"]]) for g in
+                    sorted(groups.values(), key=lambda g: ({"gateway": 0, "desktop": 1}.get(g["kind"], 2), -g["last_seen"]))]
+    rows, _ = _token_rows(provider)
+    unnamed = [row[3] for row in rows if row[1] == "?" and row[3] >= now - 1800 - TOKEN_BUCKET]
+    out["unnamed_since"] = max(unnamed) if unnamed else None
+    return out
+
+
+def _tracker_who(g: dict) -> str:
+    """One stale process in words: "the gateway (worker-1, telegram; tracker 1.3.0)"."""
+    name = {"gateway": "the gateway", "desktop": "Hermes Desktop"}.get(g["kind"], f"a {'/'.join(g['platforms'])} session")
+    pid = f", pid {g['pid']}" if g.get("pid") else ""
+    return f"{name} ({', '.join(g['profiles'])}{pid}; tracker {g['tracker']})"
+
+
 def _doctor_checks(provider: str) -> list:
     """[(level, text)] with level ok / warn / fail. Probes the usage endpoint once."""
     import yaml
@@ -1334,6 +1423,22 @@ def _doctor_checks(provider: str) -> list:
     add("ok" if not missing else "warn",
         "session tracker active in every profile" if not missing else
         f"session tracker missing in: {', '.join(missing)} (`who` will not show them)")
+
+    # processes that loaded the tracker before its last update
+    tr = _tracker_status(provider)
+    if tr["stale"]:
+        fixes = []
+        for g in tr["stale"]:
+            if g["fix"] not in fixes:
+                fixes.append(g["fix"])
+        add("warn", f"session tracker {tr['version']} is not loaded yet by: {'; '.join(_tracker_who(g) for g in tr['stale'])}. "
+                    f"They count without the newest tracker features until they restart. Fix: {'; '.join(fixes)}")
+    if tr["unnamed_since"]:
+        add("warn", f"tokens without a bot name until {_hhmm(tr['unnamed_since'] + TOKEN_BUCKET)}: a process with tracker 1.2.0 "
+                    f"or older was running then. Fix: hermes gateway restart, restart Hermes Desktop, or end long "
+                    f"sessions (once it has ended, this line clears within 45 min)")
+    if tr["version"] and not tr["stale"] and not tr["unnamed_since"]:
+        add("ok", f"running sessions count with tracker {tr['version']}")
 
     # Accounts page: Hermes Desktop mounts its backend only for profiles that list account-pool
     if (root / "desktop-plugins" / "account-pool").is_dir():
@@ -1858,7 +1963,7 @@ def _cmd_report(args) -> int:
                 continue
             _p(f"  {title:32s} {'tokens':>7s} {'requests':>9s} {'API $':>9s} {'share':>6s}")
             for g in groups:
-                name = "(before tracker 1.3.0)" if g["name"] == "?" else g["name"]
+                name = "(older tracker, no name)" if g["name"] == "?" else g["name"]
                 share = g["total"] / tt["total"] * 100 if tt["total"] else 0
                 _p(f"    {name:30s} {_fmt_tokens(g['total']):>7s} {g['requests']:>9d} {_fmt_cost(g):>9s} {share:5.0f}%")
     else:

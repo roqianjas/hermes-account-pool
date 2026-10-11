@@ -161,7 +161,7 @@ with hist.open("w") as fh:
         fh.write(json.dumps({"ts": now - 3600 + k * 300, "provider": "anthropic",
                              "usage": {"alice@example.com": a, "bob@example.com": b}}) + "\n")
 rc, text = run(core._cmd_report, hours=24.0)
-check("API $" in text and "By profile (bot)" in text and "worker-1" in text and "(before tracker 1.3.0)" in text
+check("API $" in text and "By profile (bot)" in text and "worker-1" in text and "(older tracker, no name)" in text
       and "By model" in text and "claude-opus-4-6" in text and "report --chart" in text, "`report` lists bots, models and API prices")
 rep = c.get("/x/report?hours=24").json()
 check([g["name"] for g in rep["by_profile"]][:1] == ["worker-1"] and rep["tokens_total"]["unpriced"] == 2161,

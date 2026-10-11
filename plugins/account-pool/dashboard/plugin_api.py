@@ -287,6 +287,7 @@ def _status(provider: str) -> dict:
         "tokens": {"since": counting,
                    "day": core._token_group(provider, token_rows, now - 24 * 3600, by="all").get("all") or core._empty_tokens()},
         "schedules": core._schedule_rows(provider),
+        "tracker": core._tracker_status(provider),
     }
 
 

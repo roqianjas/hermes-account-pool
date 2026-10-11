@@ -4,8 +4,10 @@ Companion to the `account-pool` plugin (`hermes account <provider> who`, `report
 Hermes does not persist the account chosen for a session, so this hook reads
 the live pool from the running agent after each API call and writes:
 
-- {profile, session, platform, model, account, since when on that account} to <hermes root>/account-pool-sessions.json.
-  Throttled: once per session per minute, or immediately when the session's account changes.
+- {profile, session, platform, model, account, since when on that account, tracker version, process id,
+  Kanban task} to <hermes root>/account-pool-sessions.json. Throttled: once per session per minute, or
+  immediately when the session's account changes. The version and process id let `doctor` name a process
+  that still runs an older tracker after an update.
 - the call's token counts (input, output, cache read, cache write, 1 request) added to a
   15-minute bucket of that account, profile and model in <hermes root>/account-pool-tokens.json.
   Every call.
@@ -20,6 +22,7 @@ import os
 import time
 from pathlib import Path
 
+VERSION = "1.4.0"                 # keep in step with plugin.yaml
 KEEP_SECONDS = 24 * 3600
 TOKEN_BUCKET = 900                 # seconds per token bucket
 TOKEN_KEEP = 8 * 24 * 3600         # token buckets older than this are dropped
@@ -202,7 +205,7 @@ def _on_api_request(**kw) -> None:
         if prev and prev[0] == label and now - prev[1] < 60:
             return
         _last[key] = (label, now)
-        _write(root, key, {
+        record = {
             "profile": profile,
             "session_id": session_id,
             "platform": kw.get("platform") or getattr(agent, "platform", "") or "",
@@ -211,7 +214,13 @@ def _on_api_request(**kw) -> None:
             "account": label,
             "account_id": entry.id,
             "last_seen": now,
-        })
+            "tracker": VERSION,
+            "pid": os.getpid(),
+        }
+        task = os.environ.get("HERMES_KANBAN_TASK")
+        if task:
+            record["task"] = task
+        _write(root, key, record)
     except Exception:
         pass
 
