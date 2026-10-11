@@ -11,7 +11,7 @@ Every command follows one pattern:
     hermes account <provider> unpark <target>  put a parked account back into rotation
     hermes account <provider> balance          order accounts by live usage, bench nearly-full ones
     hermes account <provider> who|report|relogin|doctor|notify   (see `hermes account help`)
-    hermes account <provider> setup            profiles, tracker and timer after a catalog install
+    hermes account <provider> setup            profiles, tracker and timer after hermes plugins install
     hermes account help | hermes account <provider> help
 
 `balance` is meant to run on a timer with `credential_pool_strategies.<provider>:
@@ -2909,7 +2909,7 @@ def _cmd_remove(args) -> int:
     return 0
 
 
-# ── setup: what a catalog install leaves out ────────────────────────────────
+# ── setup: what a plugin install leaves out ─────────────────────────────────
 
 UNIT_NAME = "hermes-account-balance"
 
@@ -3020,7 +3020,7 @@ def _link_tracker(link: Path, target: Path) -> None:
 
 
 def _cmd_setup(args) -> int:
-    """Set up what a catalog install leaves out (install.sh does the same after copying the plugins):
+    """Set up what `hermes plugins install` leaves out (install.sh does the same after copying the plugins):
     the Accounts page backend and the session tracker in every profile; with --timer the balance timer,
     with --strategy fill_first. --undo takes the profile and timer parts back. Shows the plan first."""
     provider = _norm(args.provider)

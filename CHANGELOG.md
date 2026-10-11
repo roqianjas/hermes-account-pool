@@ -2,6 +2,14 @@
 
 All releases of the `account-pool` plugin and its session tracker `account-pool-tracker` (now 1.5.0).
 
+## 3.10.1
+
+Installed from this repository, not from the Hermes plugin catalog. No change in behaviour.
+
+- The plugin keeps handling logins itself (parking, live usage and email checks, sign-in on the Accounts page), so it does not meet the catalog's rule that credentials come through Hermes (rule 11). The README explains why, in "Why it is not in the Hermes plugin catalog", and the catalog install instructions are gone.
+- Install: `./install.sh` from a git checkout, or `hermes plugins install roqianjas/hermes-account-pool#plugins/account-pool --enable --force`. Hermes' install scan reports 12 expected findings for `account-pool` (11 `subprocess` calls and one read of `/proc/self/cgroup`) and stops without `--force`; the README lists each one.
+- The command help and the code say "`hermes plugins install`" where they said "catalog install".
+
 ## 3.10.0
 
 Ready for the Hermes plugin catalog: install with `hermes plugins install`, then one command for the rest.

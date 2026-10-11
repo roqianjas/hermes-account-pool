@@ -16,7 +16,7 @@ from reportlab.platypus import (CondPageBreak, Image, KeepTogether, PageBreak, P
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 from reportlab.platypus.tableofcontents import TableOfContents
 
-VERSION = "3.10.0"
+VERSION = "3.10.1"
 REPO = "github.com/roqianjas/hermes-account-pool"
 FOOTER = f"Hermes plugin account-pool {VERSION} · {REPO}"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hermes-account-pool.pdf")
@@ -157,16 +157,16 @@ code("hermes account <provider> <action> [target] [options]")
 
 H1("2. Mulai cepat")
 code("""
-hermes plugins install account-pool --enable           # perintah dan halaman Accounts
-hermes plugins install account-pool-tracker --enable   # pelacak sesi
-hermes account anthropic setup --timer --strategy      # semua profil, timer, fill_first
+git clone https://github.com/roqianjas/hermes-account-pool.git
+cd hermes-account-pool
+./install.sh --set-strategy     # dua plugin, semua profil, timer 5 menit, fill_first
 
 hermes account anthropic add alice@example.com   # satu login per akun, terverifikasi
 hermes account anthropic add bob@example.com
 hermes account anthropic doctor                  # semua OK?
 hermes account anthropic usage                   # pemakaian live per akun
 """)
-P("Tiga baris pertama bisa diganti satu skrip dari git: " + C("./install.sh --set-strategy") + " (bagian 4.2). "
+P("Tanpa salinan git, " + C("hermes plugins install") + " melakukan hal yang sama dengan tiga perintah (bagian 4.2). "
   "Setelah itu timer menjaga urutan pool secara otomatis. Sehari-hari yang paling sering dipakai: " + C("usage")
   + ", " + C("who") + ", " + C("park") + ", dan " + C("doctor") + ". Di Hermes Desktop, restart aplikasinya sekali "
   "lalu nyalakan halamannya di Capabilities &gt; Plugins untuk mendapat semua itu dalam satu halaman (bagian 8).")
@@ -178,28 +178,14 @@ LI(["Hermes Agent ≥ 0.21.5 di Linux. Timer butuh systemd user service (" + C("
     "perintah umum (bagian 12).",
     "Opsional: " + C("notify-send") + " (paket " + C("libnotify-bin") + ") untuk notifikasi desktop, dan bot "
     "Telegram yang sudah diatur di Hermes dengan " + C("TELEGRAM_ALLOWED_USERS") + " untuk peringatan Telegram.",
-    "Opsional: Hermes Desktop dengan dukungan desktop plugin, untuk halaman Accounts. Diuji dengan Hermes Agent 0.21.5."])
+    "Opsional: Hermes Desktop dengan dukungan desktop plugin, untuk halaman Accounts. Diuji dengan Hermes Agent 0.21.5 dan 0.21.6."])
 
 H1("4. Instalasi, update, uninstall")
 P("Instalasi plugin memasang plugin ke satu profil. Proyek ini butuh sedikit lebih: pelacak sesi di setiap profil "
   "(supaya " + C("who") + " melihat semua bot), " + C("account-pool") + " tercantum di setiap profil (supaya Hermes "
   "Desktop bisa menampilkan halamannya profil mana pun yang dijalankan), dan timer jika Anda mau. Bagian itu "
   "dikerjakan " + C("hermes account &lt;provider&gt; setup") + ", setelah cara instalasi mana pun.")
-H2("4.1 Instalasi dari katalog plugin Hermes")
-code("""
-hermes plugins install account-pool --enable
-hermes plugins install account-pool-tracker --enable
-hermes account anthropic setup --timer --strategy
-""")
-P("Jalankan di profil default (tanpa " + C("-p") + "): perintahnya ada di sana, dan " + C("setup") + " menautkan "
-  "pelacak dari sana ke profil lain. Tanpa katalog, pasang dua folder yang sama langsung dari repo ini (Hermes lalu "
-  "memperingatkan bahwa sumbernya belum direview):")
-code("""
-hermes plugins install roqianjas/hermes-account-pool#plugins/account-pool --enable
-hermes plugins install roqianjas/hermes-account-pool#plugins/account-pool-tracker --enable
-hermes account anthropic setup --timer --strategy
-""")
-H2("4.2 Instalasi dari git")
+H2("4.1 Instalasi dari git")
 code("""
 git clone https://github.com/roqianjas/hermes-account-pool.git
 cd hermes-account-pool
@@ -221,6 +207,44 @@ table([
     [C("--no-timer"), "Tanpa timer. " + C("balance") + " dijalankan sendiri."],
     [C("-h") + ", " + C("--help"), "Tampilkan opsi."],
 ], [0.26, 0.74])
+H2("4.2 Instalasi dengan hermes plugins install")
+P("Dua folder yang sama, langsung dari repo ini, tanpa salinan git:")
+code("""
+hermes plugins install roqianjas/hermes-account-pool#plugins/account-pool \\
+    --enable --force
+hermes plugins install roqianjas/hermes-account-pool#plugins/account-pool-tracker --enable
+hermes account anthropic setup --timer --strategy
+""")
+P("Jalankan di profil default (tanpa " + C("-p") + "): perintahnya ada di sana, dan " + C("setup") + " menautkan "
+  "pelacak dari sana ke profil lain.")
+P("Hermes memindai plugin dari GitHub sebelum memasangnya, dan berhenti bila ada temuan. Untuk "
+  + C("account-pool") + " ada 12 temuan, semuanya memang bagian dari cara kerja plugin:")
+LI(["11 panggilan " + C("subprocess") + ": " + C("notify-send") + " (notifikasi desktop), " + C("hermes send")
+    + " (peringatan Telegram), " + C("systemctl --user") + " lima kali (status timer untuk " + C("doctor")
+    + " dan halaman, " + C("setup --timer") + "), " + C("hermes config set") + " (" + C("strategy") + "), "
+    + C("hermes auth add") + " (" + C("add") + ", " + C("relogin") + "), " + C("hermes auth remove") + " ("
+    + C("remove") + "), dan " + C("hermes -p &lt;profil&gt; plugins enable") + " / " + C("config set") + " ("
+    + C("setup") + ").",
+    "1 pembacaan " + C("/proc/self/cgroup") + ", untuk tahu apakah proses ini service timer."])
+P("Semuanya tercantum di bagian pengungkapan keamanan (bagian 13). Baca temuannya, lalu pasang dengan "
+  + C("--force") + ": Hermes tetap menampilkan temuan itu, lalu memasang. Pelacak tidak punya temuan. "
+  + C("install.sh") + " menyalin folder sendiri, jadi tidak dihentikan pemindaian.")
+H2("Kenapa tidak ada di katalog plugin Hermes")
+P("Katalog plugin Hermes hanya memuat plugin yang tidak pernah memegang login sendiri: token OAuth dan API key "
+  "harus lewat Hermes (aturan katalog 11). " + C("account-pool") + " sengaja mengurus login sendiri, karena Hermes "
+  "belum punya API untuk tiga fiturnya:")
+table([
+    ["Fitur", "Yang dilakukan plugin dengan login"],
+    [C("park") + " dan jadwal", "memindah entri pool akun, termasuk tokennya, ke " + C("account-pool-parked.json")
+     + " dan kembali, serta me-refresh token akun parkir saat kedaluwarsa"],
+    [C("usage") + ", " + C("balance") + ", " + C("check") + ", cek email setelah login",
+     "mengirim access token akun ke endpoint usage dan profil milik provider"],
+    ["<b>Add account</b> dan <b>Sign in again</b> di halaman Accounts",
+     "menjalankan login provider di backend halaman dan menyimpan hasilnya ke pool"],
+], [0.38, 0.62])
+P("Tanpa tiga fitur itu, alasan memakai plugin ini hilang. Jadi plugin dipasang dari repo ini, bukan dari "
+  "katalog. Semua yang dilakukannya dengan login tercantum di bagian pengungkapan keamanan. Jika suatu saat Hermes "
+  "punya pause di tingkat pool dan pembacaan usage per akun, plugin bisa pindah ke sana dan berhenti memegang token.")
 H2("4.3 Yang dikerjakan setup", need=70)
 code("""
 $ hermes account anthropic setup --timer
@@ -279,9 +303,9 @@ hermes account anthropic doctor
 systemctl --user list-timers hermes-account-balance.timer
 """)
 H2("4.4 Update")
-P("Instalasi dari katalog atau repo:")
+P("Instalasi dengan " + C("hermes plugins install") + ":")
 code("""
-hermes plugins update account-pool
+hermes plugins update account-pool --force
 hermes plugins update account-pool-tracker
 hermes account anthropic setup        # biasanya "Nothing to change"
 """)
@@ -298,7 +322,7 @@ P("Folder plugin lama dicadangkan ke " + C("$HERMES_HOME/plugin-backups/&lt;nama
   "dan backend-nya yang baru ikut dimuat.")
 H2("4.5 Uninstall")
 P("Unpark dulu akun yang diparkir jika ingin akun itu kembali ke rotasi: selama plugin tidak ada, loginnya hanya "
-  "tersimpan di " + C("account-pool-parked.json") + ". Instalasi dari katalog atau repo:")
+  "tersimpan di " + C("account-pool-parked.json") + ". Instalasi dengan " + C("hermes plugins install") + ":")
 code("""
 hermes account anthropic setup --undo     # symlink pelacak, entri halaman, timer
 hermes plugins remove account-pool-tracker
@@ -1140,8 +1164,9 @@ LI(["Semua file data berizin 600. Token tidak pernah dicetak atau dicatat di log
     "API key untuk " + C("add --key") + " dibaca tanpa ditampilkan di dalam plugin, tidak pernah dari command line.",
     "Plugin utama hanya di profil default, jadi profil bot tidak bisa mengubah akun."])
 H2("Pengungkapan keamanan dan privasi", need=60)
-P("Ringkasan semua yang dilakukan plugin di luar file miliknya sendiri. Aturan katalog plugin Hermes memintanya "
-  "(aturan 11 dan 13), dan ini yang perlu Anda ketahui sebelum menjalankannya. Versi lengkapnya, termasuk daftar "
+P("Ringkasan semua yang dilakukan plugin di luar file miliknya sendiri: yang perlu Anda ketahui sebelum "
+  "menjalankannya. Isinya mengikuti pengungkapan yang diminta aturan katalog plugin Hermes (aturan 13), walau "
+  "plugin ini tidak ada di katalog (bagian 4.2). Versi lengkapnya, termasuk daftar "
   "fungsi internal Hermes yang dipakai, ada di README bagian <i>Security and privacy disclosure</i>.")
 table([
     ["Hal", "Rincian"],
@@ -1343,12 +1368,16 @@ table([
     ["Log timer", C("journalctl --user -u hermes-account-balance.service -n 20 -o cat")],
     ["Halaman di Desktop", "Sidebar <b>Accounts</b>, atau Ctrl+K " + C("Accounts: open the account pool")],
     ["Setup profil, pelacak, timer", C("hermes account anthropic setup --timer")],
-    ["Update plugin", C("hermes plugins update account-pool") + "<br/>(git: " + C("git pull && ./install.sh") + ")"],
+    ["Update plugin", C("hermes plugins update account-pool --force") + "<br/>(git: " + C("git pull && ./install.sh") + ")"],
 ], [0.30, 0.70])
 
 H1("19. Riwayat versi")
 table([
     ["Versi", "Perubahan"],
+    ["3.10.1", "Dipasang dari repo ini, bukan dari katalog plugin Hermes; perilaku tidak berubah. Plugin tetap "
+     "mengurus login sendiri (park, usage live, cek email, login di halaman Accounts), jadi tidak memenuhi aturan "
+     "katalog 11. Dokumentasi: alasan tidak masuk katalog, instalasi dengan " + C("install.sh") + " atau "
+     + C("hermes plugins install ... --force") + " beserta 12 temuan pemindaian Hermes."],
     ["3.10.0", "Siap untuk katalog plugin Hermes. Perintah baru " + C("setup") + " (profil, pelacak, " + C("--timer")
      + ", " + C("--strategy") + ", " + C("--undo") + "); unit systemd ditulis " + C("setup") + ", folder "
      + C("systemd/") + " dihapus, " + C("install.sh") + " memanggil " + C("setup --yes") + ". Tanpa terminal, "

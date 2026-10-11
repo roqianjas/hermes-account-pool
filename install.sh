@@ -10,7 +10,7 @@
 # --no-timer      skip the systemd user timer that runs `balance` every 5 minutes
 #
 # After copying the plugins it runs `hermes account <provider> setup --yes`, the same
-# step that follows an install from the Hermes plugin catalog.
+# step that follows `hermes plugins install`.
 set -euo pipefail
 
 PROVIDERS=()
@@ -56,7 +56,7 @@ for p in account-pool account-pool-tracker; do
 done
 "$HERMES_BIN" plugins enable account-pool >/dev/null && echo "  enabled account-pool (default profile: the command)"
 
-# Profiles, tracker, timer and strategy: one implementation, shared with catalog installs.
+# Profiles, tracker, timer and strategy: one implementation, shared with `hermes plugins install`.
 SETUP=(--yes)
 [ "$TIMER" = 1 ] && SETUP+=(--timer)
 [ "$SET_STRATEGY" = 1 ] && SETUP+=(--strategy)

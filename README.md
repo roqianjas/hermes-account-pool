@@ -2,7 +2,7 @@
 
 Run several accounts of one provider in [Hermes Agent](https://hermes-agent.nousresearch.com/docs) and manage them from one command, `hermes account`, or from an Accounts page in Hermes Desktop. Add accounts with a verified email, see live usage per account, spread the load before an account runs out, park accounts for a while or on a weekly schedule, see which bot is on which account and how many tokens each bot uses, and get an alert or a daily summary.
 
-Version 3.10.0 · MIT · Hermes Agent ≥ 0.21.5 · Linux with systemd · Indonesian PDF guide in [`docs/`](docs/hermes-account-pool.pdf)
+Version 3.10.1 · MIT · Hermes Agent ≥ 0.21.5 · Linux with systemd · Indonesian PDF guide in [`docs/`](docs/hermes-account-pool.pdf)
 
 ![The Accounts page in Hermes Desktop: eight accounts in rotation with their 5-hour usage, the bots on each account, one parked account, two park schedules and the forecast](docs/screenshots/accounts.png)
 
@@ -14,6 +14,7 @@ More of the page: [Report](docs/screenshots/report.png) · [tokens by session an
 - [Quick start](#quick-start)
 - [Requirements](#requirements)
 - [Install, update, uninstall](#install-update-uninstall)
+- [Why it is not in the Hermes plugin catalog](#why-it-is-not-in-the-hermes-plugin-catalog)
 - [Concepts](#concepts)
 - [Adding and removing accounts](#adding-and-removing-accounts)
 - [Command reference](#command-reference)
@@ -51,9 +52,9 @@ The plugin changes the pool only through Hermes' own `CredentialPool` API and us
 ## Quick start
 
 ```bash
-hermes plugins install account-pool --enable           # the command and the Accounts page
-hermes plugins install account-pool-tracker --enable   # the session tracker
-hermes account anthropic setup --timer --strategy      # every profile, 5-minute timer, fill_first
+git clone https://github.com/roqianjas/hermes-account-pool.git
+cd hermes-account-pool
+./install.sh --set-strategy     # both plugins, every profile, the 5-minute timer, fill_first
 
 hermes account anthropic add alice@example.com   # one sign-in per account, verified
 hermes account anthropic add bob@example.com
@@ -61,34 +62,18 @@ hermes account anthropic doctor                  # everything OK?
 hermes account anthropic usage                   # live usage per account
 ```
 
-The first three lines can also be one script from a git checkout: `./install.sh --set-strategy` (see [Install from git](#install-from-git)). From then on the timer keeps the pool ordered. Day to day you mostly need `usage`, `who`, `park` and `doctor`. In Hermes Desktop, restart the app once and switch the page on in Capabilities > Plugins to get the same in a page ([Hermes Desktop page](#hermes-desktop-page)).
+Without a git checkout, `hermes plugins install` does the same in three commands ([Install with hermes plugins install](#install-with-hermes-plugins-install)). From then on the timer keeps the pool ordered. Day to day you mostly need `usage`, `who`, `park` and `doctor`. In Hermes Desktop, restart the app once and switch the page on in Capabilities > Plugins to get the same in a page ([Hermes Desktop page](#hermes-desktop-page)).
 
 ## Requirements
 
 - Hermes Agent ≥ 0.21.5 on Linux. The timer needs systemd user services (`systemctl --user`).
 - Two or more accounts of the same provider. Built-in usage support: Claude Pro / Max / Team (`anthropic`) and ChatGPT Plus / Pro / Team (`openai-codex`). Other providers get the generic commands (see [Providers](#providers)).
 - Optional: `notify-send` (package `libnotify-bin`) for desktop alerts, and a Telegram bot configured in Hermes with `TELEGRAM_ALLOWED_USERS` for Telegram alerts.
-- Optional: Hermes Desktop with desktop plugins, for the Accounts page. Tested with Hermes Agent 0.21.5.
+- Optional: Hermes Desktop with desktop plugins, for the Accounts page. Tested with Hermes Agent 0.21.5 and 0.21.6.
 
 ## Install, update, uninstall
 
 A plugin install puts a plugin into one profile. This project needs a little more: the session tracker in every profile (so `who` sees every bot), `account-pool` listed in every profile (so Hermes Desktop can show the page whichever profile it runs) and, if you want it, the timer. `hermes account <provider> setup` does that part, after either way of installing.
-
-### Install from the Hermes plugin catalog
-
-```bash
-hermes plugins install account-pool --enable
-hermes plugins install account-pool-tracker --enable
-hermes account anthropic setup --timer --strategy
-```
-
-Run them in the default profile (without `-p`): the command lives there, and `setup` links the tracker from there into the other profiles. Without the catalog (Hermes then warns that the source is unreviewed), install the same two folders straight from this repository:
-
-```bash
-hermes plugins install roqianjas/hermes-account-pool#plugins/account-pool --enable
-hermes plugins install roqianjas/hermes-account-pool#plugins/account-pool-tracker --enable
-hermes account anthropic setup --timer --strategy
-```
 
 ### Install from git
 
@@ -98,7 +83,7 @@ cd hermes-account-pool
 ./install.sh --set-strategy
 ```
 
-`install.sh` copies `account-pool` (with the Hermes Desktop page) and `account-pool-tracker` to `$HERMES_HOME/plugins/` (default `~/.hermes/plugins/`), enables `account-pool` in the default profile, runs `hermes account <provider> setup --yes --timer` for each provider (`--strategy` too with `--set-strategy`), then `doctor`.
+Run it as the user Hermes runs as. `install.sh` copies `account-pool` (with the Hermes Desktop page) and `account-pool-tracker` to `$HERMES_HOME/plugins/` (default `~/.hermes/plugins/`), enables `account-pool` in the default profile, runs `hermes account <provider> setup --yes --timer` for each provider (`--strategy` too with `--set-strategy`), then `doctor`.
 
 | Option | Effect |
 |---|---|
@@ -107,6 +92,25 @@ cd hermes-account-pool
 | `--no-tracker` | Skip the session tracker. `who` stays empty and no tokens are counted. |
 | `--no-timer` | Skip the timer. Run `balance` yourself. |
 | `-h`, `--help` | Show the options. |
+
+### Install with `hermes plugins install`
+
+The same two folders, straight from this repository, without a git checkout:
+
+```bash
+hermes plugins install roqianjas/hermes-account-pool#plugins/account-pool --enable --force
+hermes plugins install roqianjas/hermes-account-pool#plugins/account-pool-tracker --enable
+hermes account anthropic setup --timer --strategy
+```
+
+Run them in the default profile (without `-p`): the command lives there, and `setup` links the tracker from there into the other profiles ([What setup does](#what-setup-does)).
+
+Hermes scans a plugin from GitHub before it installs it, and stops when the scan has findings. For `account-pool` it reports 12, all expected:
+
+- 11 `subprocess` calls: `notify-send` (desktop alerts), `hermes send` (Telegram alerts), `systemctl --user` five times (timer state for `doctor` and the page, `setup --timer`), `hermes config set` (`strategy`), `hermes auth add` (`add`, `relogin`), `hermes auth remove` (`remove`), and `hermes -p <profile> plugins enable` / `config set` (`setup`);
+- 1 read of `/proc/self/cgroup`, to know whether the process is the timer's service.
+
+Each one is in the [Security and privacy disclosure](#security-and-privacy-disclosure). Read the findings, then install with `--force`: Hermes still shows them and then installs. The tracker has no findings. `install.sh` copies the folders itself, so it is not stopped by the scan.
 
 ### What setup does
 
@@ -154,10 +158,10 @@ systemctl --user list-timers hermes-account-balance.timer
 
 ### Update
 
-Catalog or repository install:
+`hermes plugins install`:
 
 ```bash
-hermes plugins update account-pool
+hermes plugins update account-pool --force
 hermes plugins update account-pool-tracker
 hermes account anthropic setup        # usually "Nothing to change"
 ```
@@ -178,7 +182,7 @@ The previous plugin folder is backed up to `$HERMES_HOME/plugin-backups/<name>.<
 
 Unpark parked accounts first if you want them back in rotation (`hermes account <provider> unpark <account>`): while the plugin is gone, their logins sit only in `account-pool-parked.json`.
 
-Catalog or repository install:
+`hermes plugins install`:
 
 ```bash
 hermes account anthropic setup --undo     # tracker links, page entries, the timer
@@ -193,6 +197,18 @@ Git install:
 ```
 
 It removes the timer, both plugins (the Accounts page included), the tracker symlinks and the `account-pool` entry in each profile's `plugins.enabled`. Your accounts in the credential pool are not touched. Parked accounts are **not** returned to rotation: the script warns you and asks first. Data files and `credential_pool_strategies` stay; the script lists the files you can delete by hand.
+
+## Why it is not in the Hermes plugin catalog
+
+The Hermes plugin catalog lists plugins that never hold a login themselves: OAuth tokens and API keys must come through Hermes (catalog rule 11). `account-pool` handles logins on purpose, because Hermes has no API yet for three of its features:
+
+| Feature | What the plugin does with the login |
+|---|---|
+| `park` and schedules | moves the account's pool entry, tokens included, into `account-pool-parked.json` and back, and refreshes a parked account's token when it expires |
+| `usage`, `balance`, `check`, the email check after a sign-in | sends the account's access token to the provider's usage and profile endpoints |
+| **Add account** and **Sign in again** on the Accounts page | runs the provider's sign-in in the page's backend and stores the result in the pool |
+
+Leaving these out would remove the reasons to use the plugin, so it stays outside the catalog and is installed from this repository. What it does with logins is listed in full under [Security and privacy disclosure](#security-and-privacy-disclosure). If Hermes adds pool-level pause and per-account usage reads, the plugin can move onto them and drop its own token handling.
 
 ## Concepts
 
@@ -875,7 +891,7 @@ How tokens are handled:
 
 ## Security and privacy disclosure
 
-What the plugins do outside their own files, in one place. The [Hermes plugin catalog rules](https://hermes-agent.nousresearch.com/docs/developer-guide/plugins/catalog-submission) ask for this (rules 11 and 13), and it is what you should know before you run them.
+What the plugins do outside their own files, in one place: what you should know before you run them. It follows the disclosure the [Hermes plugin catalog rules](https://hermes-agent.nousresearch.com/docs/developer-guide/plugins/catalog-submission) ask for (rule 13), although the plugin is not in the catalog ([why](#why-it-is-not-in-the-hermes-plugin-catalog)).
 
 **It writes credentials.** Managing accounts is the point of `account-pool`, so unlike a read-only plugin it changes logins in Hermes' credential pool (`$HERMES_HOME/auth.json`):
 
