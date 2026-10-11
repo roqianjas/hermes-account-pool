@@ -2,7 +2,7 @@
 
 Run several accounts of one provider in [Hermes Agent](https://hermes-agent.nousresearch.com/docs) and manage them from one command, `hermes account`, or from an Accounts page in Hermes Desktop. Add accounts with a verified email, see live usage per account, spread the load before an account runs out, park accounts for a while or on a weekly schedule, see which bot is on which account and how many tokens each bot uses, and get an alert or a daily summary.
 
-Version 3.9.0 · MIT · Hermes Agent ≥ 0.21 · Linux with systemd · Indonesian PDF guide in [`docs/`](docs/hermes-account-pool.pdf)
+Version 3.9.1 · MIT · Hermes Agent ≥ 0.21 · Linux with systemd · Indonesian PDF guide in [`docs/`](docs/hermes-account-pool.pdf)
 
 ## Contents
 
@@ -640,7 +640,7 @@ The usage endpoint limits requests per account (see [Troubleshooting](#troublesh
 |---|---|---|
 | Account needs sign-in | An account becomes `DEAD` | Once per account |
 | Every account above 80% | Every account in rotation is at or above 80% (adapter needed) | Once, plus a message when the pool recovers |
-| A bot uses far more than usual | A profile's last hour reaches $15 at API prices or 300 requests, and 3 times its usual hour | Once per bot, again after it calmed down |
+| A bot uses far more than usual | A profile's last hour reaches $15 at API prices or 300 requests, and 3 times its usual hour | Once per bot, at most every 6 hours |
 
 The bot alert catches a loop or a runaway task before it eats the pool:
 
@@ -651,10 +651,11 @@ Busiest session: Shipping: admin page for limits (kanban, task t_5f2e91, 100 req
 Check: hermes account anthropic sessions --hours 1
 ```
 
-- Usual = the mean of the profile's active hours (hours with at least one request) in the 7 days before. Until a profile has 3 active hours, the floor alone decides.
+- Usual = the mean of the profile's active hours (hours with at least one request) in the 7 days before. Until a profile has 3 active hours there is no usual yet, and the floor counts double ($30 or 600 requests).
 - Both conditions must hold, so a bot that is always busy does not alert, and a quiet bot that doubles its small use does not either.
+- A bot near the floor goes over and under it from one timer run to the next. It gets one message per 6 hours (`alert_bot.cooldown_h`); the page shows the banner whenever it is over.
 - Counted from the tracker's files, with no request to the provider. Tokens without a bot name are left out. The busiest session needs tracker 1.5.0.
-- `notify bots=25` changes the dollar floor (and turns the alert on), `notify bots-off` turns it off. The request floor and the factor are `alert_bot.requests` and `alert_bot.factor` in the [settings file](#settings-file).
+- `notify bots=25` changes the dollar floor (and turns the alert on), `notify bots-off` turns it off. The request floor, the factor and the cooldown are `alert_bot.requests`, `alert_bot.factor` and `alert_bot.cooldown_h` in the [settings file](#settings-file).
 
 Alerts are sent by `balance`, so they need the timer. Channels:
 
@@ -680,12 +681,12 @@ Accounts that need a new sign-in and the report's advice are added when there ar
 
 ### Settings file
 
-Settings are stored in `$HERMES_HOME/account-pool.json`, created on the first change. You can also edit it; the alert level is `alert_all_above`, the daily summary time `notify.daily`, the bot alert `alert_bot` (`usd` per hour, `requests` per hour, `factor` over the usual hour), and park schedules are under `schedules`:
+Settings are stored in `$HERMES_HOME/account-pool.json`, created on the first change. You can also edit it; the alert level is `alert_all_above`, the daily summary time `notify.daily`, the bot alert `alert_bot` (`usd` per hour, `requests` per hour, `factor` over the usual hour, `cooldown_h` between two messages for the same bot), and park schedules are under `schedules`:
 
 ```json
 {"notify": {"desktop": true, "telegram": "auto", "telegram_via": "default", "daily": "08:00"},
  "alert_all_above": 80,
- "alert_bot": {"on": true, "usd": 15, "requests": 300, "factor": 3},
+ "alert_bot": {"on": true, "usd": 15, "requests": 300, "factor": 3, "cooldown_h": 6},
  "schedules": {"anthropic": [{"label": "dave@example.com", "id": "a3b2c3", "days": [0, 1, 2, 3, 4], "from": "09:00", "to": "17:00"}]}}
 ```
 

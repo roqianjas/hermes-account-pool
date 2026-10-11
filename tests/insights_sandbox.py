@@ -258,6 +258,8 @@ check(rc == 0 and "Plan the release" in text and "Shipping: admin page for limit
       "`sessions` lists titles and tasks")
 rep = c.get("/x/report?hours=24").json()
 check(rep.get("sessions", {}).get("sessions", [{}])[0].get("session") == "d1", "page report: sessions")
+rc, text = run(core._cmd_sessions, provider="openai-codex", hours=24.0)
+check(rc == 0 and "No openai-codex accounts yet" in text, "sessions: a provider without accounts")
 rc, text = run(core._dispatch, action="sessions", target=None, hours=-1.0)
 check(rc == 2, "sessions --hours must be positive")
 
@@ -275,10 +277,12 @@ cnt = data["counts"]["anthropic"]
 cnt["alice@example.com"] = {
     "worker-1": {"claude-opus-5-5": {**{bucket(now - (2 + k) * 86400): [per_dollar, 0, 0, 0, 20] for k in range(5)},
                                      bucket(now - 600): [20 * per_dollar, 0, 0, 0, 100]}},
-    "worker-2": {"claude-opus-5-5": {bucket(now - 600): [16 * per_dollar, 0, 0, 0, 50]}},
+    "worker-2": {"claude-opus-5-5": {bucket(now - 600): [35 * per_dollar, 0, 0, 0, 50]}},
     "worker-3": {"claude-opus-5-5": {**{bucket(now - (2 + k) * 86400): [10 * per_dollar, 0, 0, 0, 50] for k in range(5)},
                                      bucket(now - 600): [20 * per_dollar, 0, 0, 0, 100]}},
-    "worker-4": {"fake-model": {bucket(now - 600): [1000, 0, 0, 0, 400]}},
+    "worker-4": {"fake-model": {bucket(now - 600): [1000, 0, 0, 0, 700]}},
+    "worker-5": {"claude-opus-5-5": {bucket(now - 600): [20 * per_dollar, 0, 0, 0, 500]}},
+    "worker-6": {"claude-opus-5-5": {bucket(now + 3600): [99 * per_dollar, 0, 0, 0, 999]}},
     "?": {"?": {bucket(now - 600): [99 * per_dollar, 0, 0, 0, 900]}},
 }
 cnt.pop("bob@example.com", None)
@@ -286,7 +290,9 @@ cnt.pop("carol@example.com", None)
 data["sessions"]["anthropic"]["worker-1"]["w1"]["claude-opus-5-5"][bucket(now - 600)] = [20 * per_dollar, 0, 0, 0, 100]
 TOK.write_text(json.dumps(data))
 sp = {r["profile"]: r for r in core._bot_spikes("anthropic")}
-check(set(sp) == {"worker-1", "worker-2", "worker-4"}, "spikes: 20x usual, no usual but above the floor, many requests; not 2x usual, not unnamed")
+check(set(sp) == {"worker-1", "worker-2", "worker-4"},
+      "spikes: 20x usual, no usual but twice the floor, many requests; not 2x usual, not unnamed, not under twice the floor "
+      "without a usual hour, not a bucket after now")
 check(sp["worker-1"]["by"] == "cost" and abs(sp["worker-1"]["usual_cost"] - 1.0) < 0.01 and sp["worker-2"]["usual_cost"] is None
       and sp["worker-4"]["by"] == "requests", "spike: by price or by requests, with the usual hour")
 title, body = core._spike_text("anthropic", sp["worker-1"])
@@ -298,6 +304,18 @@ acts = core._run_alerts("anthropic", pool, [])
 check(len([t for t, _, _ in SENT if "far more than usual" in t]) == 3 and len(acts) == 3, "balance alerts once per bot")
 SENT.clear()
 check(core._run_alerts("anthropic", pool, []) == [] and not SENT, "no repeat while it lasts")
+core._atomic_json(core._alerts_path(), {})                    # it calmed down, and goes up again
+SENT.clear()
+check(core._run_alerts("anthropic", pool, []) == [] and not SENT
+      and len([k for k in json.loads(core._alerts_path().read_text()) if ":bot:" in k]) == 3,
+      "a bot back over the floor within the cooldown: shown on the page, no new message")
+stt = json.loads(core._state_path().read_text())
+stt["botsent:anthropic:bot:worker-2"] = now - 7 * 3600
+core._atomic_json(core._state_path(), stt)
+core._atomic_json(core._alerts_path(), {})
+SENT.clear()
+core._run_alerts("anthropic", pool, [])
+check([t for t, _, _ in SENT] == ["Hermes: worker-2 is using far more than usual"], "after the cooldown (6 h) it alerts again")
 st = c.get("/x/status").json()
 bots = [a for a in st["alerts"] if a["kind"] == "bot"]
 check(len(bots) == 3 and any("worker-1 is using far more than usual: $20.00" in a["text"] and "(20x its usual hour)" in a["text"] for a in bots),
@@ -308,6 +326,8 @@ check(not [k for k in json.loads(core._alerts_path().read_text()) if ":bot:" in 
 rc, text = run(core._dispatch, action="notify", target="bots=30")
 check(rc == 0 and "$30 at API prices" in text and {r["profile"] for r in core._bot_spikes("anthropic")} == {"worker-4"},
       "bots=30 raises the floor and turns them on")
+check("twice the floor until it has 3 active hours; once per bot per 6 h" in run(core._cmd_notify, target="status")[1],
+      "notify status explains the warm-up and the cooldown")
 check(run(core._dispatch, action="notify", target="bots=abc")[0] == 2 and run(core._dispatch, action="notify", target="bots=0")[0] == 2,
       "bots= needs a positive amount")
 n = c.get("/x/notify").json()
@@ -337,8 +357,8 @@ check(oct(ACT.stat().st_mode & 0o777) == "0o600" and "fake-key" not in ACT.read_
 check(any(e["by"] == "timer" and e["kind"] == "alert" for e in ev) or not [e for e in ev if e["kind"] == "alert"],
       "balance actions in the timer are logged as timer")
 SENT.clear()
-cfgj = json.loads(core._config_path().read_text())
 core._atomic_json(core._alerts_path(), {})
+core._atomic_json(core._state_path(), {k: v for k, v in json.loads(core._state_path().read_text()).items() if not k.startswith("botsent:")})
 core._in_timer = lambda: True
 run(core._cmd_balance, threshold=90.0)
 core._in_timer = lambda: False
@@ -385,6 +405,12 @@ def history(series, resets, end=None):
 
 resets = {"alice@example.com": now + 3 * 3600, "bob@example.com": now + 4 * 3600, "carol@example.com": now + 2 * 3600}
 history({"alice@example.com": lambda k: 50 + 2.5 * k, "bob@example.com": lambda k: 85, "carol@example.com": lambda k: 88}, resets)
+old = [json.dumps({"ts": now - 86400 + k, "provider": "anthropic", "usage": {"alice@example.com": 1}}) for k in range(3000)]
+HIST.write_text("\n".join(old) + "\n" + HIST.read_text())
+full = core._read_history("anthropic", now - 4200)
+check(core._read_history("anthropic", now - 4200, tail=20_000) == full and len(full) == 13
+      and core._read_history("anthropic", now - 90000, tail=20_000) == core._read_history("anthropic", now - 90000)
+      and len(core._read_history("anthropic", now - 90000, tail=20_000)) == 3013, "history tail read: same snapshots, falls back to the whole file")
 fc = core._forecast("anthropic", now=now)
 check(fc["status"] == "ok" and fc["pace"] == 30.0 and fc["accounts"] == 3, "forecast: pace of the last hour, accounts in rotation")
 check(fc["full_at"] and abs(fc["full_at"] - (now + 34 * 60)) <= 120 and abs(fc["back_at"] - resets["carol@example.com"]) < 1,

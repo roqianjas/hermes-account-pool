@@ -16,7 +16,7 @@ from reportlab.platypus import (CondPageBreak, KeepTogether, PageBreak, Paragrap
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 from reportlab.platypus.tableofcontents import TableOfContents
 
-VERSION = "3.9.0"
+VERSION = "3.9.1"
 REPO = "github.com/roqianjas/hermes-account-pool"
 FOOTER = f"Hermes plugin account-pool {VERSION} · {REPO}"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hermes-account-pool.pdf")
@@ -840,7 +840,7 @@ table([
     ["<b>Akun perlu login ulang</b>", "Sebuah akun berstatus DEAD", "Sekali per akun"],
     ["<b>Semua akun di atas 80%</b>", "Setiap akun dalam rotasi ≥ 80% (butuh adapter)", "Sekali, lalu kabar saat pulih"],
     ["<b>Bot jauh di atas biasanya</b>", "Satu jam terakhir sebuah profil ≥ $15 harga API atau ≥ 300 request, dan "
-     "3 kali jam biasanya", "Sekali per bot, lagi setelah reda"],
+     "3 kali jam biasanya", "Sekali per bot, paling sering tiap 6 jam"],
 ], [0.30, 0.44, 0.26])
 LI(["Peringatan dikirim oleh " + C("balance") + ", jadi butuh timer.",
     "<b>Desktop</b>: " + C("notify-send") + ", aktif secara default.",
@@ -859,13 +859,17 @@ Busiest session: Shipping: admin page for limits (kanban, task t_5f2e91, 100 req
 Check: hermes account anthropic sessions --hours 1
 """)
 LI(["<b>Biasanya</b> = rata-rata jam aktif profil itu (jam dengan minimal satu request) dalam 7 hari sebelumnya. "
-    "Selama profil belum punya 3 jam aktif, hanya batas bawah yang menentukan.",
+    "Selama profil belum punya 3 jam aktif, nilai biasanya belum ada dan batas bawahnya dihitung dua kali lipat "
+    "($30 atau 600 request).",
     "Kedua syarat harus terpenuhi, jadi bot yang memang selalu sibuk tidak memicu peringatan, dan bot sepi yang "
     "pemakaiannya naik dua kali lipat juga tidak.",
+    "Bot yang dekat batas bisa naik-turun melewatinya dari putaran ke putaran. Pesannya paling sering sekali per 6 jam "
+    "per bot (" + C("alert_bot.cooldown_h") + "); banner di halaman tetap tampil selama bot di atas batas.",
     "Dihitung dari file pelacak, tanpa permintaan ke provider. Token tanpa nama bot tidak ikut. Sesi tersibuk butuh "
     "pelacak 1.5.0.",
     C("notify bots=25") + " mengubah batas dolar (sekaligus menyalakan), " + C("notify bots-off") + " mematikan. Batas "
-    "request dan faktornya ada di " + C("alert_bot.requests") + " dan " + C("alert_bot.factor") + " di file pengaturan."])
+    "request, faktor, dan jedanya ada di " + C("alert_bot.requests") + ", " + C("alert_bot.factor") + ", dan "
+    + C("alert_bot.cooldown_h") + " di file pengaturan."])
 H2("Ringkasan harian", need=70)
 P(C("notify daily=08:00") + " mengirim ringkasan 24 jam terakhir sekali sehari, pada putaran timer pertama setelah "
   "jam 08:00, ke saluran yang sama dengan peringatan. Jika dinyalakan setelah jam itu, ringkasan pertama datang "
@@ -886,11 +890,12 @@ H2("File pengaturan", need=50)
 P("Pengaturan disimpan di " + C("$HERMES_HOME/account-pool.json") + " (dibuat saat perubahan pertama). File ini "
   "juga boleh diedit; ambang peringatan ada di " + C("alert_all_above") + ", jam ringkasan harian di "
   + C("notify.daily") + ", peringatan bot di " + C("alert_bot") + " (" + C("usd") + " dan " + C("requests")
-  + " per jam, " + C("factor") + " terhadap jam biasanya), dan jadwal parkir di " + C("schedules") + ":")
+  + " per jam, " + C("factor") + " terhadap jam biasanya, " + C("cooldown_h") + " jeda antarpesan untuk bot yang sama), "
+  "dan jadwal parkir di " + C("schedules") + ":")
 code("""
 {"notify": {"desktop": true, "telegram": "auto", "telegram_via": "default", "daily": "08:00"},
  "alert_all_above": 80,
- "alert_bot": {"on": true, "usd": 15, "requests": 300, "factor": 3},
+ "alert_bot": {"on": true, "usd": 15, "requests": 300, "factor": 3, "cooldown_h": 6},
  "schedules": {"anthropic": [{"label": "dave@example.com", "id": "a3b2c3",
                               "days": [0, 1, 2, 3, 4], "from": "09:00", "to": "17:00"}]}}
 """)
@@ -1181,6 +1186,9 @@ table([
 H1("19. Riwayat versi")
 table([
     ["Versi", "Perubahan"],
+    ["3.9.1", "Peringatan bot: sekali per bot per 6 jam (sebelumnya bisa berulang saat bot naik-turun di sekitar "
+     "batas), dan batas dua kali lipat selama profil belum punya jam biasa. Perkiraan membaca ujung riwayat saja. "
+     + C("sessions") + " untuk provider tanpa akun menyebutnya."],
     ["3.9.0", "Peringatan bot yang jauh di atas biasanya (" + C("notify bots=") + "), log aktivitas (" + C("log")
      + " dan tab Activity), perkiraan kapan semua akun ≥ 90% (" + C("usage") + ", " + C("report") + ", ringkasan, "
      "halaman), token per sesi atau tugas Kanban (" + C("sessions") + ", pelacak 1.5.0, tabel di tab Report)."],

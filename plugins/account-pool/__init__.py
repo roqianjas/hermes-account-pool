@@ -187,7 +187,7 @@ def _load_json(path: Path, default):
 CONFIG_DEFAULTS = {"notify": {"desktop": True, "telegram": "auto", "telegram_via": "default"},
                    "alert_all_above": 80,
                    # a bot that uses far more than usual in the last hour (a loop, a runaway task)
-                   "alert_bot": {"on": True, "usd": 15, "requests": 300, "factor": 3}}
+                   "alert_bot": {"on": True, "usd": 15, "requests": 300, "factor": 3, "cooldown_h": 6}}
 
 
 def _config_path() -> Path:
@@ -237,12 +237,29 @@ def _load_line_ts(line: str) -> float:
         return 0.0
 
 
-def _read_history(provider: str, since: float) -> list[dict]:
+def _read_history(provider: str, since: float, tail: int = 0) -> list[dict]:
+    """Snapshots of `provider` from `since` on. tail > 0: read only the last `tail` bytes when they reach back
+    to `since` (the newest hour without parsing 14 days)."""
     path = _history_path()
     if not path.exists():
         return []
+    text = None
+    if tail:
+        with path.open("rb") as fh:
+            size = fh.seek(0, 2)
+            if size > tail:
+                fh.seek(size - tail)
+                chunk = fh.read().decode("utf-8", "replace").split("\n", 1)[-1]
+                try:
+                    first = json.loads(chunk.split("\n", 1)[0])
+                except Exception:
+                    first = {}
+                if first.get("ts", since) < since:
+                    text = chunk
+    if text is None:
+        text = path.read_text()
     out = []
-    for line in path.read_text().splitlines():
+    for line in text.splitlines():
         try:
             rec = json.loads(line)
         except Exception:
@@ -383,15 +400,16 @@ def _bot_spikes(provider: str, now: float = None) -> list[dict]:
     """Profiles whose last hour is far above their usual hour, by API price or by requests.
 
     Usual = the mean of the profile's active hours in the 7 days before (hours with at least one request;
-    needs 3 of them). A spike needs the floor (alert_bot.usd or .requests per hour) AND, when the usual is
-    known, factor x the usual. Tokens without a bot name are skipped. Files only."""
+    needs 3 of them). A spike needs the floor (alert_bot.usd or .requests per hour) AND factor x the usual;
+    while the usual is not known yet the floor counts double. Tokens without a bot name are skipped.
+    Files only."""
     cfg = _config()["alert_bot"]
     now = now or time.time()
     rows, _ = _token_rows(provider)
     last = defaultdict(lambda: [0.0, 0, 0])
     hours = defaultdict(lambda: defaultdict(lambda: [0.0, 0]))
     for _label, profile, model, start, v in rows:
-        if profile == "?" or start < now - 7 * 86400:
+        if profile == "?" or start < now - 7 * 86400 or start > now:
             continue
         price = _model_price(provider, model)
         cost = sum(v[i] * price[i] for i in range(4)) / 1e6 if price else 0.0
@@ -410,8 +428,9 @@ def _bot_spikes(provider: str, now: float = None) -> list[dict]:
         active = [h for h in hours[profile].values() if h[1]]
         base_cost = sum(h[0] for h in active) / len(active) if len(active) >= 3 else None
         base_req = sum(h[1] for h in active) / len(active) if len(active) >= 3 else None
-        by_cost = cost >= float(cfg.get("usd", 15)) and (base_cost is None or cost >= factor * base_cost)
-        by_req = req >= int(cfg.get("requests", 300)) and (base_req is None or req >= factor * base_req)
+        warm = 1 if base_cost is not None else 2               # no usual yet: twice the floor
+        by_cost = cost >= warm * float(cfg.get("usd", 15)) and (base_cost is None or cost >= factor * base_cost)
+        by_req = req >= warm * int(cfg.get("requests", 300)) and (base_req is None or req >= factor * base_req)
         if by_cost or by_req:
             out.append({"profile": profile, "cost": round(cost, 2), "requests": req, "tokens": tok,
                         "usual_cost": round(base_cost, 2) if base_cost is not None else None,
@@ -477,16 +496,27 @@ def _run_alerts(provider: str, pool, known) -> list[str]:
     mine = {k: v for k, v in state.items() if k.startswith(provider + ":")}
     other = {k: v for k, v in state.items() if not k.startswith(provider + ":")}
     actions = []
+    now = time.time()
+    bot_state = _load_json(_state_path(), {}) or {}
+    cooldown = float(cfg["alert_bot"].get("cooldown_h", 6)) * 3600
+    sent_bot = False
     for key, (title, body) in current.items():
         if key not in mine:
+            if ":bot:" in key:
+                # a bot near the floor goes over and under it from run to run: one message per cooldown
+                if now - float(bot_state.get(f"botsent:{key}", 0)) < cooldown:
+                    continue
+                bot_state[f"botsent:{key}"] = now
+                sent_bot = True
             sent = _notify(title, body)
             actions.append(f"alert: {title} -> {', '.join(sent) or 'no channel delivered'}")
+    if sent_bot:
+        _atomic_json(_state_path(), bot_state)
     if f"{provider}:all-high" in mine and f"{provider}:all-high" not in current:
         lo_e, lo_u = min(known, key=lambda r: r[1][0]) if known else (None, None)
         body = f"{lo_e.label} is at {lo_u[0]:.0f}%." if lo_e else ""
         sent = _notify(f"Hermes: {provider} accounts available again", body)
         actions.append(f"alert cleared: all-high -> {', '.join(sent) or 'no channel delivered'}")
-    now = time.time()
     other.update({k: mine.get(k, now) for k in current})
     _atomic_json(_alerts_path(), other)
     return actions
@@ -2073,7 +2103,7 @@ def _forecast(provider: str, now: float = None, threshold: float = 90) -> dict:
     if not _has_usage(provider):
         out["text"] = _no_usage_text(provider)
         return out
-    hist = _read_history(provider, now - 3600 - 600)
+    hist = _read_history(provider, now - 3600 - 600, tail=400_000)
     if len(hist) < 3 or now - hist[-1]["ts"] > 1200 or hist[-1]["ts"] - hist[0]["ts"] < 1500:
         return out
     series = defaultdict(list)
@@ -2352,6 +2382,8 @@ def _sessions_data(provider: str, hours: float, top: int = 15) -> dict:
 
 def _cmd_sessions(args) -> int:
     provider = _norm(args.provider)
+    if _no_accounts(provider):
+        return 0
     hours = float(args.hours or 24)
     data = _sessions_data(provider, hours)
     if not data["since"]:
@@ -2429,7 +2461,8 @@ def _cmd_notify(args) -> int:
         ab = cfg["alert_bot"]
         _p(f"  bot alerts: {'on' if ab.get('on') else 'off'}"
            + (f" (a bot's last hour >= ${float(ab.get('usd', 15)):g} at API prices or >= {ab.get('requests', 300)} requests, "
-              f"and {float(ab.get('factor', 3)):g}x its usual hour once it has 3 active hours)" if ab.get("on") else ""))
+              f"and {float(ab.get('factor', 3)):g}x its usual hour; twice the floor until it has 3 active hours; "
+              f"once per bot per {float(ab.get('cooldown_h', 6)):g} h)" if ab.get("on") else ""))
         at = _daily_at(cfg)
         last = (_load_json(_state_path(), {}) or {}).get(f"daily:{_norm(args.provider)}")
         _p(f"  daily summary: {f'{at[0]:02d}:{at[1]:02d}, the first balance run after it' if at else 'off'}"

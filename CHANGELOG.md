@@ -2,6 +2,15 @@
 
 All releases of the `account-pool` plugin and its session tracker `account-pool-tracker` (now 1.5.0).
 
+## 3.9.1
+
+Fixes after the first hours of real use of 3.9.0.
+
+- Bot alert: a bot near the floor went over and under it from one timer run to the next and got a new message each time (two in ten minutes). Now one message per bot per 6 hours (`alert_bot.cooldown_h`); the page banner still shows whenever the bot is over.
+- Bot alert: profiles without 3 active hours of history had no usual hour, so the floor alone decided and normal heavy work (an orchestrator on a busy Kanban board) alerted. Until a profile has a usual hour, the floor counts double. Buckets after the time being checked are ignored.
+- Forecast: reads only the end of the usage history instead of parsing all of it on every page refresh, so the page stays fast once the history grows toward its 3 MB limit.
+- `sessions` for a provider without accounts says so, like `usage` and `report`, instead of an empty list.
+
 ## 3.9.0
 
 - Bot alert. The balance timer alerts once when a profile's last hour reaches $15 at API prices or 300 requests and 3 times its usual hour (the mean of its active hours in the 7 days before): a loop or a runaway task. The alert names the busiest session and the command to look further. `notify bots=<USD>`, `bots-on`, `bots-off`; `alert_bot` in the settings file; a switch and the amount in the Alerts tab. The page shows it as a banner with **See sessions**. On by default.

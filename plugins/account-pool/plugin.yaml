@@ -1,6 +1,6 @@
 name: account-pool
 label: Account Pool
-version: 3.9.0
+version: 3.9.1
 description: "`hermes account <provider> <action>`: add/remove with email verification, list, check, park/unpark and weekly park schedules, Hermes' rotation strategy per profile, who, tokens per account, bot, model and session with API prices, an activity log, doctor, alerts (incl. a bot far above its usual use) and a daily summary for any credential-pool provider; usage, report, a forecast and usage-based balance through provider adapters (anthropic and openai-codex built in). Optional Accounts page in Hermes Desktop."
 author: roqianjas
 license: MIT
