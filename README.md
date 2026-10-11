@@ -98,7 +98,7 @@ Run it as the user Hermes runs as. `install.sh` copies `account-pool` (with the 
 The same two folders, straight from this repository, without a git checkout:
 
 ```bash
-hermes plugins install roqianjas/hermes-account-pool#plugins/account-pool --enable --force
+hermes plugins install roqianjas/hermes-account-pool#plugins/account-pool --enable
 hermes plugins install roqianjas/hermes-account-pool#plugins/account-pool-tracker --enable
 hermes account anthropic setup --timer --strategy
 ```
@@ -110,7 +110,7 @@ Hermes scans a plugin from GitHub before it installs it, and stops when the scan
 - 11 `subprocess` calls: `notify-send` (desktop alerts), `hermes send` (Telegram alerts), `systemctl --user` five times (timer state for `doctor` and the page, `setup --timer`), `hermes config set` (`strategy`), `hermes auth add` (`add`, `relogin`), `hermes auth remove` (`remove`), and `hermes -p <profile> plugins enable` / `config set` (`setup`);
 - 1 read of `/proc/self/cgroup`, to know whether the process is the timer's service.
 
-Each one is in the [Security and privacy disclosure](#security-and-privacy-disclosure). Read the findings, then install with `--force`: Hermes still shows them and then installs. The tracker has no findings. `install.sh` copies the folders itself, so it is not stopped by the scan.
+Each one is in the [Security and privacy disclosure](#security-and-privacy-disclosure). In a terminal, Hermes lists the findings and asks `Install anyway? Only continue if you trust the source. [y/N]`: read them and answer `y`. Without a terminal (a script, an agent's shell) it stops instead; add `--force` there. The tracker has no findings, `hermes plugins update` installs new versions without asking again, and `install.sh` copies the folders itself, so neither is stopped by the scan.
 
 ### What setup does
 
@@ -161,7 +161,7 @@ systemctl --user list-timers hermes-account-balance.timer
 `hermes plugins install`:
 
 ```bash
-hermes plugins update account-pool --force
+hermes plugins update account-pool
 hermes plugins update account-pool-tracker
 hermes account anthropic setup        # usually "Nothing to change"
 ```

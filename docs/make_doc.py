@@ -210,8 +210,7 @@ table([
 H2("4.2 Instalasi dengan hermes plugins install")
 P("Dua folder yang sama, langsung dari repo ini, tanpa salinan git:")
 code("""
-hermes plugins install roqianjas/hermes-account-pool#plugins/account-pool \\
-    --enable --force
+hermes plugins install roqianjas/hermes-account-pool#plugins/account-pool --enable
 hermes plugins install roqianjas/hermes-account-pool#plugins/account-pool-tracker --enable
 hermes account anthropic setup --timer --strategy
 """)
@@ -226,9 +225,11 @@ LI(["11 panggilan " + C("subprocess") + ": " + C("notify-send") + " (notifikasi 
     + C("remove") + "), dan " + C("hermes -p &lt;profil&gt; plugins enable") + " / " + C("config set") + " ("
     + C("setup") + ").",
     "1 pembacaan " + C("/proc/self/cgroup") + ", untuk tahu apakah proses ini service timer."])
-P("Semuanya tercantum di bagian pengungkapan keamanan (bagian 13). Baca temuannya, lalu pasang dengan "
-  + C("--force") + ": Hermes tetap menampilkan temuan itu, lalu memasang. Pelacak tidak punya temuan. "
-  + C("install.sh") + " menyalin folder sendiri, jadi tidak dihentikan pemindaian.")
+P("Semuanya tercantum di bagian pengungkapan keamanan (bagian 13). Di terminal, Hermes menampilkan temuan itu "
+  "lalu bertanya " + C("Install anyway? ... [y/N]") + ": baca temuannya, lalu jawab " + C("y") + ". Tanpa terminal "
+  "(skrip, shell milik agen) Hermes langsung berhenti; tambahkan " + C("--force") + " di sana. Pelacak tidak punya "
+  "temuan, " + C("hermes plugins update") + " memasang versi baru tanpa bertanya lagi, dan " + C("install.sh")
+  + " menyalin folder sendiri, jadi keduanya tidak dihentikan pemindaian.")
 H2("Kenapa tidak ada di katalog plugin Hermes")
 P("Katalog plugin Hermes hanya memuat plugin yang tidak pernah memegang login sendiri: token OAuth dan API key "
   "harus lewat Hermes (aturan katalog 11). " + C("account-pool") + " sengaja mengurus login sendiri, karena Hermes "
@@ -305,7 +306,7 @@ systemctl --user list-timers hermes-account-balance.timer
 H2("4.4 Update")
 P("Instalasi dengan " + C("hermes plugins install") + ":")
 code("""
-hermes plugins update account-pool --force
+hermes plugins update account-pool
 hermes plugins update account-pool-tracker
 hermes account anthropic setup        # biasanya "Nothing to change"
 """)
@@ -1368,7 +1369,7 @@ table([
     ["Log timer", C("journalctl --user -u hermes-account-balance.service -n 20 -o cat")],
     ["Halaman di Desktop", "Sidebar <b>Accounts</b>, atau Ctrl+K " + C("Accounts: open the account pool")],
     ["Setup profil, pelacak, timer", C("hermes account anthropic setup --timer")],
-    ["Update plugin", C("hermes plugins update account-pool --force") + "<br/>(git: " + C("git pull && ./install.sh") + ")"],
+    ["Update plugin", C("hermes plugins update account-pool") + "<br/>(git: " + C("git pull && ./install.sh") + ")"],
 ], [0.30, 0.70])
 
 H1("19. Riwayat versi")
@@ -1377,7 +1378,7 @@ table([
     ["3.10.1", "Dipasang dari repo ini, bukan dari katalog plugin Hermes; perilaku tidak berubah. Plugin tetap "
      "mengurus login sendiri (park, usage live, cek email, login di halaman Accounts), jadi tidak memenuhi aturan "
      "katalog 11. Dokumentasi: alasan tidak masuk katalog, instalasi dengan " + C("install.sh") + " atau "
-     + C("hermes plugins install ... --force") + " beserta 12 temuan pemindaian Hermes."],
+     + C("hermes plugins install") + " beserta 12 temuan pemindaian Hermes (di terminal dijawab " + C("y") + ")."],
     ["3.10.0", "Siap untuk katalog plugin Hermes. Perintah baru " + C("setup") + " (profil, pelacak, " + C("--timer")
      + ", " + C("--strategy") + ", " + C("--undo") + "); unit systemd ditulis " + C("setup") + ", folder "
      + C("systemd/") + " dihapus, " + C("install.sh") + " memanggil " + C("setup --yes") + ". Tanpa terminal, "
