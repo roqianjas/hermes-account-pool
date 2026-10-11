@@ -1306,6 +1306,10 @@ LI(["Pemakaian berasal dari <b>endpoint yang tidak didokumentasikan resmi</b>: "
     "sesi, dan peringatan bot kosong, sedangkan usage, balance, park, jadwal, dan perkiraan tetap jalan. Jika suatu "
     "update Hermes mengubah struktur internalnya, " + C("who") + " kosong tetapi bot tidak terganggu (pelacak menelan "
     "semua error).",
+    "Kedua plugin dibuat untuk " + C("plugins.isolation: in_process") + " (default Hermes). Dengan " + C("host")
+    + ", Hermes tidak mendaftarkan perintah CLI plugin, jadi " + C("hermes account") + " (termasuk " + C("balance")
+    + " dari timer) tidak ada, pelacak tidak mencatat apa pun, dan backend halaman Accounts berjalan di plugin host, yang belum "
+    "diuji.",
     C("add") + " dan " + C("relogin") + " butuh terminal atau halaman Accounts untuk menempel kode login atau "
     "mengetik key; tanpa itu mereka langsung berhenti. Login Codex dari halaman baru diuji sampai kode perangkat muncul; login Codex penuh belum pernah "
     "dijalankan.",
