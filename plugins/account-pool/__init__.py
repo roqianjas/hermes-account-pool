@@ -54,6 +54,9 @@ def _p(*args, sep: str = " ", end: str = "\n") -> None:
         builtins.print(*args, sep=sep, end=end)
     else:
         stream.write(sep.join(str(a) for a in args) + end)
+    rec = getattr(_OUT, "rec", None)
+    if rec is not None:
+        rec.append(sep.join(str(a) for a in args))
 
 
 @contextmanager
@@ -182,7 +185,9 @@ def _load_json(path: Path, default):
 # ── settings, history, notifications ────────────────────────────────────────
 
 CONFIG_DEFAULTS = {"notify": {"desktop": True, "telegram": "auto", "telegram_via": "default"},
-                   "alert_all_above": 80}
+                   "alert_all_above": 80,
+                   # a bot that uses far more than usual in the last hour (a loop, a runaway task)
+                   "alert_bot": {"on": True, "usd": 15, "requests": 300, "factor": 3}}
 
 
 def _config_path() -> Path:
@@ -193,8 +198,9 @@ def _config() -> dict:
     cfg = json.loads(json.dumps(CONFIG_DEFAULTS))
     user = _load_json(_config_path(), {})
     cfg["notify"].update(user.get("notify") or {})
+    cfg["alert_bot"].update(user.get("alert_bot") or {})
     for k, v in user.items():
-        if k != "notify":
+        if k not in ("notify", "alert_bot"):
             cfg[k] = v
     return cfg
 
@@ -246,6 +252,82 @@ def _read_history(provider: str, since: float) -> list[dict]:
     return out
 
 
+# ── activity log: what the timer, the command and the page changed ──────────
+
+ACTIVITY_KEEP = 30 * 86400
+ACTIVITY_MAX_BYTES = 1_000_000
+_TIMER_PROC = []
+
+
+def _activity_path() -> Path:
+    return _root() / "account-pool-activity.jsonl"
+
+
+def _in_timer() -> bool:
+    """True inside the balance timer's service (its cgroup carries the unit name)."""
+    if not _TIMER_PROC:
+        try:
+            _TIMER_PROC.append("hermes-account-balance" in Path("/proc/self/cgroup").read_text())
+        except OSError:
+            _TIMER_PROC.append(False)
+    return _TIMER_PROC[0]
+
+
+def _by() -> str:
+    """Who made a change: "page" (the Accounts page backend sets it), "timer" or "cli"."""
+    return getattr(_OUT, "by", None) or ("timer" if _in_timer() else "cli")
+
+
+def _log(provider: str, kind: str, text: str) -> None:
+    """Append one event to the activity log. Never raises: the log must not break an action."""
+    try:
+        path = _activity_path()
+        line = json.dumps({"ts": round(time.time(), 1), "provider": provider, "by": _by(), "kind": kind,
+                           "text": str(text).strip()})
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(fd, "a") as fh:
+            fh.write(line + "\n")
+        if path.stat().st_size > ACTIVITY_MAX_BYTES:
+            cutoff = time.time() - ACTIVITY_KEEP
+            keep = [l for l in path.read_text().splitlines() if _load_line_ts(l) >= cutoff]
+            if sum(len(l) + 1 for l in keep) > ACTIVITY_MAX_BYTES:
+                keep = keep[len(keep) // 4:]            # still too big: drop the oldest quarter
+            tmp = path.with_suffix(".tmp")
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as fh:
+                fh.write("\n".join(keep) + "\n")
+            os.replace(tmp, path)
+    except Exception:
+        pass
+
+
+def _read_activity(provider: str, since: float) -> list[dict]:
+    path = _activity_path()
+    if not path.exists():
+        return []
+    out = []
+    for line in path.read_text().splitlines():
+        try:
+            rec = json.loads(line)
+        except Exception:
+            continue
+        if rec.get("provider") == provider and rec.get("ts", 0) >= since:
+            out.append(rec)
+    return out
+
+
+# The lines of a command's output that go into the activity log, per action.
+LOG_LINES = {
+    "park": r"^Parked \[",
+    "unpark": r"^(Unparked \[|.+ is already in rotation)",
+    "remove": r"^Removed ",
+    "schedule": r"^Schedule saved",
+    "unschedule": r"^Schedule removed",
+    "strategy": r"^(Rotation strategy \[|FAILED )",
+    "notify": r"^(desktop alerts|telegram alerts|Telegram alerts are now|Daily summary (on|off)|Bot alerts)",
+}
+
+
 def _telegram_target(cfg: dict):
     t = (cfg.get("notify") or {}).get("telegram")
     if not t:
@@ -295,6 +377,75 @@ def _notify(title: str, body: str, icon: str = "dialog-warning") -> list[str]:
     return sent
 
 
+# ── a bot that uses far more than usual ──────────────────────────────────────
+
+def _bot_spikes(provider: str, now: float = None) -> list[dict]:
+    """Profiles whose last hour is far above their usual hour, by API price or by requests.
+
+    Usual = the mean of the profile's active hours in the 7 days before (hours with at least one request;
+    needs 3 of them). A spike needs the floor (alert_bot.usd or .requests per hour) AND, when the usual is
+    known, factor x the usual. Tokens without a bot name are skipped. Files only."""
+    cfg = _config()["alert_bot"]
+    now = now or time.time()
+    rows, _ = _token_rows(provider)
+    last = defaultdict(lambda: [0.0, 0, 0])
+    hours = defaultdict(lambda: defaultdict(lambda: [0.0, 0]))
+    for _label, profile, model, start, v in rows:
+        if profile == "?" or start < now - 7 * 86400:
+            continue
+        price = _model_price(provider, model)
+        cost = sum(v[i] * price[i] for i in range(4)) / 1e6 if price else 0.0
+        if start >= now - 3600:
+            g = last[profile]
+            g[0] += cost
+            g[1] += v[4]
+            g[2] += sum(v[:4])
+        else:
+            h = hours[profile][int(start // 3600)]
+            h[0] += cost
+            h[1] += v[4]
+    factor = float(cfg.get("factor", 3))
+    out = []
+    for profile, (cost, req, tok) in last.items():
+        active = [h for h in hours[profile].values() if h[1]]
+        base_cost = sum(h[0] for h in active) / len(active) if len(active) >= 3 else None
+        base_req = sum(h[1] for h in active) / len(active) if len(active) >= 3 else None
+        by_cost = cost >= float(cfg.get("usd", 15)) and (base_cost is None or cost >= factor * base_cost)
+        by_req = req >= int(cfg.get("requests", 300)) and (base_req is None or req >= factor * base_req)
+        if by_cost or by_req:
+            out.append({"profile": profile, "cost": round(cost, 2), "requests": req, "tokens": tok,
+                        "usual_cost": round(base_cost, 2) if base_cost is not None else None,
+                        "usual_requests": round(base_req) if base_req is not None else None,
+                        "by": "cost" if by_cost else "requests"})
+    out.sort(key=lambda r: -r["cost"])
+    if out:
+        top = {}
+        for r in _sessions_data(provider, 1, top=50)["sessions"]:
+            top.setdefault(r["profile"], r)
+        for r in out:
+            s = top.get(r["profile"])
+            r["session"] = (dict({k: s.get(k) for k in ("session", "title", "source", "task")},
+                                 cost=s["tokens"]["cost"], requests=s["tokens"]["requests"]) if s else None)
+    return out
+
+
+def _spike_text(provider: str, r: dict) -> tuple:
+    """(title, body) of a bot alert."""
+    if r["by"] == "cost":
+        usual = (f", {r['cost'] / r['usual_cost']:.0f}x its usual ${r['usual_cost']:.2f} per active hour"
+                 if r.get("usual_cost") else "")
+    else:
+        usual = (f", {r['requests'] / r['usual_requests']:.0f}x its usual {r['usual_requests']} per active hour"
+                 if r.get("usual_requests") else "")
+    body = f"Last hour: ${r['cost']:.2f} at API prices, {r['requests']} requests, {_fmt_tokens(r['tokens'])} tokens{usual}."
+    s = r.get("session")
+    if s:
+        task = f", task {s['task']}" if s.get("task") else ""
+        body += f"\nBusiest session: {s['title']} ({s['source']}{task}, {s['requests']} requests)."
+    body += f"\nCheck: hermes account {provider} sessions --hours 1"
+    return f"Hermes: {r['profile']} is using far more than usual", body
+
+
 def _alerts_path() -> Path:
     return _root() / "account-pool-alerts.json"
 
@@ -310,6 +461,12 @@ def _run_alerts(provider: str, pool, known) -> list[str]:
                 f"Hermes: {e.label} needs sign-in",
                 f"{provider} rejected the login for {e.label}; it is out of rotation.\n"
                 f"Fix: hermes account {provider} relogin {e.label}")
+    if cfg["alert_bot"].get("on"):
+        try:
+            for r in _bot_spikes(provider):
+                current[f"{provider}:bot:{r['profile']}"] = _spike_text(provider, r)
+        except Exception:
+            pass
     if known and all(u[0] >= limit for _, u in known):
         lo_e, lo_u = min(known, key=lambda r: r[1][0])
         current[f"{provider}:all-high"] = (
@@ -379,6 +536,18 @@ def _summary(provider: str, hours: float = 24) -> tuple:
         pct = last.get(nxt.label)
         now += f"; new sessions start on {_short(nxt.label)}" + (f" ({pct:.0f}%)" if pct is not None else "")
     lines.append(now + ".")
+    if _has_usage(provider):
+        fc = _forecast(provider)
+        if fc["status"] == "ok":
+            lines.append("Forecast: " + fc["text"])
+    try:
+        top = _sessions_data(provider, hours, top=1)["sessions"]
+    except Exception:
+        top = []
+    if top:
+        t = top[0]
+        lines.append(f"Top session: {t['title'][:60]} ({t['profile']}, {_fmt_tokens(t['tokens']['total'])} tokens, "
+                     f"{_fmt_cost(t['tokens'])}).")
     dead = [e.label for e in entries if getattr(e, "last_status", None) == "dead"]
     if dead:
         lines.append(f"Needs sign-in: {', '.join(_short(x) for x in dead)}. Fix: hermes account {provider} relogin <account>")
@@ -887,6 +1056,9 @@ def _cmd_usage(args) -> int:
             bar = ch * fill + "." * (20 - fill)
             extra = f"   ({detail})" if detail else ""
             _p(f"  {label:34s} {state:8s} {util:4.0f}%  [{bar}]  {_hhmm(reset)}{extra}")
+    fc = _forecast(provider)
+    if fc["status"] != "no-data":
+        _p(f"  Forecast (balance timer history): {fc['text']}")
     return 0
 
 
@@ -990,6 +1162,18 @@ def _cmd_unpark(args) -> int:
     return 0
 
 
+def _log_actions(provider: str, actions: list, dry: bool) -> None:
+    """Balance's changes into the activity log. The new order is left out: it changes on most runs."""
+    if dry:
+        return
+    for a in actions:
+        if a.startswith("order:"):
+            continue
+        kind = ("alert" if a.startswith("alert") else "schedule" if a.startswith("schedule") else
+                "unpark" if a.startswith("unpark ") else "summary" if a.startswith("daily") else "balance")
+        _log(provider, kind, a)
+
+
 def _cmd_balance(args) -> int:
     provider = _norm(args.provider)
     if not _entries(provider) and not any(p["_provider"] == provider for p in _read_parked()):
@@ -1046,6 +1230,7 @@ def _cmd_balance(args) -> int:
             except Exception as x:
                 actions.append(f"daily summary failed: {x}")
         _p(f"{stamp} [{provider}] balance{' (dry run)' if dry else ''}: no usage adapter, order unchanged.")
+        _log_actions(provider, actions, dry)
         for a in actions:
             _p("  - " + a)
         return 0
@@ -1071,6 +1256,7 @@ def _cmd_balance(args) -> int:
             except Exception as x:
                 actions.append(f"daily summary failed: {x}")
         _p(f"{stamp} [{provider}] balance: usage unavailable for every account; order unchanged.")
+        _log_actions(provider, actions, dry)
         for a in actions:
             _p("  - " + a)
         return 0
@@ -1135,6 +1321,7 @@ def _cmd_balance(args) -> int:
 
     head = f"{stamp} [{provider}] balance{' (dry run)' if dry else ''}:"
     _p(head + (" no change." if not actions else ""))
+    _log_actions(provider, actions, dry)
     for a in actions:
         _p("  - " + a)
     return 0
@@ -1626,6 +1813,7 @@ def _accept_relogin(provider: str, label: str, old_id: str, old_priority: int, f
         pool.remove_index(idx)
     pool.move_entry(fresh.id, old_priority)
     _p(f"Re-login OK: {label} (new id={fresh.id})" + (f", verified as {ident}" if ident and "@" in ident else ""))
+    _log(provider, "relogin", f"Re-login OK: {label}")
     return 0
 
 
@@ -1867,6 +2055,73 @@ def _report_data(provider: str, hours: float) -> dict:
     return out
 
 
+# ── when every account will be at the threshold, at the last hour's pace ─────
+
+def _forecast(provider: str, now: float = None, threshold: float = 90) -> dict:
+    """Forecast from the balance timer's history; no provider call.
+
+    Pace = the usage-window percent the pool used in the last hour (sum of every account's increases).
+    The simulation spends it minute by minute on the least-used account below the threshold (what balance
+    and fill_first do), resets an account when its window resets, and stops when none is left below the
+    threshold or after one window length. Assumes accounts of the same plan, so percents add up.
+    Keys: status (no-data / idle / ok), pace (percent of one window per hour), full_at, back_at,
+    horizon_h, accounts, threshold, text."""
+    now = now or time.time()
+    win_s = getattr(providers.get(provider), "window_seconds", None) or 5 * 3600
+    out = {"status": "no-data", "pace": 0.0, "full_at": None, "back_at": None, "horizon_h": win_s / 3600,
+           "accounts": 0, "threshold": threshold, "text": "Not enough usage history for a forecast yet."}
+    if not _has_usage(provider):
+        out["text"] = _no_usage_text(provider)
+        return out
+    hist = _read_history(provider, now - 3600 - 600)
+    if len(hist) < 3 or now - hist[-1]["ts"] > 1200 or hist[-1]["ts"] - hist[0]["ts"] < 1500:
+        return out
+    series = defaultdict(list)
+    for rec in hist:
+        for label, util in (rec.get("usage") or {}).items():
+            series[label].append((rec["ts"], float(util)))
+    burn = 0.0
+    for pts in series.values():
+        for (t1, u1), (t2, u2) in zip(pts, pts[1:]):
+            if t2 - t1 <= 1200 and u2 > u1:
+                burn += u2 - u1
+    minutes = (hist[-1]["ts"] - hist[0]["ts"]) / 60
+    rate = burn / minutes                                   # percent of one window per minute, whole pool
+    last = hist[-1]
+    accs = []
+    for e in _entries(provider):
+        if getattr(e, "last_status", None) == "dead" or e.label not in (last.get("usage") or {}):
+            continue
+        u, reset = float(last["usage"][e.label]), (last.get("reset") or {}).get(e.label)
+        if reset and reset <= now:
+            u, reset = 0.0, reset + win_s
+        accs.append([u, reset or now + win_s])
+    out.update(status="idle" if rate <= 0 else "ok", pace=round(rate * 60, 1), accounts=len(accs))
+    w = _window(provider)
+    if not accs:
+        out.update(status="no-data", text="No account in rotation with a known usage.")
+        return out
+    if rate <= 0:
+        out["text"] = "No load in the last hour."
+        return out
+    pace = f"At the last hour's pace ({rate * 60:.0f}% of one {w} window per hour)"
+    for m in range(1, int(win_s // 60) + 1):
+        t = now + m * 60
+        for a in accs:
+            if a[1] <= t:
+                a[0], a[1] = 0.0, a[1] + win_s
+        usable = [a for a in accs if a[0] < threshold]
+        if not usable:
+            back = min(a[1] for a in accs)
+            out.update(full_at=t, back_at=back,
+                       text=f"{pace}, every account is at {threshold:.0f}% or more around {_hhmm(t)}, "
+                            f"until about {_hhmm(back)} when the first one resets.")
+            return out
+        min(usable, key=lambda a: a[0])[0] += rate
+    out["text"] = f"{pace}, the {len(accs)} accounts last beyond the next {win_s / 3600:.0f} hours."
+    return out
+
+
 def _chart_data(provider: str, days: int = 7) -> dict:
     """Load per local hour for the last `days` days (today last): quota used (sum of usage-window percent
     increases, from the balance timer's history) and tokens through Hermes (from the session tracker)."""
@@ -1971,6 +2226,9 @@ def _cmd_report(args) -> int:
     if data["busiest"]:
         _p("  Busiest hours: " + ", ".join(f"{h:02d}:00-{(h + 1) % 24:02d}:00 ({v:.0f})" for h, v in data["busiest"]))
     _p(f"  Time with EVERY account >= 90%: {data['full_min']:.0f} min")
+    fc = _forecast(provider)
+    if fc["status"] != "no-data":
+        _p(f"  Forecast: {fc['text']}")
     if data["advice"]:
         _p(("  (" + data["advice"] + ")") if data["advice"].startswith("Too little") else "  -> " + data["advice"])
     _p(f"  Load by hour for the last 7 days: hermes account {provider} report --chart")
@@ -1990,6 +2248,151 @@ def _who_data(provider: str, minutes: float) -> dict:
     accounts = [{"label": label, "sessions": sorted(by_acc.get(label, []), key=lambda r: -r.get("last_seen", 0))}
                 for label in labels + sorted(set(by_acc) - set(labels))]
     return {"recorded": bool(data), "minutes": minutes, "count": len(rows), "accounts": accounts}
+
+
+# ── tokens per session (task) ───────────────────────────────────────────────
+
+def _session_rows(provider: str) -> tuple:
+    """([(profile, session, model, bucket start, [in, out, cache read, cache write, requests])], counted since)
+    from the tracker's per-session buckets (tracker 1.5.0 and later)."""
+    data = _load_json(_root() / "account-pool-tokens.json", {}) or {}
+    out = []
+    for profile, sessions in ((data.get("sessions") or {}).get(provider) or {}).items():
+        for sid, models in (sessions or {}).items():
+            for model, slots in (models or {}).items():
+                for slot, v in (slots or {}).items():
+                    try:
+                        out.append((profile, sid, model, int(slot), [int(x) for x in v[:5]]))
+                    except (TypeError, ValueError):
+                        continue
+    return out, data.get("sessions_since")
+
+
+def _session_meta(keys) -> dict:
+    """{(profile, session): {title, source, started, ended}} from each profile's Hermes session database
+    (state.db, read-only). Missing databases or rows are skipped."""
+    import sqlite3
+    homes = dict(_profile_homes())
+    wanted = defaultdict(set)
+    for profile, sid in keys:
+        wanted[profile].add(sid)
+    out = {}
+    for profile, ids in wanted.items():
+        db = homes.get(profile, _root() / "profiles" / profile) / "state.db"
+        if not db.exists():
+            continue
+        try:
+            con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=2)
+            try:
+                ids = sorted(ids)
+                for i in range(0, len(ids), 500):
+                    part = ids[i:i + 500]
+                    q = f"select id, source, title, started_at, ended_at from sessions where id in ({','.join('?' * len(part))})"
+                    for sid, source, title, started, ended in con.execute(q, part):
+                        out[(profile, sid)] = {"title": title, "source": source, "started": started, "ended": ended}
+            finally:
+                con.close()
+        except Exception:
+            continue
+    return out
+
+
+def _sessions_data(provider: str, hours: float, top: int = 15) -> dict:
+    """The sessions with the most tokens in the last `hours`, by API price then tokens. Each: profile, session,
+    title, source, platform, task, accounts, models, tokens (as in _token_group), first and last bucket."""
+    now = time.time()
+    since = now - hours * 3600
+    rows, counted = _session_rows(provider)
+    groups = {}
+    for profile, sid, model, start, v in rows:
+        if start < since:
+            continue
+        g = groups.setdefault((profile, sid), {"v": [0, 0, 0, 0, 0], "cost": 0.0, "unpriced": 0,
+                                                "models": defaultdict(int), "first": start, "last": start})
+        for i in range(5):
+            g["v"][i] += v[i]
+        price = _model_price(provider, model)
+        if price:
+            g["cost"] += sum(v[i] * price[i] for i in range(4)) / 1e6
+        else:
+            g["unpriced"] += sum(v[:4])
+        g["models"][model] += sum(v[:4])
+        g["first"], g["last"] = min(g["first"], start), max(g["last"], start)
+    total = dict(dict.fromkeys(TOKEN_KEYS, 0), total=0, cost=0.0, unpriced=0)
+    for g in groups.values():
+        for i, k in enumerate(TOKEN_KEYS):
+            total[k] += g["v"][i]
+        total["total"] += sum(g["v"][:4])
+        total["cost"] += g["cost"]
+        total["unpriced"] += g["unpriced"]
+    total["cost"] = round(total["cost"], 4)
+    ranked = sorted(groups.items(), key=lambda kv: (-kv[1]["cost"], -sum(kv[1]["v"][:4])))
+    shown = ranked[:top]
+    meta = _session_meta(k for k, _ in shown)
+    recs = (_load_json(_root() / "account-pool-sessions.json", {}) or {}).get("sessions") or {}
+    out = []
+    for (profile, sid), g in shown:
+        m = meta.get((profile, sid)) or {}
+        r = recs.get(f"{profile}:{sid}") or {}
+        d = dict(zip(TOKEN_KEYS, g["v"]))
+        d.update(total=sum(g["v"][:4]), cost=round(g["cost"], 4), unpriced=g["unpriced"])
+        out.append({
+            "profile": profile, "session": sid, "title": m.get("title") or f"{m.get('source') or 'session'} {sid}",
+            "named": bool(m.get("title")), "source": m.get("source") or r.get("platform") or "?",
+            "platform": r.get("platform") or "", "task": r.get("task"),
+            "accounts": [x for x in (r.get("previous_account"), r.get("account")) if x],
+            "models": sorted(g["models"], key=lambda k: -g["models"][k]), "tokens": d,
+            "first": g["first"], "last": g["last"] + TOKEN_BUCKET, "ended": m.get("ended"),
+        })
+    return {"hours": hours, "since": counted, "count": len(groups), "total": total, "sessions": out,
+            "rest": {"count": max(0, len(groups) - len(shown)),
+                     "total": sum(sum(g["v"][:4]) for _, g in ranked[top:]),
+                     "cost": round(sum(g["cost"] for _, g in ranked[top:]), 4)}}
+
+
+def _cmd_sessions(args) -> int:
+    provider = _norm(args.provider)
+    hours = float(args.hours or 24)
+    data = _sessions_data(provider, hours)
+    if not data["since"]:
+        _p(f"[{provider}] no tokens per session yet. Session tracker 1.5.0 counts them from its first API call; "
+           f"running bots switch to it when they restart (doctor names them).")
+        return 0
+    since = data["since"]
+    _p(f"[{provider}] sessions by API price, last {hours:g} h ({data['count']} session{'' if data['count'] == 1 else 's'}"
+       + (f"; counted per session since {time.strftime('%m-%d %H:%M', time.localtime(since))}" if since > time.time() - hours * 3600 else "")
+       + ")")
+    if not data["sessions"]:
+        _p("  None in this period.")
+        return 0
+    _p(f"  {'profile':20s} {'source':8s} {'tokens':>7s} {'requests':>8s} {'API $':>9s}  title")
+    for r in data["sessions"]:
+        t = r["tokens"]
+        title = r["title"] if len(r["title"]) <= 60 else r["title"][:59] + "…"
+        _p(f"  {r['profile'][:20]:20s} {r['source'][:8]:8s} {_fmt_tokens(t['total']):>7s} {t['requests']:>8d} "
+           f"{_fmt_cost(t):>9s}  {title}" + (f" ({r['task']})" if r.get("task") else ""))
+    rest = data["rest"]
+    if rest["count"]:
+        _p(f"  {rest['count']} more: {_fmt_tokens(rest['total'])} tokens, ${rest['cost']:,.2f}.")
+    tt = data["total"]
+    _p(f"  Total: {_fmt_tokens(tt['total'])} tokens in {tt['requests']} requests, {_fmt_cost(tt)} at API list prices.")
+    _p("  Tokens count only the time in this period; the title comes from Hermes' session list.")
+    return 0
+
+
+def _cmd_log(args) -> int:
+    provider = _norm(args.provider)
+    hours = float(args.hours or 24)
+    recs = _read_activity(provider, time.time() - hours * 3600)
+    _p(f"[{provider}] activity, last {hours:g} h: {len(recs)} event{'' if len(recs) == 1 else 's'}"
+       + (" (newest last)" if recs else ""))
+    for r in recs[-300:]:
+        _p(f"  {time.strftime('%m-%d %H:%M', time.localtime(r['ts']))}  {r.get('by', '?'):5s}  {r.get('kind', ''):10s}  {r.get('text', '')}")
+    if len(recs) > 300:
+        _p(f"  ({len(recs) - 300} older events not shown; use a shorter --hours)")
+    if not recs:
+        _p("  Nothing recorded. Balance changes, park, unpark, schedules, strategy and alert settings are logged.")
+    return 0
 
 
 def _cmd_who(args) -> int:
@@ -2023,6 +2426,10 @@ def _cmd_notify(args) -> int:
               + (f", sent with the bot of profile '{via}'" if tgt else ""))
         _p(f"  alert when every account is above {cfg.get('alert_all_above', 80)}%, "
               f"and when an account needs sign-in (DEAD).")
+        ab = cfg["alert_bot"]
+        _p(f"  bot alerts: {'on' if ab.get('on') else 'off'}"
+           + (f" (a bot's last hour >= ${float(ab.get('usd', 15)):g} at API prices or >= {ab.get('requests', 300)} requests, "
+              f"and {float(ab.get('factor', 3)):g}x its usual hour once it has 3 active hours)" if ab.get("on") else ""))
         at = _daily_at(cfg)
         last = (_load_json(_state_path(), {}) or {}).get(f"daily:{_norm(args.provider)}")
         _p(f"  daily summary: {f'{at[0]:02d}:{at[1]:02d}, the first balance run after it' if at else 'off'}"
@@ -2031,6 +2438,7 @@ def _cmd_notify(args) -> int:
         _p("Change: hermes account <provider> notify desktop-on|desktop-off|telegram-on|telegram-off")
         _p("        hermes account <provider> notify telegram-via=<profile>   (which bot sends)")
         _p("        hermes account <provider> notify daily=08:00|daily-off|summary   (summary: send it now)")
+        _p("        hermes account <provider> notify bots-on|bots-off|bots=<USD per hour>")
         return 0
     if sub == "test":
         sent = _notify("Hermes account-pool: test", "Alerts from `hermes account` reach this channel.")
@@ -2069,6 +2477,22 @@ def _cmd_notify(args) -> int:
         if not _timer_active():
             _p("WARNING: the balance timer is not active, so no summary will be sent.")
         return 0
+    if sub in ("bots-on", "bots-off") or sub.startswith("bots="):
+        user = _load_json(_config_path(), {})
+        ab = user.setdefault("alert_bot", {})
+        if sub.startswith("bots="):
+            m = re.fullmatch(r"\$?(\d+(?:\.\d+)?)", sub.split("=", 1)[1].strip())
+            if not m or not 0 < float(m[1]) <= 10000:
+                _p("bots= takes US dollars per hour at API prices, e.g. bots=15")
+                return 2
+            ab.update(on=True, usd=float(m[1]))
+        else:
+            ab["on"] = sub == "bots-on"
+        _atomic_json(_config_path(), user)
+        cur = _config()["alert_bot"]
+        _p(f"Bot alerts on: when a bot's last hour reaches ${float(cur['usd']):g} at API prices or {cur['requests']} requests, "
+           f"and {float(cur['factor']):g}x its usual hour." if cur["on"] else "Bot alerts off.")
+        return 0
     if sub.startswith("telegram-via="):
         via = sub.split("=", 1)[1].strip() or "default"
         if via != "default" and not (_root() / "profiles" / via).is_dir():
@@ -2083,7 +2507,7 @@ def _cmd_notify(args) -> int:
                "telegram-on": ("telegram", "auto"), "telegram-off": ("telegram", None)}
     if sub not in toggles:
         _p("notify accepts: status, test, summary, desktop-on, desktop-off, telegram-on, telegram-off, "
-           "telegram-via=<profile>, daily=<HH:MM>, daily-off")
+           "telegram-via=<profile>, daily=<HH:MM>, daily-off, bots-on, bots-off, bots=<USD per hour>")
         return 2
     user = _load_json(_config_path(), {})
     key, val = toggles[sub]
@@ -2295,6 +2719,7 @@ def _accept_added(provider: str, label: str, fresh, verify: bool) -> int:
                   f"check it later with: hermes account {provider} check")
 
     _p(f"Added {label} (id={fresh.id}) to {provider}.")
+    _log(provider, "add", f"Added {label}.")
     if _has_usage(provider):
         from types import SimpleNamespace
         with _capture() as out:
@@ -2431,6 +2856,8 @@ ACTIONS = [
     ("usage", "", "Live usage per account, parked included (usage adapter needed)"),
     ("who", "[--minutes N]", "Which session is on which account (default: last 30 min)"),
     ("report", "[--hours N] [--chart]", "Load and tokens per account, bot and model; --chart: by hour, 7 days"),
+    ("sessions", "[--hours N]", "The sessions (tasks) with the most tokens, with their API price"),
+    ("log", "[--hours N]", "What the timer, the command and the page changed (default: 24 h)"),
     ("add", "<email> [--key] [--yes]", "Sign in a new account, verified, no duplicates (--key: API key)"),
     ("remove", "<target> [--yes]", "Delete an account's login (also works for parked accounts)"),
     ("park", "<target> [--until T]", "Take an account out of rotation; T = 17:00, +2h, 90m"),
@@ -2463,15 +2890,17 @@ HELP = "\n".join([
     "  hermes account anthropic park alice@example.com --until 17:00",
     "  hermes account anthropic relogin bob@example.com",
     "  hermes account anthropic report --hours 72",
+    "  hermes account anthropic sessions --hours 1",
+    "  hermes account anthropic log",
     "  hermes account anthropic schedule alice@example.com --every \"mon-fri 09:00-17:00\"",
     "  hermes account anthropic notify daily=08:00",
     "  hermes account anthropic strategy",
     "  hermes account anthropic doctor",
     "  hermes account anthropic notify test",
     "",
-    "Every provider in the credential pool: list, check, add, remove, park, unpark, schedule, relogin, who, doctor,",
-    "  alerts, timed parks and refresh recovery.",
-    f"Usage adapter (usage, report, balance ordering, real email): {', '.join(providers.with_usage())}.",
+    "Every provider in the credential pool: list, check, add, remove, park, unpark, schedule, relogin, who, sessions,",
+    "  log, doctor, alerts, timed parks and refresh recovery.",
+    f"Usage adapter (usage, report, forecast, balance ordering, real email): {', '.join(providers.with_usage())}.",
 ])
 
 
@@ -2483,11 +2912,11 @@ def _print_help(_args=None) -> int:
 HANDLERS = {"add": _cmd_add, "remove": _cmd_remove, "list": _cmd_list, "check": _cmd_check, "usage": _cmd_usage, "who": _cmd_who,
             "report": _cmd_report, "park": _cmd_park, "unpark": _cmd_unpark, "relogin": _cmd_relogin,
             "balance": _cmd_balance, "doctor": _cmd_doctor, "notify": _cmd_notify, "schedule": _cmd_schedule,
-            "unschedule": _cmd_unschedule, "strategy": _cmd_strategy}
+            "unschedule": _cmd_unschedule, "strategy": _cmd_strategy, "sessions": _cmd_sessions, "log": _cmd_log}
 NEEDS_TARGET = {"park", "unpark", "relogin", "add", "remove", "unschedule"}
 OPTIONAL_TARGET = {"notify", "schedule", "strategy"}
 OPTIONS = {"threshold": ("--threshold", {"balance"}), "dry_run": ("--dry-run", {"balance"}),
-           "until": ("--until", {"park"}), "hours": ("--hours", {"report"}),
+           "until": ("--until", {"park"}), "hours": ("--hours", {"report", "sessions", "log"}),
            "minutes": ("--minutes", {"who"}), "yes": ("--yes", {"relogin", "add", "remove", "strategy"}),
            "key": ("--key", {"add"}), "every": ("--every", {"schedule"}), "chart": ("--chart", {"report"}),
            "only": ("--only", {"strategy"})}
@@ -2535,11 +2964,21 @@ def _dispatch(args) -> int:
         _p(f"Unknown provider '{args.provider}'. Providers in your pool: {', '.join(_pool_providers()) or 'none'}. "
               f"All providers: hermes auth list")
         return 2
+    logged = action in LOG_LINES and args.target and not (action == "notify" and args.target.lower() in ("status", "test", "summary"))
+    prev = getattr(_OUT, "rec", None)
+    if logged:
+        _OUT.rec = []
     try:
         return HANDLERS[action](args)
     except KeyboardInterrupt:
         _p("\nCancelled (Ctrl+C).")
         return 130
+    finally:
+        if logged:
+            lines, _OUT.rec = _OUT.rec, prev
+            for line in lines:
+                if re.match(LOG_LINES[action], line):
+                    _log(_norm(provider), action, line)
 
 
 def _setup(parser) -> None:
@@ -2553,7 +2992,7 @@ def _setup(parser) -> None:
     parser.add_argument("--threshold", type=float, default=None, help="balance: bench at/above this usage %%")
     parser.add_argument("--dry-run", action="store_true", help="balance: show changes without applying them")
     parser.add_argument("--until", default=None, help="park: return automatically (17:00, +2h, 90m)")
-    parser.add_argument("--hours", type=float, default=None, help="report: period in hours (default 24)")
+    parser.add_argument("--hours", type=float, default=None, help="report, sessions, log: period in hours (default 24)")
     parser.add_argument("--minutes", type=float, default=None, help="who: activity window (default 30)")
     parser.add_argument("--yes", action="store_true", help="add/remove/relogin/strategy: skip the confirmation prompt")
     parser.add_argument("--key", action="store_true", help="add: add an API key instead of a sign-in")

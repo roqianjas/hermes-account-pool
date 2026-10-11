@@ -129,6 +129,8 @@ ok(document.querySelectorAll('svg.hap-spark').length > 0, 'sparklines drawn')
 ok(screen.getByText('Tokens, last 24 h') && screen.getByText('Tokens, 24 h', { selector: 'span' }), 'tokens card and column shown')
 ok(rows[0].textContent.includes('1.2M'), 'tokens of the first account shown compact')
 ok(screen.getByText('rotation: fill_first'), 'rotation mode shown in the header')
+ok(document.querySelector('[data-card="forecast"]')?.textContent.includes('Every account ≥ 90%')
+  && /~\d\d:\d\d/.test(document.querySelector('[data-card="forecast"]').textContent), 'forecast card with the time')
 ok(screen.getByText(/New sessions start on #1/), 'rotation table explains where new sessions start')
 ok(!screen.queryByText(/Hermes rotation is not fill_first/), 'no rotation banner while every profile uses fill_first')
 ok(screen.getByText(/at API prices$/) && screen.getAllByText(/^\d+ requests$/).length, 'tokens card shows the API price and the requests on two lines')
@@ -250,10 +252,21 @@ const cells = document.querySelectorAll('.hap-heat > i')
 ok(cells.length === 7 * 24, 'hour chart has 7 x 24 cells')
 await act(async () => { fireEvent.mouseEnter(cells[6 * 24 + 9]) })
 ok(document.querySelector('.hap-heat-read').textContent.includes('09:00-10:00: quota used'), 'hovering a cell shows its numbers')
+const srows = document.querySelectorAll('[data-table="sessions"] tbody tr')
+ok(srows.length === 2 && srows[0].textContent.includes('Shipping: admin page for limits') && srows[0].textContent.includes('t_5f2e91')
+  && srows[0].textContent.includes('$18.90'), 'sessions table: title, task and API price')
+ok(screen.getByText('3 more session(s): 0 tokens, $0.00.'), 'sessions table: the rest')
 await click(screen.getByText('Tokens', { selector: 'button' }))
 ok(document.querySelector('[data-chart="tokens"]'), 'chart switches to tokens')
 await click(screen.getByText('7 days'))
 await waitFor(() => ok(calls.some(c => c.path === '/report?provider=anthropic&hours=168'), 'report 7 days fetched'))
+
+// activity
+await click(screen.getByText('Activity'))
+await waitFor(() => ok(document.querySelectorAll('[data-table="activity"] tbody tr').length === 3, 'activity events listed'))
+ok(document.querySelector('[data-table="activity"]').textContent.includes('timerbench alice@example.com (91% >= 90%)'), 'activity shows who and what')
+await click(screen.getByText('3 days'))
+await waitFor(() => ok(calls.some(c => c.path === '/activity?provider=anthropic&hours=72'), 'activity 3 days fetched'))
 
 // health
 await click(screen.getByText('Health'))
@@ -278,6 +291,13 @@ await click(screen.getByText('Close'))
 ok(screen.getByText('Daily summary'), 'daily summary setting shown')
 await click(screen.getAllByRole('switch')[2])
 await waitFor(() => ok(lastPost('/action')?.body.target === 'daily=08:00', 'daily summary switch posts daily=08:00'))
+ok(document.querySelector('[data-setting="bots"]'), 'bot alert setting shown')
+const botInput = screen.getByLabelText('Dollars per hour for a bot alert')
+await act(async () => { fireEvent.change(botInput, { target: { value: '25' } }) })
+await act(async () => { fireEvent.blur(botInput) })
+await waitFor(() => ok(lastPost('/action')?.body.target === 'bots=25', 'bot alert amount posts bots=25'))
+await click(screen.getAllByRole('switch')[3])
+await waitFor(() => ok(lastPost('/action')?.body.target === 'bots-off', 'bot alert switch posts bots-off'))
 await click(screen.getByText('Send the summary now').closest('button'))
 await waitFor(() => ok(lastPost('/action')?.body.target === 'summary', 'send the summary now posts summary'))
 await click(screen.getByText('Close'))
@@ -341,6 +361,19 @@ fx['/status?provider=anthropic'].tracker = { version: '1.4.0', stale: [], unname
 mount('page')
 await waitFor(() => ok(/without a bot name until/.test(document.querySelector('[data-banner="tracker"]')?.textContent || ''), 'tracker banner for tokens without a bot name'))
 fx['/status?provider=anthropic'].tracker = savedTracker
+cleanup()
+
+// a bot that uses far more than usual -> banner with a shortcut to the sessions
+const savedAlerts = fx['/status?provider=anthropic'].alerts
+fx['/status?provider=anthropic'].alerts = [{ key: 'anthropic:bot:worker-1', since: Math.floor(Date.now() / 1000) - 300, kind: 'bot', profile: 'worker-1',
+  text: 'worker-1 is using far more than usual: $20.00 and 100 requests in the last hour (20x its usual hour). Busiest session: Shipping: admin page for limits.' }]
+mount('page')
+await waitFor(() => ok(document.querySelector('[data-alert="bot"]')?.textContent.includes('worker-1 is using far more than usual'), 'bot alert banner'))
+await click(screen.getByText('See sessions', { selector: 'button' }))
+await screen.findByText('Busiest hours')
+ok(document.querySelector('[data-table="sessions"]'), 'See sessions opens the report')
+fx['/status?provider=anthropic'].alerts = savedAlerts
+store.view = 'accounts'
 cleanup()
 
 // multi-line tooltips keep their line breaks

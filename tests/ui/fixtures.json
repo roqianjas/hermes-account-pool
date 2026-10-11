@@ -1808,6 +1808,16 @@
    "version": "1.4.0",
    "stale": [],
    "unnamed_since": null
+  },
+  "forecast": {
+   "status": "ok",
+   "pace": 31.2,
+   "full_at": 1791647637.2891102,
+   "back_at": 1791650037.2891102,
+   "horizon_h": 5.0,
+   "accounts": 4,
+   "threshold": 90,
+   "text": "At the last hour's pace (31% of one 5-hour window per hour), every account is at 90% or more around 16:40, until about 17:20 when the first one resets."
   }
  },
  "/status?provider=openai-codex": {
@@ -1910,7 +1920,8 @@
    "version": "1.4.0",
    "stale": [],
    "unnamed_since": null
-  }
+  },
+  "forecast": null
  },
  "/summary?provider=anthropic": {
   "provider": "anthropic",
@@ -2217,7 +2228,86 @@
     "accounts": 3,
     "name": "?"
    }
-  ]
+  ],
+  "sessions": {
+   "hours": 24.0,
+   "since": 1791380037.2891102,
+   "count": 5,
+   "total": {
+    "input": 9100,
+    "output": 410000,
+    "cache_read": 21000000,
+    "cache_write": 830000,
+    "requests": 612,
+    "total": 22249100,
+    "cost": 31.42,
+    "unpriced": 0
+   },
+   "sessions": [
+    {
+     "profile": "worker-1",
+     "session": "20261011_101500_a1b2c3",
+     "title": "Shipping: admin page for limits",
+     "named": true,
+     "source": "kanban",
+     "platform": "cli",
+     "task": "t_5f2e91",
+     "accounts": [
+      "alice@example.com"
+     ],
+     "models": [
+      "claude-opus-5-5"
+     ],
+     "tokens": {
+      "input": 5100,
+      "output": 250000,
+      "cache_read": 12000000,
+      "cache_write": 500000,
+      "requests": 340,
+      "total": 12755100,
+      "cost": 18.9,
+      "unpriced": 0
+     },
+     "first": 1791632037.2891102,
+     "last": 1791638637.2891102,
+     "ended": null
+    },
+    {
+     "profile": "worker-2",
+     "session": "20261011_090000_d4e5f6",
+     "title": "telegram 20261011_090000_d4e5f6",
+     "named": false,
+     "source": "telegram",
+     "platform": "telegram",
+     "task": null,
+     "accounts": [
+      "bob@example.com",
+      "carol@example.com"
+     ],
+     "models": [
+      "claude-sonnet-5-5"
+     ],
+     "tokens": {
+      "input": 4000,
+      "output": 160000,
+      "cache_read": 9000000,
+      "cache_write": 330000,
+      "requests": 272,
+      "total": 9494000,
+      "cost": 12.52,
+      "unpriced": 0
+     },
+     "first": 1791630237.2891102,
+     "last": 1791637437.2891102,
+     "ended": 1791637537.2891102
+    }
+   ],
+   "rest": {
+    "count": 3,
+    "total": 0,
+    "cost": 0.0
+   }
+  }
  },
  "/report?provider=anthropic&hours=72": {
   "hours": 72.0,
@@ -2510,7 +2600,86 @@
     "accounts": 3,
     "name": "?"
    }
-  ]
+  ],
+  "sessions": {
+   "hours": 72.0,
+   "since": 1791380037.2891102,
+   "count": 5,
+   "total": {
+    "input": 9100,
+    "output": 410000,
+    "cache_read": 21000000,
+    "cache_write": 830000,
+    "requests": 612,
+    "total": 22249100,
+    "cost": 31.42,
+    "unpriced": 0
+   },
+   "sessions": [
+    {
+     "profile": "worker-1",
+     "session": "20261011_101500_a1b2c3",
+     "title": "Shipping: admin page for limits",
+     "named": true,
+     "source": "kanban",
+     "platform": "cli",
+     "task": "t_5f2e91",
+     "accounts": [
+      "alice@example.com"
+     ],
+     "models": [
+      "claude-opus-5-5"
+     ],
+     "tokens": {
+      "input": 5100,
+      "output": 250000,
+      "cache_read": 12000000,
+      "cache_write": 500000,
+      "requests": 340,
+      "total": 12755100,
+      "cost": 18.9,
+      "unpriced": 0
+     },
+     "first": 1791632037.2891102,
+     "last": 1791638637.2891102,
+     "ended": null
+    },
+    {
+     "profile": "worker-2",
+     "session": "20261011_090000_d4e5f6",
+     "title": "telegram 20261011_090000_d4e5f6",
+     "named": false,
+     "source": "telegram",
+     "platform": "telegram",
+     "task": null,
+     "accounts": [
+      "bob@example.com",
+      "carol@example.com"
+     ],
+     "models": [
+      "claude-sonnet-5-5"
+     ],
+     "tokens": {
+      "input": 4000,
+      "output": 160000,
+      "cache_read": 9000000,
+      "cache_write": 330000,
+      "requests": 272,
+      "total": 9494000,
+      "cost": 12.52,
+      "unpriced": 0
+     },
+     "first": 1791630237.2891102,
+     "last": 1791637437.2891102,
+     "ended": 1791637537.2891102
+    }
+   ],
+   "rest": {
+    "count": 3,
+    "total": 0,
+    "cost": 0.0
+   }
+  }
  },
  "/report?provider=anthropic&hours=168": {
   "hours": 168.0,
@@ -2803,7 +2972,86 @@
     "accounts": 3,
     "name": "?"
    }
-  ]
+  ],
+  "sessions": {
+   "hours": 168.0,
+   "since": 1791380037.2891102,
+   "count": 5,
+   "total": {
+    "input": 9100,
+    "output": 410000,
+    "cache_read": 21000000,
+    "cache_write": 830000,
+    "requests": 612,
+    "total": 22249100,
+    "cost": 31.42,
+    "unpriced": 0
+   },
+   "sessions": [
+    {
+     "profile": "worker-1",
+     "session": "20261011_101500_a1b2c3",
+     "title": "Shipping: admin page for limits",
+     "named": true,
+     "source": "kanban",
+     "platform": "cli",
+     "task": "t_5f2e91",
+     "accounts": [
+      "alice@example.com"
+     ],
+     "models": [
+      "claude-opus-5-5"
+     ],
+     "tokens": {
+      "input": 5100,
+      "output": 250000,
+      "cache_read": 12000000,
+      "cache_write": 500000,
+      "requests": 340,
+      "total": 12755100,
+      "cost": 18.9,
+      "unpriced": 0
+     },
+     "first": 1791632037.2891102,
+     "last": 1791638637.2891102,
+     "ended": null
+    },
+    {
+     "profile": "worker-2",
+     "session": "20261011_090000_d4e5f6",
+     "title": "telegram 20261011_090000_d4e5f6",
+     "named": false,
+     "source": "telegram",
+     "platform": "telegram",
+     "task": null,
+     "accounts": [
+      "bob@example.com",
+      "carol@example.com"
+     ],
+     "models": [
+      "claude-sonnet-5-5"
+     ],
+     "tokens": {
+      "input": 4000,
+      "output": 160000,
+      "cache_read": 9000000,
+      "cache_write": 330000,
+      "requests": 272,
+      "total": 9494000,
+      "cost": 12.52,
+      "unpriced": 0
+     },
+     "first": 1791630237.2891102,
+     "last": 1791637437.2891102,
+     "ended": 1791637537.2891102
+    }
+   ],
+   "rest": {
+    "count": 3,
+    "total": 0,
+    "cost": 0.0
+   }
+  }
  },
  "/report?provider=openai-codex&hours=24": {
   "hours": 24.0,
@@ -2831,7 +3079,19 @@
   },
   "tokens_since": null,
   "by_profile": [],
-  "by_model": []
+  "by_model": [],
+  "sessions": {
+   "hours": 24,
+   "since": null,
+   "count": 0,
+   "total": {},
+   "sessions": [],
+   "rest": {
+    "count": 0,
+    "total": 0,
+    "cost": 0
+   }
+  }
  },
  "/notify?provider=anthropic": {
   "desktop": true,
@@ -2849,6 +3109,93 @@
   ],
   "alert_all_above": 80,
   "daily": null,
-  "daily_last": null
+  "daily_last": null,
+  "bots": {
+   "on": true,
+   "usd": 15,
+   "requests": 300,
+   "factor": 3
+  }
+ },
+ "/activity?provider=anthropic&hours=24": {
+  "hours": 24,
+  "count": 3,
+  "events": [
+   {
+    "ts": 1791638937.2891102,
+    "provider": "anthropic",
+    "by": "timer",
+    "kind": "balance",
+    "text": "bench alice@example.com (91% >= 90%)"
+   },
+   {
+    "ts": 1791635237.2891102,
+    "provider": "anthropic",
+    "by": "page",
+    "kind": "park",
+    "text": "Parked [anthropic]: dave@example.com until 18:00."
+   },
+   {
+    "ts": 1791630237.2891102,
+    "provider": "anthropic",
+    "by": "cli",
+    "kind": "strategy",
+    "text": "Rotation strategy [anthropic]: worker-3 round_robin -> fill_first."
+   }
+  ]
+ },
+ "/activity?provider=anthropic&hours=72": {
+  "hours": 72,
+  "count": 3,
+  "events": [
+   {
+    "ts": 1791638937.2891102,
+    "provider": "anthropic",
+    "by": "timer",
+    "kind": "balance",
+    "text": "bench alice@example.com (91% >= 90%)"
+   },
+   {
+    "ts": 1791635237.2891102,
+    "provider": "anthropic",
+    "by": "page",
+    "kind": "park",
+    "text": "Parked [anthropic]: dave@example.com until 18:00."
+   },
+   {
+    "ts": 1791630237.2891102,
+    "provider": "anthropic",
+    "by": "cli",
+    "kind": "strategy",
+    "text": "Rotation strategy [anthropic]: worker-3 round_robin -> fill_first."
+   }
+  ]
+ },
+ "/activity?provider=anthropic&hours=168": {
+  "hours": 168,
+  "count": 3,
+  "events": [
+   {
+    "ts": 1791638937.2891102,
+    "provider": "anthropic",
+    "by": "timer",
+    "kind": "balance",
+    "text": "bench alice@example.com (91% >= 90%)"
+   },
+   {
+    "ts": 1791635237.2891102,
+    "provider": "anthropic",
+    "by": "page",
+    "kind": "park",
+    "text": "Parked [anthropic]: dave@example.com until 18:00."
+   },
+   {
+    "ts": 1791630237.2891102,
+    "provider": "anthropic",
+    "by": "cli",
+    "kind": "strategy",
+    "text": "Rotation strategy [anthropic]: worker-3 round_robin -> fill_first."
+   }
+  ]
  }
 }

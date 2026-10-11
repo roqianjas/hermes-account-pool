@@ -9,8 +9,8 @@ the live pool from the running agent after each API call and writes:
   immediately when the session's account changes. The version and process id let `doctor` name a process
   that still runs an older tracker after an update.
 - the call's token counts (input, output, cache read, cache write, 1 request) added to a
-  15-minute bucket of that account, profile and model in <hermes root>/account-pool-tokens.json.
-  Every call.
+  15-minute bucket of that account, profile and model, and of that profile, session and model, in
+  <hermes root>/account-pool-tokens.json. Every call.
 
 Both files are mode 600 and hold labels, ids and numbers only, never credentials.
 Any failure is swallowed so the hook can never break a turn.
@@ -22,7 +22,7 @@ import os
 import time
 from pathlib import Path
 
-VERSION = "1.4.0"                 # keep in step with plugin.yaml
+VERSION = "1.5.0"                 # keep in step with plugin.yaml
 KEEP_SECONDS = 24 * 3600
 TOKEN_BUCKET = 900                 # seconds per token bucket
 TOKEN_KEEP = 8 * 24 * 3600         # token buckets older than this are dropped
@@ -92,6 +92,8 @@ def _write(root: Path, key: str, record: dict) -> None:
             record["account_since"] = prev["account_since"]
         elif not prev.get("previous_account"):
             record["account_since"] = record["first_seen"]
+        if "task" not in record and prev.get("task"):
+            record["task"] = prev["task"]          # a session belongs to one Kanban task
         sessions[key] = record
         cutoff = time.time() - KEEP_SECONDS
         data["sessions"] = {k: v for k, v in sessions.items() if v.get("last_seen", 0) >= cutoff}
@@ -130,7 +132,8 @@ def _upgrade_tokens(data, now: float) -> dict:
 
 
 def _prune(node: dict, cutoff: float, depth: int = 0) -> None:
-    """Drop buckets older than `cutoff` and the levels they leave empty (provider > label > profile > model)."""
+    """Drop buckets older than `cutoff` and the levels they leave empty (counts: provider > label > profile >
+    model; sessions: provider > profile > session > model)."""
     if depth == 4:
         for k in list(node):
             try:
@@ -146,9 +149,10 @@ def _prune(node: dict, cutoff: float, depth: int = 0) -> None:
             del node[k]
 
 
-def _add_tokens(root: Path, provider: str, label: str, profile: str, model: str, usage, now: float) -> None:
+def _add_tokens(root: Path, provider: str, label: str, profile: str, model: str, usage, now: float,
+                session: str = "") -> None:
     """Add one call's tokens: counts[provider][label][profile][model][bucket start] = [in, out, cache read,
-    cache write, calls]."""
+    cache write, calls], and the same per session: sessions[provider][profile][session][model][bucket start]."""
     if not isinstance(usage, dict) or not provider or not label:
         return
     vals = []
@@ -171,10 +175,17 @@ def _add_tokens(root: Path, provider: str, label: str, profile: str, model: str,
         slot = str(int(now // TOKEN_BUCKET * TOKEN_BUCKET))
         row = (data["counts"].setdefault(provider, {}).setdefault(label, {}).setdefault(profile or "?", {})
                .setdefault(model or "?", {}).setdefault(slot, [0, 0, 0, 0, 0]))
-        for i, v in enumerate(vals):
-            row[i] += v
-        row[4] += 1
+        rows = [row]
+        if session:
+            data.setdefault("sessions_since", now)
+            rows.append(data.setdefault("sessions", {}).setdefault(provider, {}).setdefault(profile or "?", {})
+                        .setdefault(session, {}).setdefault(model or "?", {}).setdefault(slot, [0, 0, 0, 0, 0]))
+        for r in rows:
+            for i, v in enumerate(vals):
+                r[i] += v
+            r[4] += 1
         _prune(data["counts"], now - TOKEN_KEEP)
+        _prune(data.get("sessions") or {}, now - TOKEN_KEEP)
         _replace_json(path, data)
 
 
@@ -198,7 +209,7 @@ def _on_api_request(**kw) -> None:
         if pool_provider and (not call_provider or call_provider == pool_provider):
             try:
                 model = str(kw.get("model") or getattr(agent, "model", "") or "?").split("/")[-1]
-                _add_tokens(root, pool_provider, label, profile, model, kw.get("usage"), now)
+                _add_tokens(root, pool_provider, label, profile, model, kw.get("usage"), now, session_id)
             except Exception:
                 pass
         prev = _last.get(key)

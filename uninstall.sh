@@ -53,7 +53,7 @@ echo "plugins removed"
 
 echo
 echo "Kept (delete by hand if you no longer need them):"
-for f in account-pool-parked.json account-pool-sessions.json account-pool-tokens.json account-pool-history.jsonl account-pool-alerts.json account-pool-state.json account-pool.json; do
+for f in account-pool-parked.json account-pool-sessions.json account-pool-tokens.json account-pool-history.jsonl account-pool-activity.jsonl account-pool-alerts.json account-pool-state.json account-pool.json; do
   [ -e "$ROOT/$f" ] && echo "  $ROOT/$f"
 done
 echo "credential_pool_strategies settings were left as they are."

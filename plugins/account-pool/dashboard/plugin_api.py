@@ -80,11 +80,14 @@ def _root_home():
 def _exclusive():
     if not _LOCK.acquire(timeout=1):
         raise HTTPException(409, "Another account action is still running. Try again in a moment.")
+    prev = getattr(core._OUT, "by", None)
+    core._OUT.by = "page"                    # the activity log records who made a change
     try:
         with _root_home():
             core._reset_run_state()
             yield
     finally:
+        core._OUT.by = prev
         _LOCK.release()
 
 
@@ -165,7 +168,14 @@ def _timer() -> dict:
 
 def _alerts(provider: str, labels: dict) -> list[dict]:
     out = []
-    for key, since in (core._load_json(core._alerts_path(), {}) or {}).items():
+    state = core._load_json(core._alerts_path(), {}) or {}
+    spikes = {}
+    if any(k.startswith(f"{provider}:bot:") for k in state):
+        try:
+            spikes = {r["profile"]: r for r in core._bot_spikes(provider)}
+        except Exception:
+            spikes = {}
+    for key, since in state.items():
         if not key.startswith(provider + ":"):
             continue
         parts = key.split(":")
@@ -173,6 +183,14 @@ def _alerts(provider: str, labels: dict) -> list[dict]:
             label = labels.get(parts[2], parts[2])
             out.append({"key": key, "since": since, "kind": "dead", "label": label,
                         "text": f"{label} needs to sign in again"})
+        elif parts[1] == "bot":
+            spike = spikes.get(parts[2])
+            text = (f"{parts[2]} is using far more than usual: ${spike['cost']:.2f} and {spike['requests']} requests "
+                    f"in the last hour" + (f" ({spike['cost'] / spike['usual_cost']:.0f}x its usual hour)"
+                                           if spike["by"] == "cost" and spike.get("usual_cost") else "")
+                    + (f". Busiest session: {spike['session']['title']}" if spike.get("session") else "") + "."
+                    if spike else f"{parts[2]} used far more than usual in the last hour.")
+            out.append({"key": key, "since": since, "kind": "bot", "profile": parts[2], "text": text})
         elif parts[1] == "all-high":
             limit = core._config().get("alert_all_above", 80)
             out.append({"key": key, "since": since, "kind": "all-high",
@@ -288,6 +306,7 @@ def _status(provider: str) -> dict:
                    "day": core._token_group(provider, token_rows, now - 24 * 3600, by="all").get("all") or core._empty_tokens()},
         "schedules": core._schedule_rows(provider),
         "tracker": core._tracker_status(provider),
+        "forecast": core._forecast(provider) if ad.has_usage else None,
     }
 
 
@@ -333,7 +352,8 @@ def report(provider: str = "anthropic", hours: float = 24):
         p = _provider(provider)
         if not providers.get(p).has_usage:
             return {"available": False, "message": core._no_usage_text(p)}
-        return dict(core._report_data(p, hours), available=True, chart=core._chart_data(p))
+        return dict(core._report_data(p, hours), available=True, chart=core._chart_data(p),
+                    sessions=core._sessions_data(p, hours))
 
 
 @router.get("/notify")
@@ -352,7 +372,19 @@ def notify_status(provider: str = "anthropic"):
             "alert_all_above": cfg.get("alert_all_above", 80),
             "daily": f"{at[0]:02d}:{at[1]:02d}" if at else None,
             "daily_last": (core._load_json(core._state_path(), {}) or {}).get(f"daily:{p}"),
+            "bots": cfg["alert_bot"],
         }
+
+
+@router.get("/activity")
+def activity(provider: str = "anthropic", hours: float = 24):
+    """The activity log of the last `hours`, newest first (at most 500 events)."""
+    if not 0 < hours <= 24 * 30:
+        raise HTTPException(400, "hours must be between 0 and 720.")
+    with _root_home():
+        p = _provider(provider)
+        recs = core._read_activity(p, time.time() - hours * 3600)
+    return {"hours": hours, "count": len(recs), "events": list(reversed(recs[-500:]))}
 
 
 # ── routes that call the provider or change the pool ────────────────────────

@@ -1,6 +1,15 @@
 # Changelog
 
-All releases of the `account-pool` plugin and its session tracker `account-pool-tracker` (now 1.3.0).
+All releases of the `account-pool` plugin and its session tracker `account-pool-tracker` (now 1.5.0).
+
+## 3.9.0
+
+- Bot alert. The balance timer alerts once when a profile's last hour reaches $15 at API prices or 300 requests and 3 times its usual hour (the mean of its active hours in the 7 days before): a loop or a runaway task. The alert names the busiest session and the command to look further. `notify bots=<USD>`, `bots-on`, `bots-off`; `alert_bot` in the settings file; a switch and the amount in the Alerts tab. The page shows it as a banner with **See sessions**. On by default.
+- Activity log. Balance changes (bench, release, timed and scheduled parks, recoveries, alerts sent), `park`, `unpark`, `remove`, `add`, `relogin`, `schedule`, `unschedule`, `strategy` and alert settings are written to `account-pool-activity.jsonl` (mode 600, 30 days) with who made them: `timer`, `cli` or `page`. New command `hermes account <provider> log [--hours N]` and a new **Activity** tab. The new order after each balance is not logged.
+- Forecast. `usage`, `report`, the daily summary and a new card on the Accounts page say when every account will be at 90% or more at the last hour's pace, and when the first one comes back, from the timer's history with no request to the provider.
+- Tokens per session. Session tracker 1.5.0 also counts tokens per profile, session and model, and keeps a session's Kanban task. New command `hermes account <provider> sessions [--hours N]` and a **By session** table in the Report tab list the sessions with the most tokens, with their title and source from Hermes' own session list (`state.db`, read-only) and their API price. The daily summary names the top session.
+- `--hours` now applies to `report`, `sessions` and `log`; the error for other actions lists all three. Deliberate output change.
+- Tests: `tests/insights_sandbox.py` covers all four; the UI test covers the forecast card, the sessions table, the Activity tab, the bot alert banner and its settings.
 
 ## 3.8.1
 

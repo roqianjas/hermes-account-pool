@@ -237,6 +237,7 @@ const CSS = `
 .hap-select-trigger{width:auto;min-width:170px}
 .hap-ml{white-space:pre-line;display:block}
 .hap-mode{border-bottom:1px dotted currentColor;cursor:help}
+.hap-ellipsis{display:inline-block;max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
 .hap-modebtn{display:inline-flex;align-items:center;gap:4px;background:none;border:0;border-bottom:1px dotted currentColor;padding:0;font:inherit;color:inherit;cursor:pointer}
 .hap-modebtn:hover{color:var(--ui-text-primary)}
 .hap-sharebar{display:inline-block;width:80px;height:5px;border-radius:3px;background:var(--ui-bg-quaternary);overflow:hidden;vertical-align:middle;margin-right:6px}
@@ -652,7 +653,16 @@ function AccountsView({ data, provider, openDialog }) {
           ? (data.tokens.day.cost > 0 ? `${fmtCost(data.tokens.day)} at API prices` : `${fmtTok(data.tokens.day.output)} output`)
           : data.tokens && data.tokens.since ? 'none in 24 h' : 'counting starts with the next request',
         s2: data.tokens && data.tokens.day.requests ? `${data.tokens.day.requests} requests` : null
-      })),
+      }),
+      data.forecast && data.forecast.status !== 'no-data'
+        ? h(MTip, { label: `${data.forecast.text}\n\nFrom the balance timer's history: the pace is what the pool used in the last hour. It assumes accounts of the same plan and the least-used account taking the load, as balance does.` },
+          h('div', { 'data-card': 'forecast' }, h(Card, {
+            k: `Every account ≥ ${data.forecast.threshold}%`,
+            v: data.forecast.full_at ? `~${hhmm(data.forecast.full_at)}` : data.forecast.status === 'idle' ? 'idle' : `> ${data.forecast.horizon_h} h`,
+            s: data.forecast.full_at ? `back ~${hhmm(data.forecast.back_at)} · pace ${Math.round(data.forecast.pace)}%/h`
+              : data.forecast.status === 'idle' ? 'no load in the last hour' : `at the last hour's pace, ${Math.round(data.forecast.pace)}%/h`
+          })))
+        : null),
 
     h('div', { className: 'hap-section' }, 'In rotation',
       h('span', { className: 'hap-pill' }, data.rotation.length),
@@ -813,6 +823,40 @@ function GroupTable({ title, kind, rows, total, extra }) {
         extra ? h('td', null, extra[1](r)) : null)))))
 }
 
+// The sessions (tasks) with the most tokens in the period, from the tracker's per-session buckets.
+function SessionTable({ data }) {
+  if (!data.since) {
+    return h(Fragment, null, h('div', { className: 'hap-section' }, 'By session'),
+      h('p', { className: 'hap-small hap-muted' }, 'Session tracker 1.5.0 counts tokens per session from its first API call. Running bots switch to it when they restart.'))
+  }
+  const rows = data.sessions || []
+  const tip = r => [
+    r.title, `session ${r.session}` + (r.task ? ` · task ${r.task}` : ''),
+    `${r.source}${r.platform && r.platform !== r.source ? ` (${r.platform})` : ''} · ${r.models.join(', ') || '?'}`,
+    ...(r.accounts.length ? [`account: ${r.accounts.join(' → ')}`] : []),
+    `${hhmm(r.first)}-${hhmm(r.last)}${r.ended ? ', ended' : ''}`, '', ...tokLines(r.tokens)].join('\n')
+  return h(Fragment, null,
+    h('div', { className: 'hap-section' }, 'By session', h('span', { className: 'hap-pill' }, data.count),
+      h('span', { className: 'hap-grow' }),
+      h('span', { className: 'hap-tag', style: { textTransform: 'none', letterSpacing: 0, fontWeight: 400 } },
+        data.since > Date.now() / 1000 - data.hours * 3600 ? `counted per session since ${when(data.since)}` : 'tokens in this period only')),
+    rows.length
+      ? h('table', { className: 'hap-table', 'data-table': 'sessions' },
+        h('thead', null, h('tr', null, h('th', null, 'Session'), h('th', null, 'Profile'), h('th', null, 'Source'),
+          h('th', { className: 'hap-num' }, 'Tokens'), h('th', { className: 'hap-num' }, 'Requests'), h('th', { className: 'hap-num' }, 'API price'))),
+        h('tbody', null, rows.map(r => h('tr', { key: `${r.profile}:${r.session}` },
+          h('td', { style: { color: 'var(--ui-text-primary)', maxWidth: 380 } },
+            h(MTip, { label: tip(r) }, h('span', { className: 'hap-ellipsis' }, r.named ? r.title : h('span', { className: 'hap-muted' }, r.title))),
+            r.task ? h('span', { className: 'hap-tag', style: { marginLeft: 6 } }, r.task) : null),
+          h('td', null, r.profile), h('td', { className: 'hap-muted' }, r.source),
+          h('td', { className: 'hap-num' }, fmtTok(r.tokens.total)), h('td', { className: 'hap-num' }, r.tokens.requests),
+          h('td', { className: 'hap-num' }, fmtCost(r.tokens))))))
+      : h('p', { className: 'hap-small hap-muted' }, 'No session in this period.'),
+    data.rest && data.rest.count
+      ? h('p', { className: 'hap-small hap-muted' }, `${data.rest.count} more session(s): ${fmtTok(data.rest.total)} tokens, $${data.rest.cost.toFixed(2)}.`)
+      : null)
+}
+
 function ReportView({ provider }) {
   const [hours, setHours] = useState('24')
   const q = useQuery({
@@ -878,11 +922,41 @@ function ReportView({ provider }) {
               extra: ['Mostly', r => r.model && r.model !== '?' ? `${r.model}${r.accounts > 1 ? ` · ${r.accounts} accounts` : ''}` : '–']
             }),
             h(GroupTable, { title: 'By model', kind: 'models', rows: d.by_model || [], total: tt && tt.total }),
+            d.sessions ? h(SessionTable, { data: d.sessions }) : null,
             d.chart ? h(HourChart, { chart: d.chart }) : null,
             h('p', { className: 'hap-small hap-muted', style: { marginTop: 8 } },
               (usage ? 'Used and Peak come from the provider\'s usage percentages. ' : '')
               + `Tokens count only what Hermes sent and received on this computer${since}. `
               + 'API price is what those tokens would cost at the provider\'s list prices; a subscription is billed flat, so it shows what the use is worth, not a bill.')))
+}
+
+const KIND_ICON = { balance: 'arrow-swap', alert: 'bell', park: 'debug-pause', unpark: 'debug-start', schedule: 'calendar',
+  unschedule: 'calendar', strategy: 'settings-gear', notify: 'bell', add: 'add', remove: 'trash', relogin: 'key' }
+
+function ActivityView({ provider }) {
+  const [hours, setHours] = useState('24')
+  const q = useQuery({
+    queryKey: [ID, 'activity', provider, hours],
+    queryFn: () => get(`/activity?provider=${encodeURIComponent(provider)}&hours=${hours}`),
+    refetchInterval: 60000
+  })
+  const d = q.data
+  return h(Fragment, null,
+    h('div', { className: 'hap-row', style: { margin: '4px 0 10px' } },
+      h(SegmentedControl, {
+        options: [{ id: '24', label: '24 hours' }, { id: '72', label: '3 days' }, { id: '168', label: '7 days' }],
+        value: hours, onChange: setHours
+      }),
+      h('span', { className: 'hap-small hap-muted' }, 'What the balance timer, the hermes account command and this page changed. Kept 30 days.')),
+    q.isLoading ? h(Loader, { type: 'lemniscate-bloom' })
+      : q.error ? h(ErrorState, { title: errText(q.error) })
+        : !d.events.length ? h('p', { className: 'hap-muted hap-small' }, 'Nothing recorded in this period.')
+          : h('table', { className: 'hap-table', 'data-table': 'activity' },
+            h('thead', null, h('tr', null, h('th', { style: { width: 110 } }, 'When'), h('th', { style: { width: 64 } }, 'By'), h('th', null, 'What happened'))),
+            h('tbody', null, d.events.map((e, i) => h('tr', { key: `${e.ts}-${i}` },
+              h('td', { className: 'hap-num hap-muted' }, when(e.ts)),
+              h('td', null, h('span', { className: 'hap-tag' }, e.by)),
+              h('td', null, h('span', { className: 'hap-acc' }, h(Codicon, { name: KIND_ICON[e.kind] || 'circle-small', size: '0.8rem' }), h('span', null, e.text))))))))
 }
 
 function HealthView({ provider, data, openResult }) {
@@ -936,6 +1010,10 @@ function AlertsView({ provider, data, openResult }) {
   const savedDaily = q.data && q.data.daily
   useEffect(() => { if (savedDaily) setDailyAt(savedDaily) }, [savedDaily])
   const dailyOk = /^([01]?\d|2[0-3])[:.][0-5]\d$/.test(dailyAt.trim())
+  const [botUsd, setBotUsd] = useState('15')
+  const savedBot = q.data && q.data.bots && q.data.bots.usd
+  useEffect(() => { if (savedBot) setBotUsd(String(savedBot)) }, [savedBot])
+  const botOk = /^\$?\d+(\.\d+)?$/.test(botUsd.trim()) && Number(botUsd.replace('$', '')) > 0
   const act = async (target, result) => {
     setBusy(true)
     try {
@@ -954,7 +1032,7 @@ function AlertsView({ provider, data, openResult }) {
   if (q.error) return h(ErrorState, { title: errText(q.error) })
   return h(Fragment, null,
     h('p', { className: 'hap-small hap-muted', style: { margin: '4px 0 6px' } },
-      `The balance timer alerts once when every account is above ${n.alert_all_above}%, once when an account needs to sign in again, and once when it is fixed.`),
+      `The balance timer alerts once when every account is above ${n.alert_all_above}%, once when an account needs to sign in again, once when it is fixed, and once when a bot uses far more than usual.`),
     h('div', { className: 'hap-setting' },
       h('div', { className: 'hap-grow' },
         h('div', { className: 'hap-setting-t' }, 'Desktop notifications'),
@@ -982,6 +1060,21 @@ function AlertsView({ provider, data, openResult }) {
         onKeyDown: e => { if (e.key === 'Enter') e.currentTarget.blur() }
       }),
       h(Switch, { checked: !!n.daily, disabled: busy || (!n.daily && !dailyOk), onCheckedChange: v => act(v ? `daily=${dailyAt.trim()}` : 'daily-off') })),
+    n.bots
+      ? h('div', { className: 'hap-setting', 'data-setting': 'bots' },
+        h('div', { className: 'hap-grow' },
+          h('div', { className: 'hap-setting-t' }, 'Bot using far more than usual'),
+          h('div', { className: 'hap-small hap-muted' },
+            `When a bot's last hour reaches this much at API prices (or ${n.bots.requests} requests) and ${n.bots.factor}x its usual hour: a loop or a runaway task. Names its busiest session.`)),
+        h('span', { className: 'hap-small hap-muted' }, '$/h'),
+        h(Input, {
+          className: 'hap-time', value: botUsd, disabled: busy, 'aria-label': 'Dollars per hour for a bot alert', placeholder: '15',
+          onChange: e => setBotUsd(e.target.value),
+          onBlur: () => { if (n.bots.on && botOk && Number(botUsd) !== Number(n.bots.usd)) act(`bots=${botUsd.trim()}`) },
+          onKeyDown: e => { if (e.key === 'Enter') e.currentTarget.blur() }
+        }),
+        h(Switch, { checked: !!n.bots.on, disabled: busy, 'aria-label': 'Bot alerts', onCheckedChange: v => act(v ? (botOk ? `bots=${botUsd.trim()}` : 'bots-on') : 'bots-off') }))
+      : null,
     h('div', { className: 'hap-row', style: { marginTop: 12 } },
       h(Button, { size: 'sm', variant: 'outline', disabled: busy, onClick: () => act('test', 'Test alert') },
         h(Codicon, { name: 'bell', size: '0.8rem' }), busy ? 'Sending…' : 'Send a test alert'),
@@ -1053,6 +1146,7 @@ function AccountsPage() {
           : msg
       }))
   } else if (view === 'report') content = h(ReportView, { provider })
+  else if (view === 'activity') content = h(ActivityView, { provider })
   else if (view === 'health') content = h(HealthView, { provider, data, openResult })
   else if (view === 'alerts') content = h(AlertsView, { provider, data, openResult })
   else content = h(AccountsView, { data, provider, openDialog: setDialog })
@@ -1157,7 +1251,7 @@ function AccountsPage() {
         : null),
     h('div', { className: 'hap-sub' },
       h(SegmentedControl, {
-        options: [{ id: 'accounts', label: 'Accounts' }, { id: 'report', label: 'Report' }, { id: 'health', label: 'Health' }, { id: 'alerts', label: 'Alerts' }],
+        options: [{ id: 'accounts', label: 'Accounts' }, { id: 'report', label: 'Report' }, { id: 'activity', label: 'Activity' }, { id: 'health', label: 'Health' }, { id: 'alerts', label: 'Alerts' }],
         value: view, onChange: pickView
       }),
       data
@@ -1180,8 +1274,11 @@ function AccountsPage() {
         ? h(TrackerBanner, { tracker: data.tracker })
         : null,
       data && data.alerts.length && view === 'accounts'
-        ? data.alerts.map(a => h('div', { className: 'hap-banner', key: a.key }, h(Codicon, { name: 'warning' }),
+        ? data.alerts.map(a => h('div', { className: 'hap-banner', key: a.key, 'data-alert': a.kind }, h(Codicon, { name: a.kind === 'bot' ? 'flame' : 'warning' }),
           h('span', { className: 'hap-grow' }, a.text),
+          a.kind === 'bot'
+            ? h(Button, { size: 'xs', variant: 'outline', onClick: () => pickView('report') }, 'See sessions')
+            : null,
           a.kind === 'dead' && data.web_signin
             ? h(Button, {
               size: 'xs', variant: 'outline',

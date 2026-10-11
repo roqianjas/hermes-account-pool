@@ -2,7 +2,7 @@
 
 Run several accounts of one provider in [Hermes Agent](https://hermes-agent.nousresearch.com/docs) and manage them from one command, `hermes account`, or from an Accounts page in Hermes Desktop. Add accounts with a verified email, see live usage per account, spread the load before an account runs out, park accounts for a while or on a weekly schedule, see which bot is on which account and how many tokens each bot uses, and get an alert or a daily summary.
 
-Version 3.8.1 · MIT · Hermes Agent ≥ 0.21 · Linux with systemd · Indonesian PDF guide in [`docs/`](docs/hermes-account-pool.pdf)
+Version 3.9.0 · MIT · Hermes Agent ≥ 0.21 · Linux with systemd · Indonesian PDF guide in [`docs/`](docs/hermes-account-pool.pdf)
 
 ## Contents
 
@@ -236,6 +236,8 @@ hermes account <provider> <action> [target] [options]
   who      [--minutes N]                which session is on which account (default 30 min)
   report   [--hours N] [--chart]        load and tokens per account, bot and model, API price;
                                         --chart: load by hour for the last 7 days
+  sessions [--hours N]                  the sessions (tasks) with the most tokens, with their API price
+  log      [--hours N]                  what the timer, the command and the page changed
   add      <email> [--key] [--yes]      sign in a new account: verified, no duplicates
   remove   <target> [--yes]             delete an account's login (parked accounts too)
   park     <target> [--until T]         take an account out of rotation
@@ -311,6 +313,7 @@ $ hermes account anthropic usage
 - The percentages are the same numbers claude.ai shows as "Current session". For `openai-codex` the line ends with both windows, for example `(5h 12% · week 78%)`, and the stricter one is used.
 - If the usage endpoint does not answer, the line shows the value the timer recorded last, `(last known, 3 min ago)`, at most 15 minutes old and only while that window has not reset. Otherwise it shows the reason, for example `n/a (usage endpoint rate-limited, retry in a few minutes)`, `n/a (sign-in rejected (401))` or `n/a (usage endpoint unreachable ...)`. API-key entries show `API key: no account usage`.
 - Expired access tokens are refreshed first, the same way Hermes does when it uses an account. For parked accounts the new token pair is written back to the parked file at once, because refresh tokens are single use.
+- The last line is the [forecast](#forecast): `Forecast (balance timer history): At the last hour's pace (31% of one 5-hour window per hour), every account is at 90% or more around 16:40, until about 17:20 when the first one resets.`
 
 ### who
 
@@ -353,6 +356,7 @@ $ hermes account anthropic report --hours 24
     claude-haiku-4-5                  1.1M        56     $0.29    10%
   Busiest hours: 08:00-09:00 (26), 10:00-11:00 (24), 12:00-13:00 (24)
   Time with EVERY account >= 90%: 0 min
+  Forecast: At the last hour's pace (12% of one 5-hour window per hour), the 4 accounts last beyond the next 5 hours.
   Load by hour for the last 7 days: hermes account anthropic report --chart
 ```
 
@@ -380,6 +384,43 @@ $ hermes account anthropic report --chart
              00 03 06 09 12 15 18 21
   ...
 ```
+
+### sessions
+
+```
+$ hermes account anthropic sessions --hours 24
+[anthropic] sessions by API price, last 24 h (23 sessions)
+  profile              source    tokens requests     API $  title
+  worker-1             kanban     12.8M      340    $18.90  Shipping: admin page for limits (t_5f2e91)
+  worker-2             telegram    9.5M      272    $12.52  Daily stock digest
+  default              desktop     2.1M       61     $4.10  Plan the release
+  ...
+  20 more: 6.3M tokens, $7.75.
+  Total: 30.7M tokens in 801 requests, $43.27 at API list prices.
+  Tokens count only the time in this period; the title comes from Hermes' session list.
+```
+
+The sessions with the most tokens in the period (15 at most), ranked by API price. Use it to see which task or chat used the tokens a bot shows in `report`, or after a [bot alert](#alerts).
+
+- Tokens per session are counted by session tracker 1.5.0 and later, from its first API call. A period that starts earlier says `counted per session since ...`; until a bot restarts with the new tracker, its sessions are missing here (`doctor` names the processes).
+- `title` and `source` (cli, telegram, kanban, cron, desktop, ...) come from Hermes' own session list in each profile's `state.db`, read-only. A session without a title shows its source and id. The Kanban task is added in brackets when the session ran one.
+- The same buckets as `report`: 15 minutes, last 8 days. Tokens before the period are left out, so a long session shows only its part inside it.
+
+### log
+
+```
+$ hermes account anthropic log --hours 24
+[anthropic] activity, last 24 h: 4 events (newest last)
+  10-11 08:05  timer  balance     bench alice@example.com (91%) until 10:40
+  10-11 09:00  timer  schedule    schedule: parked dave@example.com until 17:00 (Mon-Fri 09:00-17:00)
+  10-11 10:12  page   strategy    Rotation strategy [anthropic]: fill_first in worker-3 (was round_robin).
+  10-11 10:40  timer  balance     release alice@example.com (12%)
+```
+
+What changed in the pool and its settings, and who did it: `timer` (the balance timer), `cli` (a `hermes account` command) or `page` (the Accounts page).
+
+- Logged: bench and release, timed unparks and schedule parks, token refresh recoveries, alerts sent, `park`, `unpark`, `remove`, `add`, `relogin`, `schedule`, `unschedule`, `strategy` and alert settings. Not logged: reading commands (`list`, `usage`, `report`, ...) and the new order after each balance, which changes on most runs.
+- Stored in `account-pool-activity.jsonl`, mode 600, 30 days. Lines hold labels, times and the command's own message, never a credential.
 
 ### park and unpark
 
@@ -471,7 +512,7 @@ $ hermes account anthropic doctor
   OK    strategy fill_first in 6 profiles
   OK    every profile uses the shared account pool
   OK    session tracker active in every profile
-  OK    running sessions count with tracker 1.4.0
+  OK    running sessions count with tracker 1.5.0
   OK    Accounts page backend enabled in every profile
   OK    auth.json permissions 600
   OK    account-pool-parked.json permissions 600
@@ -483,7 +524,7 @@ $ hermes account anthropic doctor
   0 failure(s), 0 warning(s).
 ```
 
-Run it after installing, after a Hermes update, or when bots behave oddly. Every FAIL or WARN line includes the fix. A process loads the session tracker when it starts, so after an update the gateway, Hermes Desktop and long sessions keep the old one; doctor then warns `session tracker 1.4.0 is not loaded yet by: the gateway (...); Hermes Desktop (...)` with the restart each one needs. Tokens without a bot name in the last half hour mean a tracker 1.2.0 or older is still running. A profile on another strategy is a FAIL (`Fix: hermes account <provider> strategy fill_first`); a value Hermes does not know is only a WARN, because Hermes then uses `fill_first`. Exit code 1 when there is a FAIL. For a provider with no accounts it says `not in use, nothing to check`.
+Run it after installing, after a Hermes update, or when bots behave oddly. Every FAIL or WARN line includes the fix. A process loads the session tracker when it starts, so after an update the gateway, Hermes Desktop and long sessions keep the old one; doctor then warns `session tracker 1.5.0 is not loaded yet by: the gateway (...); Hermes Desktop (...)` with the restart each one needs. Tokens without a bot name in the last half hour mean a tracker 1.2.0 or older is still running. A profile on another strategy is a FAIL (`Fix: hermes account <provider> strategy fill_first`); a value Hermes does not know is only a WARN, because Hermes then uses `fill_first`. Exit code 1 when there is a FAIL. For a provider with no accounts it says `not in use, nothing to check`.
 
 ### notify
 
@@ -495,6 +536,7 @@ hermes account anthropic notify telegram-off          # telegram-on to undo
 hermes account anthropic notify telegram-via=<profile>  # send with another profile's bot
 hermes account anthropic notify daily=08:00           # daily summary at 08:00; daily-off to stop
 hermes account anthropic notify summary               # send the summary now
+hermes account anthropic notify bots=15               # bot alert from $15 per hour; bots-off, bots-on
 ```
 
 See [Alerts](#alerts).
@@ -551,10 +593,11 @@ The header has a provider switch (providers with accounts in the pool, plus the 
 
 | Tab | Content |
 |---|---|
-| Accounts | The header line shows Hermes' rotation strategy (hover for what each one does, click to change it); a banner names any profile that does not use `fill_first`, with a **Use fill_first** button. Five cards: accounts in rotation, parked accounts, the account the next session starts on with its usage, sessions in the last 30 minutes, tokens in the last 24 hours with their API price. Then the rotation table in pool order: status, 5-hour usage bar, trend over the last 5 hours, reset time (or `back HH:MM` while benched), tokens in the last 24 hours (hover for input, output, cache, requests, API price, the main model and the current 5-hour window), the profiles using the account (hover for session, platform, model, since when the session is on this account, and the account it moved from) and the row buttons **Sign in again**, **Park**, **Park on a schedule** and **Remove**. A calendar chip next to an account shows its schedule. Parked accounts follow with their last known usage, since when they are parked, when they return (`(schedule)` when a schedule parked them), and **Unpark**, **Park on a schedule** and **Remove**. Then the park schedules, with what each one does now (parked until, next window, or `not in the pool`) and buttons to change or remove it. Active alerts show as a banner on top, a dead account with a **Sign in again** button. An info banner names any process that still runs an older session tracker, with its fix. |
-| Report | The `report` numbers for 24 hours, 3 days or 7 days: load per account, share, peak, time at 90% or more, tokens and their API price, busiest hours and the advice line. Then tokens by profile (bot) and by model, and a chart of the load per hour for the last 7 days (quota used or tokens; hover a cell for its numbers). |
+| Accounts | The header line shows Hermes' rotation strategy (hover for what each one does, click to change it); a banner names any profile that does not use `fill_first`, with a **Use fill_first** button. Five cards: accounts in rotation, parked accounts, the account the next session starts on with its usage, sessions in the last 30 minutes, tokens in the last 24 hours with their API price. A sixth card is the [forecast](#forecast): when every account will be at 90% or more at the last hour's pace (hover for the details). Then the rotation table in pool order: status, 5-hour usage bar, trend over the last 5 hours, reset time (or `back HH:MM` while benched), tokens in the last 24 hours (hover for input, output, cache, requests, API price, the main model and the current 5-hour window), the profiles using the account (hover for session, platform, model, since when the session is on this account, and the account it moved from) and the row buttons **Sign in again**, **Park**, **Park on a schedule** and **Remove**. A calendar chip next to an account shows its schedule. Parked accounts follow with their last known usage, since when they are parked, when they return (`(schedule)` when a schedule parked them), and **Unpark**, **Park on a schedule** and **Remove**. Then the park schedules, with what each one does now (parked until, next window, or `not in the pool`) and buttons to change or remove it. Active alerts show as a banner on top, a dead account with a **Sign in again** button and a bot alert with **See sessions**. An info banner names any process that still runs an older session tracker, with its fix. |
+| Report | The `report` numbers for 24 hours, 3 days or 7 days: load per account, share, peak, time at 90% or more, tokens and their API price, busiest hours and the advice line. Then tokens by profile (bot), by model and by session (the `sessions` list: title, Kanban task, profile, source; hover a title for its accounts, models, times and token split), and a chart of the load per hour for the last 7 days (quota used or tokens; hover a cell for its numbers). |
+| Activity | The `log` for 24 hours, 3 days or 7 days, newest first: when, who (`timer`, `cli`, `page`) and what happened. |
 | Health | Timer state, age of the usage history, active alerts. **Run doctor** runs the `doctor` checks; **Check accounts** runs `check` and shows its output. |
-| Alerts | Desktop and Telegram switches, the profile whose bot sends Telegram alerts, the daily summary (switch and time), **Send a test alert**, **Send the summary now**, and the alerts active now. |
+| Alerts | Desktop and Telegram switches, the profile whose bot sends Telegram alerts, the daily summary (switch and time), the bot alert (switch and dollars per hour), **Send a test alert**, **Send the summary now**, and the alerts active now. |
 
 **Park** asks when the account comes back: when you unpark it, in 1 hour, in 2 hours, or at a time you type (`17:00`, `+90m`, `2026-10-12 08:00`, the same formats as `--until`). **Park on a schedule** asks for the days and the hours (`09:00` to `17:00`), the same as `schedule --every`. **Remove** and **Balance now** ask before they act. Every action reports the same message as the command.
 
@@ -597,6 +640,21 @@ The usage endpoint limits requests per account (see [Troubleshooting](#troublesh
 |---|---|---|
 | Account needs sign-in | An account becomes `DEAD` | Once per account |
 | Every account above 80% | Every account in rotation is at or above 80% (adapter needed) | Once, plus a message when the pool recovers |
+| A bot uses far more than usual | A profile's last hour reaches $15 at API prices or 300 requests, and 3 times its usual hour | Once per bot, again after it calmed down |
+
+The bot alert catches a loop or a runaway task before it eats the pool:
+
+```
+Hermes: worker-1 is using far more than usual
+Last hour: $20.00 at API prices, 100 requests, 5.0M tokens, 20x its usual $1.00 per active hour.
+Busiest session: Shipping: admin page for limits (kanban, task t_5f2e91, 100 requests).
+Check: hermes account anthropic sessions --hours 1
+```
+
+- Usual = the mean of the profile's active hours (hours with at least one request) in the 7 days before. Until a profile has 3 active hours, the floor alone decides.
+- Both conditions must hold, so a bot that is always busy does not alert, and a quiet bot that doubles its small use does not either.
+- Counted from the tracker's files, with no request to the provider. Tokens without a bot name are left out. The busiest session needs tracker 1.5.0.
+- `notify bots=25` changes the dollar floor (and turns the alert on), `notify bots-off` turns it off. The request floor and the factor are `alert_bot.requests` and `alert_bot.factor` in the [settings file](#settings-file).
 
 Alerts are sent by `balance`, so they need the timer. Channels:
 
@@ -618,17 +676,31 @@ Busiest hour: 08:00-09:00.
 Now: 4 in rotation, 0 parked; new sessions start on alice (59%).
 ```
 
-Accounts that need a new sign-in and the report's advice are added when there are any. The summary is built from the plugin's files, with no request to the provider. `notify daily-off` stops it.
+Accounts that need a new sign-in and the report's advice are added when there are any, plus the [forecast](#forecast) when the pool had load in the last hour and the session with the highest API price. The summary is built from the plugin's files, with no request to the provider. `notify daily-off` stops it.
 
 ### Settings file
 
-Settings are stored in `$HERMES_HOME/account-pool.json`, created on the first change. You can also edit it; the alert level is `alert_all_above`, the daily summary time `notify.daily`, and park schedules are under `schedules`:
+Settings are stored in `$HERMES_HOME/account-pool.json`, created on the first change. You can also edit it; the alert level is `alert_all_above`, the daily summary time `notify.daily`, the bot alert `alert_bot` (`usd` per hour, `requests` per hour, `factor` over the usual hour), and park schedules are under `schedules`:
 
 ```json
 {"notify": {"desktop": true, "telegram": "auto", "telegram_via": "default", "daily": "08:00"},
  "alert_all_above": 80,
+ "alert_bot": {"on": true, "usd": 15, "requests": 300, "factor": 3},
  "schedules": {"anthropic": [{"label": "dave@example.com", "id": "a3b2c3", "days": [0, 1, 2, 3, 4], "from": "09:00", "to": "17:00"}]}}
 ```
+
+### Forecast
+
+`usage`, `report`, the daily summary and the Accounts page say when every account will be at 90% or more if the pool keeps the last hour's pace:
+
+```
+Forecast: At the last hour's pace (31% of one 5-hour window per hour), every account is at 90% or more around 16:40, until about 17:20 when the first one resets.
+```
+
+- The pace is the sum of every account's usage increases in the last hour, from the timer's history. Nothing is requested from the provider.
+- The forecast spends that pace minute by minute on the least-used account below 90%, the way `balance` and `fill_first` hand out new sessions, and gives an account its headroom back when its window resets. It looks one window length ahead (5 hours for Anthropic).
+- It assumes accounts of the same plan (the percentages add up) and a steady load; a bot that starts or stops changes it within the hour. Read it as "at this pace", not as a promise.
+- With less than 25 minutes of recent history, or no account with a known usage, there is no forecast. With no load in the last hour it says so.
 
 ## How balance works
 
@@ -641,7 +713,8 @@ Each run, for one provider:
 5. **Bench and release**: accounts at or above the threshold are benched until their window resets; benched accounts that dropped below it are released. Benches are marked `[account-pool]`, and limits set by the provider itself are never touched.
 6. **Order**: least used first, then benched accounts, then accounts whose usage could not be read, then `DEAD` accounts.
 7. **History**: one snapshot per run for `report` and for the `last known` fallback. Values taken from that fallback are never written back.
-8. **Alerts** for new problems, and the daily summary when it is due.
+8. **Alerts** for new problems (an account that needs sign-in, every account high, a bot far above its usual use), and the daily summary when it is due.
+9. **Activity log**: every change from steps 1 to 8 goes to `account-pool-activity.jsonl` (see [`log`](#log)).
 
 Safety rules:
 
@@ -699,7 +772,8 @@ Data files, all mode `600`, in `$HERMES_HOME`:
 |---|---|
 | `account-pool-parked.json` | Parked accounts. **Contains OAuth tokens.** |
 | `account-pool-sessions.json` | Sessions and their account, last 24 hours (no tokens) |
-| `account-pool-tokens.json` | Token counts per account, profile and model in 15-minute buckets, last 8 days. Numbers only. |
+| `account-pool-tokens.json` | Token counts per account, profile and model, and per profile, session and model, in 15-minute buckets, last 8 days. Numbers and session ids only. |
+| `account-pool-activity.jsonl` | The activity log: what the timer, the command and the page changed. Last 30 days, mode 600. |
 | `account-pool-history.jsonl` | Usage snapshots, one per timer run. Trimmed to the last 14 days once the file passes 3 MB. |
 | `account-pool-alerts.json` | Alerts already sent, so each incident is reported once |
 | `account-pool-state.json` | When the daily summary was last sent, and which schedule windows were already applied |
@@ -725,6 +799,7 @@ How tokens are handled:
 | A bot says "retrying in 600s" | Its account hit a 429 before `balance` benched it | `hermes account anthropic balance`, then stop and resend the message in that session |
 | `check`: `DEAD` | Login revoked, or the token was used by another app or machine | `hermes account anthropic relogin <email>` |
 | `check`: `WRONG LABEL` or `DUPLICATE` | Added with plain `hermes auth add` while signed in as another account | `relogin` the right account, or `remove <id>` the extra entry |
+| `sessions` lists nothing | The bots still run a tracker older than 1.5.0 | `hermes gateway restart`, restart Hermes Desktop; `doctor` names the processes |
 | `who` is empty | Sessions started before the tracker was installed | `/reset` the session, or restart the gateway or desktop |
 | `doctor`: session tracker X is not loaded yet by ... | The gateway, Hermes Desktop or a long session started before the tracker was updated | `hermes gateway restart`; restart Hermes Desktop; a session switches when it ends |
 | No Telegram alert | The bot token of the sending profile is invalid | `notify test`; switch with `notify telegram-via=<profile>` |

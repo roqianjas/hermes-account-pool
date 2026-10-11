@@ -16,7 +16,7 @@ from reportlab.platypus import (CondPageBreak, KeepTogether, PageBreak, Paragrap
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 from reportlab.platypus.tableofcontents import TableOfContents
 
-VERSION = "3.8.1"
+VERSION = "3.9.0"
 REPO = "github.com/roqianjas/hermes-account-pool"
 FOOTER = f"Hermes plugin account-pool {VERSION} · {REPO}"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hermes-account-pool.pdf")
@@ -360,6 +360,8 @@ hermes account <provider> <action> [target] [options]
   relogin  <target> [--yes]             login ulang, terverifikasi, label dan posisi tetap
   balance  [--dry-run] [--threshold N]  urutkan, istirahatkan >= N% (90), pulihkan, alert
   strategy [<nama>] [--only P,...]      strategi rotasi Hermes per profil: lihat atau ubah
+  sessions [--hours N]                  sesi (tugas) dengan token terbanyak, beserta harga API
+  log      [--hours N]                  apa yang diubah timer, perintah, dan halaman
   doctor                                periksa strategi, timer, file, pool, peringatan
   notify   [status|test|summary|...]    peringatan (desktop, Telegram), ringkasan harian
   help                                  bantuan
@@ -368,7 +370,8 @@ P("<b>Target</b> adalah label akun (email), nomor urut di " + C("list") + ", ata
   + " menerima label atau id. Contoh output di bawah berdasarkan pool sungguhan, dengan nama akun diganti.")
 table([
     ["Aksi", "Mengubah?", "Aksi", "Mengubah?"],
-    [C("list") + ", " + C("check") + ", " + C("who") + ", " + C("report") + ", " + C("doctor") + ", " + C("help"),
+    [C("list") + ", " + C("check") + ", " + C("who") + ", " + C("report") + ", " + C("sessions") + ", " + C("log")
+     + ", " + C("doctor") + ", " + C("help"),
      "Tidak", C("add") + ", " + C("remove") + ", " + C("park") + ", " + C("unpark") + ", " + C("relogin") + ", "
      + C("balance"), "Ya"],
     ["", "", C("schedule") + ", " + C("unschedule") + ", " + C("strategy &lt;nama&gt;"), "Pengaturan"],
@@ -433,7 +436,8 @@ LI(["Angkanya sama dengan \"Current session\" di pengaturan pemakaian claude.ai.
     "ada, alasannya yang tampil, misalnya " + C("n/a (usage endpoint rate-limited, retry in a few minutes)")
     + " atau " + C("n/a (sign-in rejected (401))") + ". Entri API key: " + C("API key: no account usage") + ".",
     "Access token yang kedaluwarsa diperbarui dulu. Untuk akun parkir, pasangan token baru langsung ditulis ke file "
-    "parkir karena refresh token hanya bisa dipakai sekali."])
+    "parkir karena refresh token hanya bisa dipakai sekali.",
+    "Baris terakhir adalah perkiraan (bagian 9): kapan semua akun ≥ 90% jika laju satu jam terakhir berlanjut."])
 H2("7.4 who")
 code("""
 $ hermes account anthropic who
@@ -475,6 +479,8 @@ $ hermes account anthropic report --hours 24
     claude-haiku-4-5                  1.1M        56     $0.29    10%
   Busiest hours: 08:00-09:00 (26), 10:00-11:00 (24), 12:00-13:00 (24)
   Time with EVERY account >= 90%: 0 min
+  Forecast: At the last hour's pace (12% of one 5-hour window per hour), the 4 accounts
+  last beyond the next 5 hours.
   Load by hour for the last 7 days: hermes account anthropic report --chart
 """)
 LI([C("used") + ": total kenaikan pemakaian. 100 berarti setara satu jendela 5 jam penuh. " + C("peak")
@@ -617,7 +623,7 @@ $ hermes account anthropic doctor
   OK    strategy fill_first in 6 profiles
   OK    every profile uses the shared account pool
   OK    session tracker active in every profile
-  OK    running sessions count with tracker 1.4.0
+  OK    running sessions count with tracker 1.5.0
   OK    Accounts page backend enabled in every profile
   OK    auth.json permissions 600
   OK    account-pool-parked.json permissions 600
@@ -630,7 +636,7 @@ $ hermes account anthropic doctor
 """)
 P("Jalankan setelah instalasi, setelah update Hermes, atau saat bot berperilaku aneh. Setiap baris FAIL atau WARN "
   "menyertakan perbaikannya. Pelacak dimuat saat proses mulai, jadi setelah update gateway, Hermes Desktop, dan sesi "
-  "panjang masih memakai pelacak lama; doctor lalu memberi WARN " + C("session tracker 1.4.0 is not loaded yet by: ...")
+  "panjang masih memakai pelacak lama; doctor lalu memberi WARN " + C("session tracker 1.5.0 is not loaded yet by: ...")
   + " beserta restart yang dibutuhkan masing-masing. Token tanpa nama bot dalam setengah jam terakhir berarti pelacak "
   "1.2.0 atau lebih lama masih berjalan. Profil dengan strategi lain adalah FAIL (perbaikan: " + C("strategy fill_first")
   + "); nilai yang tidak dikenal Hermes hanya WARN, karena Hermes lalu memakai " + C("fill_first") + "."
@@ -645,9 +651,52 @@ hermes account anthropic notify telegram-off            # / telegram-on
 hermes account anthropic notify telegram-via=<profil>   # bot profil mana yang mengirim
 hermes account anthropic notify daily=08:00             # ringkasan harian; daily-off: mati
 hermes account anthropic notify summary                 # kirim ringkasan sekarang
+hermes account anthropic notify bots=15                 # peringatan bot mulai $15/jam
+hermes account anthropic notify bots-off                # / bots-on
 """)
 P("Penjelasan lengkap di bagian 9.")
-H2("7.13 help, pesan salah, dan exit code")
+H2("7.13 sessions", need=80)
+code("""
+$ hermes account anthropic sessions --hours 24
+[anthropic] sessions by API price, last 24 h (23 sessions)
+  profile              source    tokens requests     API $  title
+  worker-1             kanban     12.8M      340    $18.90  Shipping: admin page (t_5f2e91)
+  worker-2             telegram    9.5M      272    $12.52  Daily stock digest
+  default              desktop     2.1M       61     $4.10  Plan the release
+  ...
+  20 more: 6.3M tokens, $7.75.
+  Total: 30.7M tokens in 801 requests, $43.27 at API list prices.
+""")
+LI(["Sesi dengan token terbanyak dalam periode itu (maksimal 15), diurutkan menurut harga API. Dipakai untuk melihat "
+    "tugas atau obrolan mana yang menghabiskan token sebuah bot di " + C("report") + ", atau setelah peringatan bot "
+    "(bagian 9).",
+    "Token per sesi dihitung pelacak 1.5.0 ke atas, mulai panggilan API pertamanya. Periode yang dimulai lebih awal "
+    "menyebut " + C("counted per session since ...") + "; selama bot belum di-restart dengan pelacak baru, sesinya belum "
+    "muncul di sini (" + C("doctor") + " menyebut prosesnya).",
+    C("title") + " dan " + C("source") + " (cli, telegram, kanban, cron, desktop, ...) diambil dari daftar sesi Hermes "
+    "sendiri di " + C("state.db") + " tiap profil, hanya dibaca. Sesi tanpa judul tampil dengan sumber dan id-nya. Tugas "
+    "Kanban ditambahkan dalam kurung bila sesi itu menjalankan tugas.",
+    "Bloknya sama dengan " + C("report") + ": 15 menit, 8 hari terakhir. Token sebelum periode tidak dihitung, jadi sesi "
+    "panjang hanya tampil bagiannya di dalam periode."])
+H2("7.14 log", need=70)
+code("""
+$ hermes account anthropic log --hours 24
+[anthropic] activity, last 24 h: 4 events (newest last)
+  10-11 08:05  timer  balance     bench alice@example.com (91%) until 10:40
+  10-11 09:00  timer  schedule    schedule: parked dave@example.com until 17:00 (Mon-Fri ...)
+  10-11 10:12  page   strategy    Rotation strategy [anthropic]: fill_first in worker-3 (...)
+  10-11 10:40  timer  balance     release alice@example.com (12%)
+""")
+LI(["Apa yang berubah di pool dan pengaturannya, dan siapa yang mengubah: " + C("timer") + " (timer balance), "
+    + C("cli") + " (perintah " + C("hermes account") + "), atau " + C("page") + " (halaman Accounts).",
+    "Dicatat: istirahat dan lepas, unpark bertanggal dan parkir terjadwal, pemulihan refresh token, peringatan yang "
+    "dikirim, " + C("park") + ", " + C("unpark") + ", " + C("remove") + ", " + C("add") + ", " + C("relogin") + ", "
+    + C("schedule") + ", " + C("unschedule") + ", " + C("strategy") + ", dan pengaturan peringatan. Tidak dicatat: "
+    "perintah baca (" + C("list") + ", " + C("usage") + ", " + C("report") + ", ...) dan urutan baru setelah setiap "
+    "balance, yang berubah hampir di setiap putaran.",
+    "Disimpan di " + C("account-pool-activity.jsonl") + ", izin 600, 30 hari. Isinya label, waktu, dan pesan perintah "
+    "itu sendiri, tidak pernah kredensial."])
+H2("7.15 help, pesan salah, dan exit code")
 code("""
 hermes account                 # semua cara ini menampilkan bantuan yang sama
 hermes account help
@@ -659,7 +708,7 @@ table([
     [C("hermes account anthropic"), "Missing action for provider 'anthropic'."],
     [C("hermes account anthropic lst"), "'lst' is not an action. Did you mean: list?"],
     [C("hermes account anthropic park"), "Missing target. Usage: hermes account anthropic park &lt;email|id&gt;"],
-    [C("hermes account anthropic usage --hours 5"), "--hours only applies to: report"],
+    [C("hermes account anthropic usage --hours 5"), "--hours only applies to: log, report, sessions"],
     [C("... park X --until 25:99"), "Cannot read --until '25:99'. Use HH:MM (e.g. 17:00), +2h, 90m, or 'YYYY-MM-DD HH:MM'."],
     [C("hermes account anthorpic list"), "Unknown provider 'anthorpic'. Providers in your pool: anthropic. All providers: hermes auth list"],
 ], [0.40, 0.60])
@@ -708,7 +757,8 @@ table([
     ["Accounts", "Baris di bawah header menampilkan strategi rotasi Hermes (arahkan kursor untuk penjelasan tiap "
      "strategi, klik untuk mengubahnya); banner menyebut profil yang tidak memakai " + C("fill_first") + " beserta "
      "tombol <b>Use fill_first</b>. Lima kartu: akun dalam rotasi, akun parkir, akun tempat sesi berikutnya mulai beserta pemakaiannya, "
-     "jumlah sesi 30 menit terakhir, dan token 24 jam terakhir beserta harga API-nya. Lalu tabel rotasi sesuai urutan pool: status, bar "
+     "jumlah sesi 30 menit terakhir, dan token 24 jam terakhir beserta harga API-nya. Kartu keenam adalah perkiraan "
+     "(bagian 9): kapan semua akun ≥ 90% dengan laju satu jam terakhir. Lalu tabel rotasi sesuai urutan pool: status, bar "
      "pemakaian 5 jam, garis tren 5 jam terakhir, jam reset (atau " + C("back HH:MM") + " saat diistirahatkan), "
      "token 24 jam terakhir (arahkan kursor untuk rincian input, output, cache, jumlah request, harga API, model utama, dan "
      "jendela 5 jam yang sedang berjalan), profil yang memakai akun itu "
@@ -716,14 +766,20 @@ table([
      "<b>Park on a schedule</b>, <b>Remove</b>. Ikon kalender di sebelah akun menunjukkan jadwalnya. Di bawahnya akun "
      "parkir: pemakaian terakhir, sejak kapan, kapan kembali (" + C("(schedule)") + " bila diparkir jadwal), tombol "
      "<b>Unpark</b>, <b>Park on a schedule</b>, dan <b>Remove</b>. Lalu tabel jadwal parkir beserta keadaannya "
-     "sekarang, dengan tombol ubah dan hapus. Peringatan aktif tampil sebagai banner di atas; akun mati mendapat tombol <b>Sign in again</b>. Banner info "
+     "sekarang, dengan tombol ubah dan hapus. Peringatan aktif tampil sebagai banner di atas; akun mati mendapat tombol <b>Sign in again</b>, peringatan bot "
+     "mendapat tombol <b>See sessions</b>. Banner info "
      "menyebut proses yang masih memakai pelacak lama beserta perbaikannya."],
     ["Report", "Angka " + C("report") + " untuk 24 jam, 3 hari, atau 7 hari: beban per akun, porsi, puncak, waktu "
-     "≥ 90%, token dan harga API-nya, jam tersibuk, dan saran. Lalu token per profil (bot) dan per model, serta grafik "
-     "beban per jam 7 hari terakhir (kuota terpakai atau token; arahkan kursor ke kotak untuk angkanya)."],
+     "≥ 90%, token dan harga API-nya, jam tersibuk, dan saran. Lalu token per profil (bot), per model, dan per sesi "
+     "(daftar " + C("sessions") + ": judul, tugas Kanban, profil, sumber; arahkan kursor ke judul untuk akun, model, "
+     "waktu, dan rincian token), serta grafik beban per jam 7 hari terakhir (kuota terpakai atau token; arahkan kursor "
+     "ke kotak untuk angkanya)."],
+    ["Activity", C("log") + " untuk 24 jam, 3 hari, atau 7 hari, terbaru di atas: kapan, siapa (" + C("timer") + ", "
+     + C("cli") + ", " + C("page") + "), dan apa yang terjadi."],
     ["Health", "Status timer, umur riwayat pemakaian, peringatan aktif. <b>Run doctor</b> menjalankan pemeriksaan "
      + C("doctor") + "; <b>Check accounts</b> menjalankan " + C("check") + " dan menampilkan hasilnya."],
     ["Alerts", "Sakelar desktop dan Telegram, profil yang bot-nya mengirim pesan Telegram, ringkasan harian (sakelar dan jam), "
+     "peringatan bot (sakelar dan dolar per jam), "
      "<b>Send a test alert</b>, <b>Send the summary now</b>, dan peringatan yang sedang aktif."],
 ], [0.14, 0.86])
 P("<b>Park</b> menanyakan kapan akun kembali: saat di-unpark, 1 jam lagi, 2 jam lagi, atau jam yang Anda ketik ("
@@ -783,6 +839,8 @@ table([
     ["Peringatan", "Kapan", "Dikirim"],
     ["<b>Akun perlu login ulang</b>", "Sebuah akun berstatus DEAD", "Sekali per akun"],
     ["<b>Semua akun di atas 80%</b>", "Setiap akun dalam rotasi ≥ 80% (butuh adapter)", "Sekali, lalu kabar saat pulih"],
+    ["<b>Bot jauh di atas biasanya</b>", "Satu jam terakhir sebuah profil ≥ $15 harga API atau ≥ 300 request, dan "
+     "3 kali jam biasanya", "Sekali per bot, lagi setelah reda"],
 ], [0.30, 0.44, 0.26])
 LI(["Peringatan dikirim oleh " + C("balance") + ", jadi butuh timer.",
     "<b>Desktop</b>: " + C("notify-send") + ", aktif secara default.",
@@ -791,6 +849,23 @@ LI(["Peringatan dikirim oleh " + C("balance") + ", jadi butuh timer.",
     "Jika bot default belum diatur atau tokennya tidak valid, pakai bot profil lain: "
     + C("notify telegram-via=&lt;profil&gt;") + ".",
     "Jalankan " + C("notify test") + " setelah mengatur."])
+H2("Peringatan bot boros", need=80)
+P("Peringatan ini menangkap loop atau tugas yang lepas kendali sebelum menghabiskan pool:")
+code("""
+Hermes: worker-1 is using far more than usual
+Last hour: $20.00 at API prices, 100 requests, 5.0M tokens, 20x its usual $1.00 per
+active hour.
+Busiest session: Shipping: admin page for limits (kanban, task t_5f2e91, 100 requests).
+Check: hermes account anthropic sessions --hours 1
+""")
+LI(["<b>Biasanya</b> = rata-rata jam aktif profil itu (jam dengan minimal satu request) dalam 7 hari sebelumnya. "
+    "Selama profil belum punya 3 jam aktif, hanya batas bawah yang menentukan.",
+    "Kedua syarat harus terpenuhi, jadi bot yang memang selalu sibuk tidak memicu peringatan, dan bot sepi yang "
+    "pemakaiannya naik dua kali lipat juga tidak.",
+    "Dihitung dari file pelacak, tanpa permintaan ke provider. Token tanpa nama bot tidak ikut. Sesi tersibuk butuh "
+    "pelacak 1.5.0.",
+    C("notify bots=25") + " mengubah batas dolar (sekaligus menyalakan), " + C("notify bots-off") + " mematikan. Batas "
+    "request dan faktornya ada di " + C("alert_bot.requests") + " dan " + C("alert_bot.factor") + " di file pengaturan."])
 H2("Ringkasan harian", need=70)
 P(C("notify daily=08:00") + " mengirim ringkasan 24 jam terakhir sekali sehari, pada putaran timer pertama setelah "
   "jam 08:00, ke saluran yang sama dengan peringatan. Jika dinyalakan setelah jam itu, ringkasan pertama datang "
@@ -804,18 +879,37 @@ usage: 60% (bob). Every account >= 90% at once: 0 min.
 Busiest hour: 08:00-09:00.
 Now: 4 in rotation, 0 parked; new sessions start on alice (59%).
 """)
-P("Akun yang perlu login ulang dan saran dari " + C("report") + " ikut ditambahkan bila ada. Ringkasan dibuat dari "
+P("Akun yang perlu login ulang dan saran dari " + C("report") + " ikut ditambahkan bila ada, juga perkiraan (jika "
+  "pool punya beban dalam satu jam terakhir) dan sesi dengan harga API tertinggi. Ringkasan dibuat dari "
   "file plugin sendiri, tanpa permintaan ke provider. " + C("notify daily-off") + " mematikannya.")
 H2("File pengaturan", need=50)
 P("Pengaturan disimpan di " + C("$HERMES_HOME/account-pool.json") + " (dibuat saat perubahan pertama). File ini "
   "juga boleh diedit; ambang peringatan ada di " + C("alert_all_above") + ", jam ringkasan harian di "
-  + C("notify.daily") + ", dan jadwal parkir di " + C("schedules") + ":")
+  + C("notify.daily") + ", peringatan bot di " + C("alert_bot") + " (" + C("usd") + " dan " + C("requests")
+  + " per jam, " + C("factor") + " terhadap jam biasanya), dan jadwal parkir di " + C("schedules") + ":")
 code("""
 {"notify": {"desktop": true, "telegram": "auto", "telegram_via": "default", "daily": "08:00"},
  "alert_all_above": 80,
+ "alert_bot": {"on": true, "usd": 15, "requests": 300, "factor": 3},
  "schedules": {"anthropic": [{"label": "dave@example.com", "id": "a3b2c3",
                               "days": [0, 1, 2, 3, 4], "from": "09:00", "to": "17:00"}]}}
 """)
+H2("Perkiraan: kapan semua akun penuh", need=70)
+P(C("usage") + ", " + C("report") + ", ringkasan harian, dan halaman Accounts menyebut kapan semua akun ≥ 90% jika "
+  "pool terus dipakai dengan laju satu jam terakhir:")
+code("""
+Forecast: At the last hour's pace (31% of one 5-hour window per hour), every account is at
+90% or more around 16:40, until about 17:20 when the first one resets.
+""")
+LI(["Lajunya adalah jumlah kenaikan pemakaian semua akun dalam satu jam terakhir, dari riwayat timer. Tidak ada "
+    "permintaan ke provider.",
+    "Perkiraan membagikan laju itu menit demi menit ke akun paling longgar di bawah 90%, seperti " + C("balance")
+    + " dan " + C("fill_first") + " membagi sesi baru, dan mengembalikan ruang akun saat jendelanya reset. Jangkauannya "
+    "satu panjang jendela (5 jam untuk Anthropic).",
+    "Asumsinya akun berpaket sama (persennya bisa dijumlah) dan beban stabil; bot yang mulai atau berhenti mengubahnya "
+    "dalam satu jam. Baca sebagai \"dengan laju ini\", bukan janji.",
+    "Dengan riwayat baru kurang dari 25 menit, atau tanpa akun yang pemakaiannya diketahui, tidak ada perkiraan. Tanpa "
+    "beban dalam satu jam terakhir, perkiraan menyebutnya."])
 
 H1("10. Cara kerja balance")
 P("Setiap putaran, untuk satu provider:")
@@ -830,7 +924,10 @@ OL(["<b>Park bertanggal</b>: mengaktifkan lagi akun yang waktu " + C("--until") 
     "terbaca, lalu akun DEAD.",
     "<b>Riwayat</b>: satu snapshot per putaran untuk " + C("report") + " dan cadangan \"last known\". Nilai yang "
     "berasal dari cadangan itu tidak pernah ditulis ulang.",
-    "<b>Peringatan</b> untuk masalah baru, dan ringkasan harian bila sudah waktunya."])
+    "<b>Peringatan</b> untuk masalah baru (akun perlu login ulang, semua akun tinggi, bot jauh di atas biasanya), "
+    "dan ringkasan harian bila sudah waktunya.",
+    "<b>Log aktivitas</b>: setiap perubahan dari langkah 1 sampai 8 dicatat di " + C("account-pool-activity.jsonl")
+    + " (lihat " + C("log") + ", 7.14)."])
 note("<b>Pengaman.</b> Jika <b>semua</b> akun ≥ ambang, hanya akun yang 100% yang diistirahatkan, jadi pool tidak "
      "pernah dikosongkan karena \"hampir penuh\". Jika pemakaian tidak terbaca sama sekali, urutan tidak diubah; "
      "pemulihan, unpark terjadwal, jadwal parkir, peringatan, dan ringkasan harian tetap jalan. Sesi yang sedang berjalan tidak dipindah, karena "
@@ -900,12 +997,15 @@ table([
     [C("~/.hermes/auth.json"), "Credential pool bersama semua profil (milik Hermes)"],
     [C("~/.hermes/account-pool-parked.json"), "Akun yang diparkir. <b>Berisi token OAuth.</b>"],
     [C("~/.hermes/account-pool-sessions.json"), "Sesi dan akunnya, 24 jam terakhir (tanpa token)"],
-    [C("~/.hermes/account-pool-tokens.json"), "Jumlah token per akun, profil, dan model dalam blok 15 menit, 8 hari terakhir. Hanya angka."],
+    [C("~/.hermes/account-pool-tokens.json"), "Jumlah token per akun, profil, dan model, serta per profil, sesi, dan "
+     "model, dalam blok 15 menit, 8 hari terakhir. Hanya angka dan id sesi."],
+    [C("~/.hermes/account-pool-activity.jsonl"), "Log aktivitas: apa yang diubah timer, perintah, dan halaman. 30 hari "
+     "terakhir, izin 600."],
     [C("~/.hermes/account-pool-history.jsonl"), "Riwayat pemakaian, satu snapshot per putaran timer. Dipangkas ke "
      "14 hari terakhir saat file melewati 3 MB."],
     [C("~/.hermes/account-pool-alerts.json"), "Peringatan yang sudah terkirim (satu pesan per kejadian)"],
     [C("~/.hermes/account-pool-state.json"), "Kapan ringkasan harian terakhir dikirim, dan jendela jadwal yang sudah dijalankan"],
-    [C("~/.hermes/account-pool.json"), "Pengaturan: saluran peringatan, ringkasan harian, jadwal parkir"],
+    [C("~/.hermes/account-pool.json"), "Pengaturan: saluran peringatan, ringkasan harian, peringatan bot, jadwal parkir"],
     [C("~/.config/systemd/user/") + "<br/>" + C("hermes-account-balance.{service,timer}"), "Timer 5 menit"],
 ], [0.48, 0.52])
 P("Cara token diperlakukan:")
@@ -948,10 +1048,14 @@ table([
     ["check: WRONG LABEL / DUPLICATE", "Ditambah lewat " + C("hermes auth add") + " saat browser login akun lain",
      C("relogin") + " akun yang benar, atau " + C("remove &lt;id&gt;") + " entri lebihnya"],
     [C("who") + " kosong", "Sesi dimulai sebelum pelacak dipasang", C("/reset") + " sesi, atau restart gateway/desktop"],
+    [C("sessions") + " kosong", "Bot masih memakai pelacak lebih lama dari 1.5.0", C("hermes gateway restart") + ", restart "
+     "Hermes Desktop; " + C("doctor") + " menyebut prosesnya"],
     [C("doctor") + ": session tracker ... is not loaded yet", "Gateway, Hermes Desktop, atau sesi panjang dimulai sebelum "
      "pelacak di-update", C("hermes gateway restart") + "; restart Hermes Desktop; sesi berganti saat selesai"],
     ["Tidak ada pesan Telegram", "Token bot profil pengirim tidak valid", C("notify test") + "; ganti " + C("telegram-via")],
     [C("report") + ": not enough history", "Timer mati atau baru dipasang", C("doctor") + ", tunggu beberapa putaran"],
+    ["Peringatan bot terlalu sering", "Batas bawah terlalu rendah untuk beban Anda", C("notify bots=30") + " (atau "
+     + C("bots-off") + "); lihat " + C("sessions --hours 1") + " dulu"],
     ["Akun " + C("--until") + " tidak kembali", "Timer mati", C("systemctl --user enable --now") + "<br/>" + C("hermes-account-balance.timer")],
     ["Jadwal tidak memarkir akunnya", "Timer mati, akun itu akun aktif terakhir, atau Anda meng-unpark di tengah jendela",
      C("hermes account anthropic schedule") + " menampilkan keadaan tiap jadwal"],
@@ -1033,6 +1137,8 @@ LI(["Pemakaian berasal dari <b>endpoint yang tidak didokumentasikan resmi</b>: "
     "Hitungan token dimulai saat pelacak 1.1.0 pertama kali jalan dan hanya mencakup Hermes di komputer ini. "
     "Disimpan 8 hari dalam blok 15 menit, jadi awal periode dibulatkan ke seperempat jam terdekat. Pembagian per "
     "profil dan model dimulai dengan pelacak 1.3.0; bot memakai pelacak baru setelah gateway atau sesinya di-restart.",
+    "Perkiraan kapan semua akun penuh mengandaikan akun berpaket sama dan beban stabil; ini laju, bukan prediksi "
+    "perilaku bot.",
     C("API $") + " memakai harga daftar untuk panjang konteks standar; tarif konteks panjang dan diskon batch tidak "
     "dihitung.",
     C("who") + " mencari sesi lewat stack thread yang sedang berjalan. Jika suatu update Hermes mengubah struktur "
@@ -1053,6 +1159,8 @@ table([
     ["Pemakaian 5 jam", C("hermes account anthropic usage")],
     ["Siapa pakai akun apa", C("hermes account anthropic who")],
     ["Laporan 3 hari", C("hermes account anthropic report --hours 72")],
+    ["Sesi termahal, 1 jam", C("hermes account anthropic sessions --hours 1")],
+    ["Apa yang berubah hari ini", C("hermes account anthropic log")],
     ["Beban per jam, 7 hari", C("hermes account anthropic report --chart")],
     ["Tambah akun", C("hermes account anthropic add &lt;email&gt;")],
     ["Hapus akun", C("hermes account anthropic remove &lt;email&gt;")],
@@ -1063,6 +1171,7 @@ table([
     ["Seimbangkan sekarang", C("hermes account anthropic balance")],
     ["Tes peringatan", C("hermes account anthropic notify test")],
     ["Ringkasan harian jam 08:00", C("hermes account anthropic notify daily=08:00")],
+    ["Batas peringatan bot", C("hermes account anthropic notify bots=25")],
     ["Strategi rotasi tiap profil", C("hermes account anthropic strategy")],
     ["Log timer", C("journalctl --user -u hermes-account-balance.service -n 20 -o cat")],
     ["Halaman di Desktop", "Sidebar <b>Accounts</b>, atau Ctrl+K " + C("Accounts: open the account pool")],
@@ -1072,6 +1181,9 @@ table([
 H1("19. Riwayat versi")
 table([
     ["Versi", "Perubahan"],
+    ["3.9.0", "Peringatan bot yang jauh di atas biasanya (" + C("notify bots=") + "), log aktivitas (" + C("log")
+     + " dan tab Activity), perkiraan kapan semua akun ≥ 90% (" + C("usage") + ", " + C("report") + ", ringkasan, "
+     "halaman), token per sesi atau tugas Kanban (" + C("sessions") + ", pelacak 1.5.0, tabel di tab Report)."],
     ["3.8.1", "Pelacak 1.4.0 mencatat versi, id proses, dan tugas Kanban. " + C("doctor") + " dan halaman menyebut "
      "proses yang masih memakai pelacak lama (gateway, Hermes Desktop, sesi panjang) beserta perbaikannya. Token tanpa "
      "nama bot berlabel " + C("(older tracker, no name)") + "."],
