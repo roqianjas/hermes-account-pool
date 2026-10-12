@@ -16,7 +16,7 @@ from reportlab.platypus import (CondPageBreak, Image, KeepTogether, PageBreak, P
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 from reportlab.platypus.tableofcontents import TableOfContents
 
-VERSION = "3.12.1"
+VERSION = "3.13.0"
 REPO = "github.com/roqianjas/hermes-account-pool"
 FOOTER = f"Hermes plugin account-pool {VERSION} · {REPO}"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hermes-account-pool.pdf")
@@ -124,7 +124,7 @@ st += [Paragraph("Plugin account-pool untuk Hermes Agent", s_title),
                  "pemakaian, bagi beban sebelum akun habis, mulai jendela 5 jam akun yang menganggur lebih awal, parkir "
                  "akun sementara, lihat bot mana memakai akun apa, sensor email untuk screenshot, dan terima peringatan.", s_sub)]
 table([["Versi", "Repo", "Butuh", "Lisensi"],
-       [VERSION, REPO, "Hermes Agent ≥ 0.21.5, Linux + systemd", "MIT"]], [0.12, 0.46, 0.30, 0.12])
+       [VERSION, REPO, "Hermes Agent ≥ 0.21.5, Linux atau Windows 10/11", "MIT"]], [0.12, 0.46, 0.30, 0.12])
 st.append(Paragraph("Daftar isi", s_h2))
 toc = TableOfContents()
 toc.levelStyles = [s_toc]
@@ -171,18 +171,33 @@ hermes account anthropic add bob@example.com
 hermes account anthropic doctor                  # semua OK?
 hermes account anthropic usage                   # pemakaian live per akun
 """)
-P("Tanpa salinan git, " + C("hermes plugins install") + " melakukan hal yang sama dengan tiga perintah (bagian 4.2). "
+P("Di Windows, di PowerShell (tanpa WSL; penjelasan lengkap di bagian 4.6):")
+code("""
+git clone https://github.com/roqianjas/hermes-account-pool.git
+cd hermes-account-pool
+powershell -ExecutionPolicy Bypass -File .\\install.ps1 -SetStrategy
+
+hermes account anthropic add alice@example.com
+hermes account anthropic doctor
+""")
+P("Tanpa salinan git, " + C("hermes plugins install") + " melakukan hal yang sama dengan tiga perintah, di Linux "
+  "maupun Windows (bagian 4.2). "
   "Setelah itu timer menjaga urutan pool secara otomatis. Sehari-hari yang paling sering dipakai: " + C("usage")
   + ", " + C("who") + ", " + C("park") + ", dan " + C("doctor") + ". Di Hermes Desktop, restart aplikasinya sekali "
   "lalu nyalakan halamannya di Capabilities &gt; Plugins untuk mendapat semua itu dalam satu halaman (bagian 8).")
 
 H1("3. Persyaratan")
-LI(["Hermes Agent ≥ 0.21.5 di Linux. Timer butuh systemd user service (" + C("systemctl --user") + ").",
+LI(["Hermes Agent ≥ 0.21.5 di Linux, atau di Windows 10/11 (instalasi Windows milik Hermes sendiri, tanpa WSL). "
+    "Timer memakai systemd user service di Linux (" + C("systemctl --user") + ") dan Task Scheduler di Windows, "
+    "tanpa hak admin. Di macOS perintahnya jalan; jalankan " + C("hermes account all balance") + " lewat launchd "
+    "atau cron sebagai ganti timer.",
     "Dua akun atau lebih dari provider yang sama. Dukungan pemakaian bawaan: Claude Pro / Max / Team ("
     + C("anthropic") + ") dan ChatGPT Plus / Pro / Team (" + C("openai-codex") + "). Provider lain mendapat "
     "perintah umum (bagian 12).",
-    "Opsional: " + C("notify-send") + " (paket " + C("libnotify-bin") + ") untuk notifikasi desktop, dan bot "
-    "Telegram yang sudah diatur di Hermes dengan " + C("TELEGRAM_ALLOWED_USERS") + " untuk peringatan Telegram.",
+    "Opsional: notifikasi desktop butuh " + C("notify-send") + " di Linux (paket " + C("libnotify-bin")
+    + "); di Windows notifikasi muncul sebagai notifikasi Windows lewat Windows PowerShell, yang ada di setiap "
+    "Windows 10 dan 11. Peringatan Telegram butuh bot "
+    "Telegram yang sudah diatur di Hermes dengan " + C("TELEGRAM_ALLOWED_USERS") + ".",
     "Opsional: Hermes Desktop dengan dukungan desktop plugin, untuk halaman Accounts. Diuji dengan Hermes Agent 0.21.5 dan 0.21.6."])
 
 H1("4. Instalasi, update, uninstall")
@@ -223,14 +238,15 @@ hermes account anthropic setup --timer --strategy
 P("Jalankan di profil default (tanpa " + C("-p") + "): perintahnya ada di sana, dan " + C("setup") + " menautkan "
   "pelacak dari sana ke profil lain.")
 P("Hermes memindai plugin dari GitHub sebelum memasangnya, dan berhenti bila ada temuan. Untuk "
-  + C("account-pool") + " ada 12 temuan, semuanya memang bagian dari cara kerja plugin:")
-LI(["11 panggilan " + C("subprocess") + ": " + C("notify-send") + " (notifikasi desktop), " + C("hermes send")
-    + " (peringatan Telegram), " + C("systemctl --user") + " lima kali (status timer untuk " + C("doctor")
-    + " dan halaman, " + C("setup --timer") + "), " + C("hermes config set") + " (" + C("strategy") + "), "
+  + C("account-pool") + " ada 14 temuan, semuanya memang bagian dari cara kerja plugin:")
+LI(["13 panggilan " + C("subprocess") + ": " + C("notify-send") + " (notifikasi desktop di Linux), "
+    + C("hermes send") + " (peringatan Telegram), " + C("systemctl --user") + " lima kali (status timer untuk "
+    + C("doctor") + " dan halaman, " + C("setup --timer") + " di Linux), " + C("schtasks") + " dan Windows "
+    "PowerShell di " + C("winsys.py") + " (timer dan notifikasi desktop di Windows), " + C("hermes config set") + " (" + C("strategy") + "), "
     + C("hermes auth add") + " (" + C("add") + ", " + C("relogin") + "), " + C("hermes auth remove") + " ("
     + C("remove") + "), dan " + C("hermes -p &lt;profil&gt; plugins enable") + " / " + C("config set") + " ("
     + C("setup") + ").",
-    "1 pembacaan " + C("/proc/self/cgroup") + ", untuk tahu apakah proses ini service timer."])
+    "1 pembacaan " + C("/proc/self/cgroup") + ", untuk tahu apakah proses ini service timer (hanya Linux)."])
 P("Semuanya tercantum di bagian pengungkapan keamanan (bagian 13). Di terminal, Hermes menampilkan temuan itu "
   "lalu bertanya " + C("Install anyway? ... [y/N]") + ": baca temuannya, lalu jawab " + C("y") + ". Tanpa terminal "
   "(skrip, shell milik agen) Hermes langsung berhenti; tambahkan " + C("--force") + " di sana. Pelacak tidak punya "
@@ -272,6 +288,8 @@ Changes:
     providers you add later are included by themselves)
 Apply these changes? [y/N]
 """)
+P("Di Windows, baris timer berbunyi " + C("install the balance timer: a Task Scheduler task \"Hermes Account "
+  "Balance\" (C:\\Users\\you\\AppData\\Local\\hermes\\account-pool-timer), every 5 minutes runs ...") + ".")
 P(C("setup") + " menampilkan keadaan sekarang dan setiap perubahan yang akan dibuat, bertanya sekali, lalu "
   "mengerjakannya satu per satu; setiap perubahan dicatat di log aktivitas (bagian 7.14). Jalankan lagi dan "
   "hasilnya " + C("Nothing to change") + ".")
@@ -283,8 +301,11 @@ table([
     ["Pelacak sesi", "Mengaktifkan " + C("account-pool-tracker") + " di profil default. Di profil lain, membuat "
      "symlink " + C("plugins/account-pool-tracker") + " ke salinan profil default lalu mengaktifkannya dengan "
      + C("hermes -p &lt;profil&gt; plugins enable") + ". Satu salinan berarti satu update untuk semua profil."],
-    [C("--timer"), "Menulis " + C("hermes-account-balance.service") + " dan " + C(".timer") + " ke "
+    [C("--timer"), "Linux: menulis " + C("hermes-account-balance.service") + " dan " + C(".timer") + " ke "
      + C("~/.config/systemd/user/") + ", menyalakan timer, dan menjalankan putaran pertama di latar belakang. "
+     "Windows: menulis " + C("balance.cmd") + " dan " + C("balance.vbs") + " ke "
+     + C("%LOCALAPPDATA%\\hermes\\account-pool-timer\\") + ", mendaftarkan task Task Scheduler <b>Hermes Account "
+     "Balance</b> untuk user Anda (tiap 5 menit, tanpa hak admin, tanpa jendela), lalu menjalankan putaran pertama. "
      "Service menjalankan " + C("hermes account all balance") + " tiap 5 menit: semua provider yang punya akun, "
      "jadi provider yang baru mendapat akun pertamanya nanti (misalnya Codex) ikut diseimbangkan mulai putaran "
      "berikutnya, tanpa " + C("setup") + " kedua. Unit dari 3.10.2 atau lebih lama berisi satu baris per provider; "
@@ -303,8 +324,8 @@ table([
 ], [0.22, 0.78])
 P("Semua perubahan config lewat " + C("hermes config set") + " atau " + C("hermes plugins enable") + ", jadi format "
   "dan pengecekan file tetap milik Hermes. Jika pelacak belum terpasang, " + C("setup") + " memberi tahu cara "
-  "memasangnya dan melewati bagian itu. Tanpa systemd, " + C("--timer") + " memberi tahu; jalankan " + C("balance")
-  + " dengan cara lain (cron).")
+  "memasangnya dan melewati bagian itu. Tanpa systemd atau Task Scheduler (macOS), " + C("--timer")
+  + " memberi tahu; jalankan " + C("balance") + " dengan cara lain (launchd, cron).")
 P(C("HERMES_HOME") + " kustom dihormati. Sesi yang sedang berjalan baru memuat pelacak setelah " + C("/reset")
   + ", atau setelah gateway/desktop di-restart. Halaman Accounts butuh dua langkah lagi di Hermes Desktop (bagian "
   "8.1). Setelah update, " + C("doctor") + " dan halaman Accounts menyebut proses yang masih memakai pelacak lama. "
@@ -312,7 +333,8 @@ P(C("HERMES_HOME") + " kustom dihormati. Sesi yang sedang berjalan baru memuat p
   "profil itu; " + C("doctor") + " menyebut profil seperti ini. Cek hasilnya:")
 code("""
 hermes account anthropic doctor
-systemctl --user list-timers hermes-account-balance.timer
+systemctl --user list-timers hermes-account-balance.timer      # Linux
+schtasks /Query /TN "Hermes Account Balance"                   # Windows
 """)
 H2("4.4 Update")
 P("Instalasi dengan " + C("hermes plugins install") + ":")
@@ -328,6 +350,8 @@ cd hermes-account-pool
 git pull
 ./install.sh                # pakai opsi --set-strategy / --provider yang sama seperti dulu
 """)
+P("Di Windows: " + C("git pull") + ", lalu " + C("powershell -ExecutionPolicy Bypass -File .\\install.ps1")
+  + " dengan opsi yang sama seperti dulu.")
 P("Folder plugin lama dicadangkan ke " + C("$HERMES_HOME/plugin-backups/&lt;nama&gt;.&lt;waktu&gt;") + " (di luar "
   + C("plugins/") + ", jadi tidak pernah dimuat dua kali). Akun, akun parkir, riwayat, dan pengaturan tetap. Tanpa "
   + C("--set-strategy") + ", strategi tidak diubah. Restart Hermes Desktop setelah update apa pun supaya halaman "
@@ -341,11 +365,51 @@ hermes plugins remove account-pool-tracker
 hermes plugins remove account-pool
 """)
 P("Instalasi dari git:")
-code("./uninstall.sh")
+code("""
+./uninstall.sh                                                  # Linux
+powershell -ExecutionPolicy Bypass -File .\\uninstall.ps1        # Windows
+""")
 P("Timer, kedua plugin (termasuk halaman Accounts), symlink pelacak, dan entri " + C("account-pool") + " di "
   + C("plugins.enabled") + " tiap profil dihapus. Akun di credential pool <b>tidak</b> disentuh. Akun yang "
   "diparkir <b>tidak</b> dikembalikan ke rotasi: skrip memperingatkan dan meminta konfirmasi. File data dan "
   + C("credential_pool_strategies") + " tetap; skrip menampilkan daftar file yang bisa dihapus manual.")
+
+H2("4.6 Windows", need=80)
+P("Hermes berjalan langsung di Windows, begitu juga plugin ini: tidak perlu WSL. Di PowerShell, sebagai user "
+  "Anda sendiri (tanpa hak admin):")
+code("""
+git clone https://github.com/roqianjas/hermes-account-pool.git
+cd hermes-account-pool
+powershell -ExecutionPolicy Bypass -File .\\install.ps1 -SetStrategy
+""")
+P(C("install.ps1") + " mengerjakan yang sama dengan " + C("install.sh") + ": menyalin kedua plugin ke "
+  + C("%LOCALAPPDATA%\\hermes\\plugins\\") + " (atau " + C("$env:HERMES_HOME\\plugins\\") + "), mengaktifkan "
+  + C("account-pool") + ", menjalankan " + C("hermes account &lt;provider&gt; setup --yes --timer") + ", lalu "
+  + C("doctor") + ". " + C("-ExecutionPolicy Bypass") + " hanya berlaku untuk sekali jalan itu; perlu karena "
+  "Windows memblokir skrip unduhan secara default.")
+table([
+    ["Opsi", "Fungsi"],
+    [C("-Provider anthropic,openai-codex"), "Provider yang dijalankan " + C("setup") + "-nya (default "
+     + C("anthropic") + ")"],
+    [C("-SetStrategy"), "Atur " + C("fill_first") + " untuk tiap provider di semua profil"],
+    [C("-NoTracker"), "Tanpa pelacak sesi"],
+    [C("-NoTimer"), "Tanpa task Task Scheduler"],
+], [0.36, 0.64])
+P("Tanpa git, pakai " + C("hermes plugins install") + " (bagian 4.2); caranya sama di Windows. Yang berbeda di Windows:")
+table([
+    ["", "Linux", "Windows"],
+    ["Timer", "unit systemd user di " + C("~/.config/systemd/user/"), "task Task Scheduler <b>Hermes Account "
+     "Balance</b>, filenya di " + C("%LOCALAPPDATA%\\hermes\\account-pool-timer\\")],
+    ["Log timer", C("journalctl --user -u hermes-account-balance.service"), C("account-pool-timer\\balance.log")
+     + " (dijaga di bawah 1 MB)"],
+    ["Kapan timer jalan", "selalu, juga sebelum login", "selama Anda login ke Windows; putaran yang terlewat "
+     "dikejar saat Anda login"],
+    ["Notifikasi desktop", C("notify-send"), "notifikasi Windows (tampil atas nama Windows PowerShell)"],
+    ["Pelacak di profil lain", "symlink", "symlink, atau directory junction jika Windows tidak mengizinkan "
+     "symlink (tanpa Developer Mode)"],
+    ["Uninstall dari git", C("./uninstall.sh"), C("powershell -ExecutionPolicy Bypass -File .\\uninstall.ps1")],
+], [0.20, 0.34, 0.46])
+P("Selebihnya sama: semua perintah dan halaman Accounts. Cara mengelola task-nya ada di bagian 11.")
 
 H1("5. Konsep dasar")
 H2("Credential pool dan strategi rotasi")
@@ -1198,7 +1262,7 @@ table([
      "3 kali jam biasanya", "Sekali per bot, paling sering tiap 6 jam"],
 ], [0.30, 0.44, 0.26])
 LI(["Peringatan dikirim oleh " + C("balance") + ", jadi butuh timer.",
-    "<b>Desktop</b>: " + C("notify-send") + ", aktif secara default.",
+    "<b>Desktop</b>: " + C("notify-send") + " di Linux, notifikasi Windows di Windows; aktif secara default.",
     "<b>Telegram</b>: aktif otomatis jika Hermes punya bot Telegram. Pesan dikirim lewat " + C("hermes send")
     + " ke user pertama di " + C("TELEGRAM_ALLOWED_USERS") + " (chat pribadi Anda), memakai bot profil default. "
     "Jika bot default belum diatur atau tokennya tidak valid, pakai bot profil lain: "
@@ -1312,6 +1376,9 @@ table([
 P("Ambang 90% membuat akun diistirahatkan sebelum penuh, sehingga sesi baru tidak macet menunggu 600 detik.")
 
 H1("11. Timer otomatis")
+P(C("hermes account &lt;provider&gt; setup --timer") + " memasangnya; " + C("doctor") + " dan halaman Accounts "
+  "menampilkan status, putaran terakhir, dan putaran berikutnya di kedua sistem.")
+H2("11.1 Linux (systemd)")
 code("""
 hermes account anthropic setup --timer                             # pasang (semua provider)
 hermes account all balance                                         # yang dijalankan timer
@@ -1339,6 +1406,31 @@ LI(["<b>Interval</b>: " + C("systemctl --user edit --full hermes-account-balance
     "Timer tidak memakai token AI kecuali wake otomatis dinyalakan (" + C("wake auto-on") + "): ia memanggil endpoint "
     "pemakaian dan, untuk peringatan dan ringkasan harian, saluran notifikasi Anda. Dengan wake otomatis, ia juga "
     "mengirim satu request model kecil saat jendela suatu akun tidak berjalan."])
+H2("11.2 Windows (Task Scheduler)", need=60)
+code("""
+schtasks /Query /TN "Hermes Account Balance" /V /FO LIST   # status, putaran terakhir
+Get-Content "$env:LOCALAPPDATA\\hermes\\account-pool-timer\\balance.log" -Tail 20
+schtasks /Run /TN "Hermes Account Balance"                 # jalankan sekarang
+schtasks /Change /TN "Hermes Account Balance" /DISABLE     # matikan
+schtasks /Change /TN "Hermes Account Balance" /ENABLE      # nyalakan
+""")
+P("Task menjalankan " + C("wscript.exe balance.vbs") + ", yang menjalankan " + C("balance.cmd") + " tanpa jendela, "
+  "jadi tidak ada jendela yang berkedip tiap 5 menit. Kedua file ada di "
+  + C("%LOCALAPPDATA%\\hermes\\account-pool-timer\\") + " (di bawah " + C("HERMES_HOME") + " jika Anda mengaturnya).")
+LI(["<b>Kapan jalan</b>: tiap 5 menit selama Anda login ke Windows, juga saat memakai baterai. Setelah komputer "
+    "mati atau tidur, putaran yang terlewat langsung dikejar. Tidak pernah dua putaran sekaligus, dan satu putaran "
+    "dihentikan setelah 10 menit.",
+    "<b>Ambang</b>: tambahkan " + C("--threshold 85") + " di baris " + C("account all balance") + " dalam "
+    + C("balance.cmd") + ". " + C("setup") + " mempertahankan opsi yang Anda tambahkan, sama seperti di Linux.",
+    "<b>Interval</b>: buka Task Scheduler (" + C("taskschd.msc") + "), task <b>Hermes Account Balance</b>, tab "
+    "Triggers, lalu ubah <i>Repeat task every</i>. Jangan jauh di bawah 5 menit.",
+    "<b>Hanya sebagian provider</b>: ganti baris " + C("all") + " di " + C("balance.cmd") + " dengan satu baris per "
+    "provider, atau jalankan " + C("hermes account &lt;provider&gt; setup --undo") + " untuk provider yang mau dikeluarkan.",
+    "<b>Hapus</b>: " + C("setup --undo") + " untuk provider terakhir menghapus task dan filenya; " + C("uninstall.ps1")
+    + " juga.",
+    "<b>Log</b>: setiap putaran ditambahkan ke " + C("balance.log") + "; di 1 MB file itu dipindah ke "
+    + C("balance.log.1") + ". " + C("last-run.json") + " di sebelahnya menyimpan mulai, selesai, dan exit code "
+    "putaran terakhir, yang dibaca " + C("doctor") + " dan halaman."])
 
 H1("12. Provider dan Codex")
 table([
@@ -1388,11 +1480,16 @@ table([
      "provider (waktu dan id)"],
     [C("~/.hermes/account-pool.json"), "Pengaturan: saluran peringatan, ringkasan harian, peringatan bot, jadwal "
      "parkir, wake, sensor email"],
-    [C("~/.config/systemd/user/") + "<br/>" + C("hermes-account-balance.{service,timer}"), "Timer 5 menit, ditulis "
-     + C("setup --timer")],
+    [C("~/.config/systemd/user/") + "<br/>" + C("hermes-account-balance.{service,timer}"), "Linux: timer 5 menit, "
+     "ditulis " + C("setup --timer")],
+    [C("account-pool-timer\\") + "<br/>" + C("balance.cmd, balance.vbs, balance.log, last-run.json"),
+     "Windows: file timer di folder Hermes, ditulis " + C("setup --timer") + "; task-nya <b>Hermes Account Balance</b> "
+     "di Task Scheduler"],
 ], [0.48, 0.52])
+P("Di Windows folder Hermes adalah " + C("%LOCALAPPDATA%\\hermes") + " (bukan " + C("~/.hermes") + "), dan file "
+  "data mewarisi izin folder user Anda, yang hanya bisa dibaca Anda dan administrator.")
 P("Cara token diperlakukan:")
-LI(["Semua file data berizin 600. Token tidak pernah dicetak atau dicatat di log; token hanya masuk ke header "
+LI(["Semua file data berizin 600 (di Linux). Token tidak pernah dicetak atau dicatat di log; token hanya masuk ke header "
     "permintaan ke endpoint provider itu sendiri.",
     "Plugin hanya menghubungi API provider (pemakaian, profil, refresh token, login, dan request wake bila Anda "
     "memakai " + C("wake") + ") dan, untuk peringatan dan "
@@ -1430,19 +1527,24 @@ table([
      "lewat " + C("hermes send") + ". Header klien sama dengan "
      "pembaca pemakaian Hermes (" + C("claude-code/2.1.0") + ", " + C("codex_cli_rs") + "). Tanpa telemetri, tanpa "
      "cek update."],
-    ["Kerja di latar belakang", "Hanya timer, jika dipasang: " + C("all balance") + " tiap 5 menit, untuk semua "
+    ["Kerja di latar belakang", "Hanya timer, jika dipasang (unit systemd di Linux, task Task Scheduler di "
+     "Windows): " + C("all balance") + " tiap 5 menit, untuk semua "
      "provider yang punya akun; dengan " + C("wake auto-on") + " juga wake untuk akun yang jendelanya tidak berjalan "
      "(paling banyak sekitar 5 request kecil per akun per hari). Pelacak berjalan "
      "di dalam setiap proses Hermes sebagai hook " + C("post_api_request") + "."],
-    ["Perintah yang dijalankan", C("systemctl --user") + ", " + C("notify-send") + ", " + C("hermes config set")
+    ["Perintah yang dijalankan", C("systemctl --user") + " dan " + C("notify-send") + " (Linux), " + C("schtasks")
+     + " dan " + C("powershell.exe") + " untuk notifikasi (Windows), " + C("hermes config set")
      + ", " + C("hermes plugins enable account-pool-tracker") + ", " + C("hermes auth add/remove") + ", "
      + C("hermes send") + "."],
     ["Dibaca di luar file sendiri", C("config.yaml") + " dan " + C("state.db") + " (read-only) setiap profil, "
-     + C("/proc/self/cgroup") + " (apakah proses ini service timer), " + C("/proc/&lt;pid&gt;/cmdline")
-     + " proses Hermes (" + C("doctor") + "), file harga Hermes, status unit systemd."],
+     + C("/proc/self/cgroup") + " di Linux (apakah proses ini service timer; di Windows " + C("balance.cmd")
+     + " memberi tanda lewat variabel lingkungan), command line proses Hermes (" + C("doctor") + "; "
+     + C("/proc/&lt;pid&gt;/cmdline") + " di Linux, " + C("psutil") + " di Windows), file harga Hermes, status "
+     "unit systemd atau task Task Scheduler."],
     ["Ditulis di luar file sendiri", C("auth.json") + "; " + C("config.yaml") + " profil hanya lewat "
      + C("hermes config set") + "/" + C("plugins enable") + " dari " + C("setup") + ", " + C("strategy") + ", "
-     "dan dialog rotasi; symlink pelacak di " + C("profiles/*/plugins/") + "; unit systemd."],
+     "dan dialog rotasi; symlink (atau junction di Windows) pelacak di " + C("profiles/*/plugins/") + "; unit "
+     "systemd di Linux, task Task Scheduler dan " + C("account-pool-timer\\") + " di Windows."],
 ], [0.24, 0.76])
 
 H1("14. Memaksa akun tertentu")
@@ -1457,6 +1559,8 @@ systemctl --user disable --now hermes-account-balance.timer
 hermes auth priority anthropic bob@example.com 0
 systemctl --user enable --now hermes-account-balance.timer
 """)
+P("Di Windows, Cara 2 memakai " + C("schtasks /Change /TN \"Hermes Account Balance\" /DISABLE") + " dan "
+  + C("/ENABLE") + ".")
 
 H1("15. Troubleshooting")
 table([
@@ -1506,7 +1610,21 @@ table([
      C("hermes account &lt;provider&gt;") + "<br/>" + C("strategy fill_first") + ", atau <b>Use fill_first</b> di halaman"],
     ["doctor: profiles with their OWN pool", "Pernah menjalankan " + C("hermes -p &lt;profil&gt; auth add"),
      "Hapus entri di profil itu, lalu tambah akun dari profil default"],
-    ["doctor: last run failed", C("balance") + " terakhir gagal", C("journalctl --user -u") + "<br/>" + C("hermes-account-balance.service -n 20")],
+    ["doctor: last run failed", C("balance") + " terakhir gagal", "Linux: " + C("journalctl --user -u") + "<br/>"
+     + C("hermes-account-balance.service -n 20") + ". Windows: bagian akhir " + C("balance.log") + " di "
+     + C("%LOCALAPPDATA%\\hermes\\account-pool-timer\\")],
+    ["Windows, doctor: putaran terakhir timer sudah lama", "Task Scheduler hanya menjalankan task selama Anda login, "
+     "jadi wajar setelah komputer mati atau logout", "Tidak perlu apa-apa jika Anda memang pergi; timer jalan lagi "
+     "dalam 5 menit setelah login. Selain itu lihat " + C("balance.log") + " dan riwayat task <b>Hermes Account "
+     "Balance</b> di Task Scheduler"],
+    ["Windows, setup: " + C("Task Scheduler refused the task"), "Kebijakan kantor memblokir scheduled task untuk "
+     "user biasa", "Minta bantuan administrator, atau jalankan " + C("hermes account all balance") + " sendiri sesekali"],
+    ["Windows: " + C("install.ps1 cannot be loaded because running scripts is disabled"), "Windows memblokir skrip "
+     "unduhan secara default", "Jalankan dengan " + C("powershell -ExecutionPolicy Bypass -File .\\install.ps1")
+     + " (hanya sekali jalan itu)"],
+    ["Windows: notifikasi desktop tidak muncul", "Notifikasi untuk Windows PowerShell dimatikan, atau Focus / Do not "
+     "disturb menyala", "Settings &gt; System &gt; Notifications, izinkan Windows PowerShell; lalu "
+     + C("hermes account &lt;provider&gt; notify test")],
     [C("hermes account") + " tidak dikenal", "Dijalankan dengan -p (plugin hanya di default)", "Jalankan tanpa -p"],
     ["Halaman: " + C("The account-pool backend did not answer"), "Desktop memakai profil yang belum mencantumkan "
      + C("account-pool") + " (profil baru, atau instalasi sebelum 3.5.1), atau belum di-restart setelah instalasi",
@@ -1559,6 +1677,9 @@ qa = [
      "Itu dua batas yang berbeda. Kuota model adalah yang dipakai bot. Endpoint yang dibaca aplikasi untuk "
      "<i>menampilkan</i> kuota itu punya batas permintaan sendiri. Saat batas itu tercapai, hanya tampilannya yang "
      "terdampak: bot tetap jalan, dan plugin menampilkan nilai terakhir yang diketahui."),
+    ("Apakah di Windows harus pakai WSL?", "Tidak. Sejak 3.13.0 plugin jalan di instalasi Windows milik Hermes "
+     "sendiri: timer menjadi task Task Scheduler, peringatan menjadi notifikasi Windows, dan semua perintah serta "
+     "halaman Accounts sama seperti di Linux. Hermes di dalam WSL juga tetap bisa; itu dihitung sebagai Linux."),
     ("Apakah plugin memakai token AI?", "Hanya untuk " + C("wake") + ", dan hanya bila Anda menjalankannya atau "
      "menyalakan " + C("wake auto-on") + ": satu request dengan jawaban satu kata per wake, yang membuat jendela tetap di "
      "0%. Selebihnya plugin hanya membaca pemakaian dan mengurutkan pool tanpa memanggil model."),
@@ -1653,7 +1774,15 @@ LI(["Pemakaian berasal dari <b>endpoint yang tidak didokumentasikan resmi</b>: "
     "alamat kembali untuk client Codex, jadi port-nya tidak bisa diganti.",
     "Halaman Accounts mengikuti SDK desktop plugin Hermes versi Hermes Agent 0.21.5. Perubahan SDK di masa depan bisa "
     "merusak halaman; perintahnya tidak terpengaruh.",
-    "Timer hanya untuk Linux dengan systemd. Perintahnya sendiri jalan di mana pun Hermes jalan."])
+    "Timer butuh systemd (Linux) atau Task Scheduler (Windows 10 dan 11). Di macOS jalankan "
+    + C("hermes account all balance") + " tiap beberapa menit dengan launchd atau cron. Di Windows task hanya jalan "
+    "selama Anda login.",
+    "Dukungan Windows (3.13.0) diuji oleh " + C("tests/windows_sandbox.py") + ", yang menjalankan kode Windows dengan "
+    "pengganti Task Scheduler. Bagian Windows-nya (" + C("balance.cmd") + " dan " + C("balance.vbs") + " lewat "
+    + C("cmd.exe") + " dan " + C("wscript.exe") + ", junction, file lock) juga dijalankan dengan Python Windows asli "
+    "di Wine. Pendaftaran task ke Task Scheduler asli mengikuti cara Hermes mendaftarkan task gateway-nya sendiri "
+    "di Windows; workflow " + C("tests") + " (dijalankan manual) mengujinya di runner Windows. Laporkan hasil di "
+    "komputer Anda."])
 
 H1("18. Referensi cepat")
 table([
@@ -1681,15 +1810,25 @@ table([
     ["Mulai jendela 5 jam yang menganggur", C("hermes account anthropic wake")],
     ["Jaga jendela tetap berjalan", C("hermes account anthropic wake auto-on")],
     ["Sensor email", C("hermes account anthropic privacy on") + " / " + C("off")],
-    ["Log timer", C("journalctl --user -u hermes-account-balance.service -n 20 -o cat")],
+    ["Log timer (Linux)", C("journalctl --user -u hermes-account-balance.service -n 20 -o cat")],
+    ["Log timer (Windows)", C("Get-Content $env:LOCALAPPDATA\\hermes\\account-pool-timer\\balance.log -Tail 20")],
     ["Halaman di Desktop", "Sidebar <b>Accounts</b>, atau Ctrl+K " + C("Accounts: open the account pool")],
     ["Setup profil, pelacak, timer", C("hermes account anthropic setup --timer")],
-    ["Update plugin", C("hermes plugins update account-pool") + "<br/>(git: " + C("git pull && ./install.sh") + ")"],
+    ["Update plugin", C("hermes plugins update account-pool") + "<br/>(git: " + C("git pull && ./install.sh")
+     + ", Windows: " + C("git pull") + " lalu " + C("install.ps1") + ")"],
 ], [0.30, 0.70])
 
 H1("19. Riwayat versi")
 table([
     ["Versi", "Perubahan"],
+    ["3.13.0", "Dukungan Windows tanpa WSL. Timer menjadi task Task Scheduler <b>Hermes Account Balance</b> "
+     "(tiap 5 menit selama login, tanpa hak admin, tanpa jendela; " + C("balance.cmd") + ", " + C("balance.vbs")
+     + ", " + C("balance.log") + " di " + C("account-pool-timer\\") + "). Notifikasi desktop lewat notifikasi "
+     "Windows. Pelacak di profil lain lewat symlink atau directory junction. " + C("install.ps1") + " dan "
+     + C("uninstall.ps1") + ". File lock " + C("msvcrt") + ", semua file UTF-8, perintah anak tanpa jendela "
+     "konsol. Pelacak 1.5.1. Tes baru " + C("tests/windows_sandbox.py") + " (51 cek) dan " + C("tests/run_all.py")
+     + "; bagian Windows juga dijalankan dengan Python Windows asli di Wine; workflow GitHub untuk runner Windows "
+     "dan Linux."],
     ["3.12.1", C("setup") + " dan " + C("doctor") + " tidak lagi butuh PyYAML. Hermes 0.21.6 ke atas membaca YAML "
      "dengan modulnya sendiri dan tidak lagi memasang PyYAML, jadi di instalasi baru (misalnya di Windows) "
      + C("setup") + " berhenti dengan " + C("No module named 'yaml'") + ". " + C("config.yaml") + " dibaca "

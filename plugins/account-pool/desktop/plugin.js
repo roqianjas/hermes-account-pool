@@ -1276,7 +1276,7 @@ function HealthView({ provider, data, openResult }) {
   const tone = { ok: 'good', warn: 'warn', fail: 'bad' }
   return h(Fragment, null,
     h('div', { className: 'hap-cards' },
-      h(Card, { k: 'Balance timer', v: t.active ? 'active' : 'off', s: t.active ? `last ${t.running ? 'running now' : hhmm(t.last_ts)} · next ${t.next || '–'}` : 'systemctl --user enable --now hermes-account-balance.timer' }),
+      h(Card, { k: 'Balance timer', v: t.active ? 'active' : 'off', s: t.active ? `last ${t.running ? 'running now' : hhmm(t.last_ts)} · next ${t.next || '–'}` : `hermes account ${provider} setup --timer` }),
       h(Card, { k: 'Usage history', v: data.snapshot.ts ? ago(data.now - data.snapshot.ts) : 'none', s: `${data.snapshot.count} snapshot(s) in 24 h` }),
       h(Card, { k: 'Active alerts', v: String(data.alerts.length), s: data.alerts.map(a => a.text).join(' · ') || 'none' })),
     h('div', { className: 'hap-row', style: { margin: '10px 0' } },
@@ -1325,7 +1325,7 @@ function AlertsView({ provider, data, openResult }) {
     h('div', { className: 'hap-setting' },
       h('div', { className: 'hap-grow' },
         h('div', { className: 'hap-setting-t' }, 'Desktop notifications'),
-        h('div', { className: 'hap-small hap-muted' }, n.notify_send ? 'Through notify-send on this computer.' : 'notify-send is not installed.')),
+        h('div', { className: 'hap-small hap-muted' }, n.notify_send ? `Through ${n.desktop_via || 'notify-send'} on this computer.` : `${n.desktop_via || 'notify-send'} is not available on this computer.`)),
       h(Switch, { checked: n.desktop, disabled: busy, onCheckedChange: v => act(v ? 'desktop-on' : 'desktop-off') })),
     h('div', { className: 'hap-setting' },
       h('div', { className: 'hap-grow' },

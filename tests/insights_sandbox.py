@@ -22,7 +22,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 HOME = os.environ.get("HERMES_HOME", "")
-if not HOME or Path(HOME).resolve().is_relative_to((Path.home() / ".hermes").resolve()):
+if not HOME or any(Path(HOME).resolve().is_relative_to(h.resolve()) for h in  # the real Hermes home, also on Windows
+                  [Path.home() / ".hermes"] + ([Path(os.environ["LOCALAPPDATA"]) / "hermes"] if os.environ.get("LOCALAPPDATA") else [])):
     sys.exit("Set HERMES_HOME to a sandbox outside ~/.hermes first (see the docstring).")
 sys.path.insert(0, os.environ.get("HERMES_AGENT_DIR", str(Path.home() / ".hermes" / "hermes-agent")))
 
@@ -353,7 +354,8 @@ check(("cli", "park") in kinds and ("page", "unpark") in kinds and ("cli", "noti
 check(any(e["by"] == "cli" and e["text"].startswith("Bot alerts on") for e in ev) and any(e["text"] == "desktop alerts off." for e in ev),
       "the result line of each command is logged")
 check(r["ok"] and any(e["by"] == "page" and e["text"].startswith("Unparked [anthropic]: alice@example.com") for e in ev), "page actions are logged as page")
-check(oct(ACT.stat().st_mode & 0o777) == "0o600" and "fake-key" not in ACT.read_text(), "activity log mode 600, no credential")
+check((os.name == "nt" or oct(ACT.stat().st_mode & 0o777) == "0o600") and "fake-key" not in ACT.read_text(encoding="utf-8"),
+      "activity log mode 600 (no Unix modes on Windows), no credential")
 check(any(e["by"] == "timer" and e["kind"] == "alert" for e in ev) or not [e for e in ev if e["kind"] == "alert"],
       "balance actions in the timer are logged as timer")
 SENT.clear()

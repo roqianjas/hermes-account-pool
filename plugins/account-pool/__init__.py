@@ -123,20 +123,69 @@ def _capture():
         _OUT.buf = prev
 
 
-def _load_providers():
+def _load_module(name: str, filename: str):
     import importlib.util
-    import sys
-    name = "account_pool_providers"
     if name in sys.modules:
         return sys.modules[name]
-    spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name("providers.py"))
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name(filename))
     mod = importlib.util.module_from_spec(spec)
     sys.modules[name] = mod
     spec.loader.exec_module(mod)
     return mod
 
 
+def _load_providers():
+    return _load_module("account_pool_providers", "providers.py")
+
+
 providers = _load_providers()
+winsys = _load_module("account_pool_winsys", "winsys.py")      # Task Scheduler, toasts, junctions
+WINDOWS = os.name == "nt"
+
+
+def _quiet() -> dict:
+    """subprocess options for a child that needs no window: on Windows a console program started from
+    Hermes Desktop's backend (which has no console) would otherwise flash a window."""
+    return {"creationflags": winsys.NO_WINDOW} if WINDOWS else {}
+
+
+def _replace(src, dst) -> None:
+    """os.replace; on Windows it waits out a reader that has the target open for a moment."""
+    if WINDOWS:
+        winsys.replace(src, dst)
+    else:
+        os.replace(src, dst)
+
+
+@contextmanager
+def _file_lock(path: Path, timeout: float = 120):
+    """An exclusive lock between processes, held for the `with` block: flock on Linux and macOS, a byte
+    lock (msvcrt) on Windows, which has no fcntl."""
+    with open(path, "a+b") as fh:
+        if not WINDOWS:
+            import fcntl
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            yield
+            return
+        import msvcrt
+        deadline = time.monotonic() + timeout
+        while True:
+            fh.seek(0)
+            try:
+                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                break
+            except OSError:
+                if time.monotonic() > deadline:
+                    raise TimeoutError(f"{path.name} stayed locked for {timeout:.0f} s")
+                time.sleep(0.05)
+        try:
+            yield
+        finally:
+            fh.seek(0)
+            try:
+                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+            except OSError:
+                pass
 
 
 # ── storage ──────────────────────────────────────────────────────────────────
@@ -169,7 +218,7 @@ def _read_parked() -> list[dict]:
     if not path.exists():
         return []
     try:
-        items = json.loads(path.read_text()).get("parked", [])
+        items = json.loads(path.read_text(encoding="utf-8")).get("parked", [])
     except Exception:
         raise SystemExit(f"Parked-accounts file is corrupt: {path}")
     for it in items:
@@ -181,9 +230,9 @@ def _write_parked(items: list[dict]) -> None:
     path = _parked_path()
     tmp = path.with_suffix(".tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as fh:
+    with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
         json.dump({"version": 3, "parked": items}, fh, indent=2)
-    os.replace(tmp, path)
+    _replace(tmp, path)
     os.chmod(path, 0o600)
 
 
@@ -214,7 +263,19 @@ def _hermes_bin() -> str:
     """The `hermes` command for the timer unit and for child commands. While Hermes runs, its own launcher
     directory inside ~/.hermes comes first on PATH; that launcher is Hermes' internal layout. Prefer the command
     the user installed (~/.local/bin/hermes, or any other outside the Hermes home), which Hermes' installer keeps
-    pointing at the right place across updates."""
+    pointing at the right place across updates. On Windows that command is <Hermes home>\\bin\\hermes.exe
+    (%LOCALAPPDATA%\\hermes by default), which the installer puts on the user's PATH."""
+    if WINDOWS:
+        homes = [_root()] + ([Path(os.environ["LOCALAPPDATA"]) / "hermes"] if os.environ.get("LOCALAPPDATA") else [])
+        for home in homes:
+            for name in ("hermes.exe", "hermes.cmd"):
+                if (home / "bin" / name).is_file():
+                    return str(home / "bin" / name)
+        for d in os.environ.get("PATH", "").split(os.pathsep):
+            p = shutil.which("hermes", path=d) if d else None
+            if p and ".hermes" not in Path(p).parts:            # not the checkout's internal launcher
+                return p
+        return shutil.which("hermes") or "hermes"
     inside = {Path.home() / ".hermes", _root()}
     found = []
     for d in os.environ.get("PATH", "").split(os.pathsep):
@@ -252,14 +313,14 @@ def _read_yaml(path: Path) -> dict:
 def _atomic_json(path: Path, data) -> None:
     tmp = path.with_suffix(".tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as fh:
+    with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
         json.dump(data, fh, indent=1)
-    os.replace(tmp, path)
+    _replace(tmp, path)
 
 
 def _load_json(path: Path, default):
     try:
-        return json.loads(path.read_text())
+        return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return default
 
@@ -315,16 +376,16 @@ def _record_history(provider: str, known, parked=()) -> None:
         rec["win"] = win                     # the 5-hour window, when the headline value is another one
     line = json.dumps(rec)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-    with os.fdopen(fd, "a") as fh:
+    with os.fdopen(fd, "a", encoding="utf-8", newline="") as fh:
         fh.write(line + "\n")
     if path.stat().st_size > 3_000_000:              # keep ~14 days
         cutoff = time.time() - 14 * 86400
-        keep = [l for l in path.read_text().splitlines() if _load_line_ts(l) >= cutoff]
+        keep = [l for l in path.read_text(encoding="utf-8").splitlines() if _load_line_ts(l) >= cutoff]
         tmp = path.with_suffix(".tmp")
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
             fh.write("\n".join(keep) + "\n")
-        os.replace(tmp, path)
+        _replace(tmp, path)
 
 
 def _pool_usage(rec: dict) -> dict:
@@ -361,7 +422,7 @@ def _read_history(provider: str, since: float, tail: int = 0) -> list[dict]:
                 if first.get("ts", since) < since:
                     text = chunk
     if text is None:
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
     out = []
     for line in text.splitlines():
         try:
@@ -385,12 +446,16 @@ def _activity_path() -> Path:
 
 
 def _in_timer() -> bool:
-    """True inside the balance timer's service (its cgroup carries the unit name)."""
+    """True inside a run of the balance timer: on Windows its balance.cmd sets HERMES_ACCOUNT_POOL_TIMER=1,
+    on Linux the systemd service's cgroup carries the unit name."""
     if not _TIMER_PROC:
-        try:
-            _TIMER_PROC.append("hermes-account-balance" in Path("/proc/self/cgroup").read_text())
-        except OSError:
-            _TIMER_PROC.append(False)
+        flag = os.environ.get("HERMES_ACCOUNT_POOL_TIMER") == "1"
+        if not flag and not WINDOWS:
+            try:
+                flag = "hermes-account-balance" in Path("/proc/self/cgroup").read_text()
+            except OSError:
+                pass
+        _TIMER_PROC.append(flag)
     return _TIMER_PROC[0]
 
 
@@ -406,18 +471,18 @@ def _log(provider: str, kind: str, text: str) -> None:
         line = json.dumps({"ts": round(time.time(), 1), "provider": provider, "by": _by(), "kind": kind,
                            "text": str(text).strip()})
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-        with os.fdopen(fd, "a") as fh:
+        with os.fdopen(fd, "a", encoding="utf-8", newline="") as fh:
             fh.write(line + "\n")
         if path.stat().st_size > ACTIVITY_MAX_BYTES:
             cutoff = time.time() - ACTIVITY_KEEP
-            keep = [l for l in path.read_text().splitlines() if _load_line_ts(l) >= cutoff]
+            keep = [l for l in path.read_text(encoding="utf-8").splitlines() if _load_line_ts(l) >= cutoff]
             if sum(len(l) + 1 for l in keep) > ACTIVITY_MAX_BYTES:
                 keep = keep[len(keep) // 4:]            # still too big: drop the oldest quarter
             tmp = path.with_suffix(".tmp")
             fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with os.fdopen(fd, "w") as fh:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
                 fh.write("\n".join(keep) + "\n")
-            os.replace(tmp, path)
+            _replace(tmp, path)
     except Exception:
         pass
 
@@ -427,7 +492,7 @@ def _read_activity(provider: str, since: float) -> list[dict]:
     if not path.exists():
         return []
     out = []
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         try:
             rec = json.loads(line)
         except Exception:
@@ -459,7 +524,7 @@ def _telegram_target(cfg: dict):
         return t
     env = _root() / ".env"
     try:
-        for line in env.read_text().splitlines():
+        for line in env.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if line.startswith("TELEGRAM_ALLOWED_USERS="):
                 first = line.split("=", 1)[1].strip().strip("'\"").split(",")[0].strip()
@@ -470,20 +535,32 @@ def _telegram_target(cfg: dict):
     return None
 
 
+def _desktop_channel() -> tuple:
+    """(available, how) for desktop notifications on this computer: notify-send on Linux, a Windows
+    notification through Windows PowerShell on Windows."""
+    if WINDOWS:
+        return bool(winsys.powershell()), "Windows notifications"
+    return bool(shutil.which("notify-send")), "notify-send"
+
+
+def _desktop_send(title: str, body: str, icon: str = "dialog-warning") -> bool:
+    if WINDOWS:
+        return winsys.toast(title, body)
+    try:
+        r = subprocess.run(["notify-send", "-a", "Hermes", "-i", icon, title, body], capture_output=True, timeout=10)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
 def _notify(title: str, body: str, icon: str = "dialog-warning") -> list[str]:
     """Send to every configured channel; return the channels that succeeded."""
     cfg = _config()
     sent = []
     if _private():
         title, body = _mask(title), _mask(body)
-    if cfg["notify"].get("desktop") and shutil.which("notify-send"):
-        try:
-            r = subprocess.run(["notify-send", "-a", "Hermes", "-i", icon, title, body],
-                               capture_output=True, timeout=10)
-            if r.returncode == 0:
-                sent.append("desktop")
-        except Exception:
-            pass
+    if cfg["notify"].get("desktop") and _desktop_channel()[0] and _desktop_send(title, body, icon):
+        sent.append("desktop")
     target = _telegram_target(cfg)
     if target:
         via = (cfg["notify"].get("telegram_via") or "default").strip()
@@ -494,7 +571,7 @@ def _notify(title: str, body: str, icon: str = "dialog-warning") -> list[str]:
             env.pop("HERMES_HOME", None)
         try:
             r = subprocess.run(cmd + ["send", "-q", "-t", target, "-s", title, body],
-                               capture_output=True, timeout=90, env=env)
+                               capture_output=True, timeout=90, env=env, **_quiet())
             if r.returncode == 0:
                 sent.append("telegram")
         except Exception:
@@ -1109,10 +1186,7 @@ def _refresh_parked(provider: str, item: dict) -> dict:
         return item
     if not _token_expired(SimpleNamespace(expires_at_ms=item.get("expires_at_ms"), access_token=item.get("access_token"))):
         return item
-    import fcntl
-    lock_path = _parked_path().with_suffix(".lock")
-    with open(lock_path, "w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with _file_lock(_parked_path().with_suffix(".lock")):
         items = _read_parked()                     # re-read: another run may have refreshed it
         cur = next((p for p in items if p["_provider"] == provider and p.get("id") == item.get("id")), None)
         if cur is None:
@@ -1137,7 +1211,7 @@ def _refresh_parked(provider: str, item: dict) -> dict:
 
 def _pool_providers() -> list:
     try:
-        data = json.loads((_root() / "auth.json").read_text())
+        data = json.loads((_root() / "auth.json").read_text(encoding="utf-8"))
         names = {k for k, v in (data.get("credential_pool") or {}).items() if v}
     except Exception:
         names = set()
@@ -1273,6 +1347,9 @@ def _parse_until(text: str) -> float:
 
 
 def _timer_active() -> bool:
+    if WINDOWS:
+        task = winsys.query_task()
+        return bool(task and task["enabled"])
     try:
         return subprocess.run(["systemctl", "--user", "is-active", "--quiet", "hermes-account-balance.timer"],
                               timeout=10).returncode == 0
@@ -1535,6 +1612,19 @@ def _cmd_balance(args) -> int:
 def _cmd_balance_all(args) -> int:
     """`hermes account all balance`, what the timer runs: balance every provider with accounts (in rotation or
     parked), one after the other. A provider that fails does not stop the others; the exit code says it did."""
+    timer = WINDOWS and _in_timer()
+    if timer:
+        _timer_run_mark(None)
+    rc = 1
+    try:
+        rc = _balance_every(args)
+        return rc
+    finally:
+        if timer:
+            _timer_run_mark(rc)
+
+
+def _balance_every(args) -> int:
     from types import SimpleNamespace
     provs = _pool_providers()
     if not provs:
@@ -1553,8 +1643,54 @@ def _cmd_balance_all(args) -> int:
     return rc
 
 
+def _timer_run_path() -> Path:
+    """Windows: the timer's own record of its last run (Task Scheduler's run history is not readable
+    without admin rights or PowerShell, and its texts are translated)."""
+    return winsys.task_dir(_root()) / "last-run.json"
+
+
+def _timer_run_mark(rc: int | None) -> None:
+    """Called by `all balance` when it runs from the Windows timer: rc None at the start, the exit code at the end."""
+    try:
+        path = _timer_run_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if rc is None:
+            rec = {"start": time.time()}
+        else:
+            rec = _load_json(path, {}) or {}
+            rec.setdefault("start", time.time())
+            rec.update(end=time.time(), rc=int(rc))
+        _atomic_json(path, rec)
+    except Exception:
+        pass
+
+
+def _timer_info_windows() -> dict:
+    task = winsys.query_task()
+    out = {"active": bool(task and task["enabled"]), "running": False, "result": "success", "last": "never",
+           "next": "", "next_ts": None, "last_ts": None, "log": str(winsys.log_path(_root()))}
+    if task is None:
+        return out
+    rec = _load_json(_timer_run_path(), {}) or {}
+    start, end = rec.get("start"), rec.get("end")
+    out["running"] = bool(start and not end and time.time() - start < 15 * 60)
+    if end:
+        out["result"] = "success" if rec.get("rc") == 0 else f"exit-code {rec.get('rc')}"
+    out["last_ts"] = start or None
+    out["last"] = "running now" if out["running"] else (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(start))
+                                                         if start else "never")
+    if out["active"]:
+        out["next_ts"] = winsys.next_run(task)
+        out["next"] = _hhmm(out["next_ts"]) if out["next_ts"] else ""
+    out["interval"] = task["interval"]
+    return out
+
+
 def _timer_info() -> dict:
-    """Balance timer state from systemd: active, running, result, last (text), next (text)."""
+    """Balance timer state from systemd (Task Scheduler on Windows): active, running, result, last (text),
+    next (text), next_ts, last_ts."""
+    if WINDOWS:
+        return _timer_info_windows()
     out = {"active": _timer_active(), "running": False, "result": "?", "last": "never", "next": ""}
     try:
         res = subprocess.run(["systemctl", "--user", "show", "hermes-account-balance.service",
@@ -1626,7 +1762,7 @@ def _set_config_value(home: Path, key: str, value: str) -> None:
         from hermes_constants import reset_hermes_home_override, set_hermes_home_override
     except ImportError:                                  # older Hermes: same command in a subprocess
         r = subprocess.run([_hermes_bin(), "config", "set", key, value], env=dict(os.environ, HERMES_HOME=str(home)),
-                           capture_output=True, text=True, timeout=120)
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, **_quiet())
         if r.returncode:
             raise RuntimeError(((r.stderr or r.stdout).strip().splitlines() or [f"exit code {r.returncode}"])[-1])
         return
@@ -1710,7 +1846,7 @@ MESSAGING_KIND = "gateway"
 def _tracker_installed() -> tuple:
     """(version, time it was installed) of the session tracker next to this plugin; (None, None) without it."""
     try:
-        m = re.search(r"^version:\s*['\"]?([\w.]+)", (TRACKER_DIR / "plugin.yaml").read_text(), re.M)
+        m = re.search(r"^version:\s*['\"]?([\w.]+)", (TRACKER_DIR / "plugin.yaml").read_text(encoding="utf-8"), re.M)
         return (m[1] if m else None), (TRACKER_DIR / "__init__.py").stat().st_mtime
     except OSError:
         return None, None
@@ -1720,15 +1856,29 @@ def _process_kind(pid):
     """"gateway", "desktop" or "session" for a running process; None when it has ended."""
     try:
         pid = int(pid)
-        os.kill(pid, 0)
-    except (ProcessLookupError, ValueError, TypeError, OverflowError):
+    except (ValueError, TypeError, OverflowError):
         return None
-    except PermissionError:
-        pass
-    try:
-        args = [a.decode(errors="replace") for a in Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")]
-    except OSError:
-        return "session"
+    if WINDOWS:
+        # Never os.kill(pid, 0) on Windows: signal 0 is CTRL_C_EVENT there and would interrupt the process.
+        try:
+            import psutil
+            args = psutil.Process(pid).cmdline()
+        except ImportError:
+            return "session"
+        except Exception as x:                            # NoSuchProcess, AccessDenied, ZombieProcess
+            return None if type(x).__name__ == "NoSuchProcess" else "session"
+        args = [Path(a).stem.lower() if i == 0 else a for i, a in enumerate(args)]
+    else:
+        try:
+            os.kill(pid, 0)
+        except (ProcessLookupError, OverflowError):
+            return None
+        except PermissionError:
+            pass
+        try:
+            args = [a.decode(errors="replace") for a in Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")]
+        except OSError:
+            return "session"
     if "gateway" in args:
         return "gateway"
     if "serve" in args or "desktop" in args:
@@ -1861,8 +2011,8 @@ def _doctor_checks(provider: str) -> list:
             f"Accounts page backend not enabled in: {', '.join(missing)} (Hermes Desktop shows "
             f"'backend did not answer' while it runs one of them). Fix: hermes account {provider} setup")
 
-    # file permissions
-    for path in (root / "auth.json", root / "account-pool-parked.json"):
+    # file permissions (Windows has no Unix modes: the files sit in the user's own profile folder)
+    for path in (() if WINDOWS else (root / "auth.json", root / "account-pool-parked.json")):
         if path.exists():
             mode = path.stat().st_mode & 0o777
             add("ok" if mode == 0o600 else "fail",
@@ -1878,17 +2028,23 @@ def _doctor_checks(provider: str) -> list:
             add("fail", f"balance timer is NOT active. Fix: hermes account {provider} setup --timer")
         elif timer["result"] != "success" and not timer["running"]:
             add("fail", f"balance timer active but the last run failed ({timer['result']}). "
-                        f"See: journalctl --user -u hermes-account-balance.service -n 20")
+                        f"See: {_timer_log_hint()}")
+        elif WINDOWS and timer.get("last_ts") and time.time() - timer["last_ts"] > 3 * (timer.get("interval") or 300) + 120:
+            add("warn", f"balance timer active, but its last run was {timer['last']}: Task Scheduler runs it only "
+                        f"while you are signed in to Windows. If you were, see {_timer_log_hint()}")
         else:
             add("ok", f"balance timer active, last run {timer['last']}")
-        execs = subprocess.run(["systemctl", "--user", "show", "hermes-account-balance.service", "-p", "ExecStart"],
-                               capture_output=True, text=True, timeout=10).stdout
+        if WINDOWS:
+            execs = "\n".join(_timer_lines().values())
+        else:
+            execs = subprocess.run(["systemctl", "--user", "show", "hermes-account-balance.service", "-p", "ExecStart"],
+                                   capture_output=True, text=True, timeout=10).stdout
         if active and not re.search(rf"account\s+(?:{ALL}|{re.escape(provider)})\s+balance", execs):
             add("warn", f"the balance timer does not run {provider} (timed unparks, cooldown recovery and alerts "
                         f"for {provider} wait for a manual balance). Fix: hermes account {provider} setup --timer "
                         f"(the timer then balances every provider with accounts, later ones included)")
     except Exception as x:
-        add("warn", f"could not query systemd: {x}")
+        add("warn", f"could not query {'Task Scheduler' if WINDOWS else 'systemd'}: {x}")
 
     # history freshness
     hist = _read_history(provider, time.time() - 3600) if _has_usage(provider) else None
@@ -1930,7 +2086,8 @@ def _doctor_checks(provider: str) -> list:
     cfg = _config()
     chans = []
     if cfg["notify"].get("desktop"):
-        chans.append("desktop" if shutil.which("notify-send") else "desktop (notify-send missing)")
+        ok, how = _desktop_channel()
+        chans.append("desktop" if ok else f"desktop ({how} missing)")
     tgt = _telegram_target(cfg)
     if tgt:
         chans.append(f"telegram via {cfg['notify'].get('telegram_via') or 'default'}")
@@ -2712,7 +2869,7 @@ def _cmd_notify(args) -> int:
         tgt = _telegram_target(cfg)
         _p("Alert channels:")
         _p(f"  desktop  : {'on' if cfg['notify'].get('desktop') else 'off'}"
-              + ("" if shutil.which("notify-send") else " (notify-send not installed)"))
+              + ("" if _desktop_channel()[0] else f" ({_desktop_channel()[1]} not available)"))
         via = cfg["notify"].get("telegram_via") or "default"
         _p(f"  telegram : {'on (your private chat)' if tgt else 'off'}"
               + (f", sent with the bot of profile '{via}'" if tgt else ""))
@@ -3144,8 +3301,8 @@ def _cmd_remove(args) -> int:
             return 1
         _p(f"Removed {label}.")
         return 0
-    r = subprocess.run([_hermes_bin(), "auth", "remove", provider, matched.id],
-                       capture_output=True, text=True, env=_hermes_env())
+    r = subprocess.run([_hermes_bin(), "auth", "remove", provider, matched.id], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", env=_hermes_env(), **_quiet())
     if r.returncode != 0:
         _p((r.stderr or r.stdout).strip() or "hermes auth remove failed.")
         return 1
@@ -3172,7 +3329,8 @@ def _systemctl(*args: str) -> None:
 def _run_hermes(profile: str, *args: str) -> None:
     """`hermes [-p <profile>] <args>` against the shared root; RuntimeError with its last line on failure."""
     cmd = [_hermes_bin()] + ([] if profile == "default" else ["-p", profile]) + list(args)
-    r = subprocess.run(cmd, env=_hermes_env(), capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL)
+    r = subprocess.run(cmd, env=_hermes_env(), capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       timeout=300, stdin=subprocess.DEVNULL, **_quiet())
     if r.returncode:
         lines = [ln for ln in (r.stderr + "\n" + r.stdout).splitlines() if ln.strip()]
         raise RuntimeError(lines[-1] if lines else f"exit code {r.returncode}")
@@ -3201,9 +3359,12 @@ ALL = "all"          # `hermes account all balance`: every provider with account
 
 def _timer_lines() -> dict:
     """{provider or "all": its ExecStart line} of the installed balance service, in order (empty without the
-    unit file). Lines are kept as written, so options added by hand (--threshold 85) survive a rewrite."""
+    unit file). Lines are kept as written, so options added by hand (--threshold 85) survive a rewrite.
+    On Windows: the command lines of balance.cmd, without the log redirect."""
+    if WINDOWS:
+        return winsys.read_lines(_root())
     try:
-        text = (_unit_dir() / f"{UNIT_NAME}.service").read_text()
+        text = (_unit_dir() / f"{UNIT_NAME}.service").read_text(encoding="utf-8")
     except OSError:
         return {}
     return {m.group(1): m.group(0) for m in re.finditer(r"^ExecStart=.*?\baccount\s+(\S+)\s+balance\b.*$", text, re.M)}
@@ -3227,10 +3388,34 @@ def _timer_opts(lines: dict) -> str:
     return ""
 
 
+def _timer_description(provs: list) -> str:
+    what = "every provider's" if provs == [ALL] else " ".join(provs)
+    return f"Hermes account pool: balance {what} accounts by live usage"
+
+
+def _default_root() -> bool:
+    """True when the shared root is Hermes' default home, so the timer needs no HERMES_HOME."""
+    default = (Path(os.environ["LOCALAPPDATA"]) / "hermes" if WINDOWS and os.environ.get("LOCALAPPDATA")
+               else Path.home() / ".hermes")
+    try:
+        return _root().resolve() == default.resolve()
+    except OSError:
+        return False
+
+
 def _write_timer(provs: list) -> None:
     """Write the balance service and, when missing, its 5-minute timer. provs == ["all"]: one ExecStart that
     balances every provider with accounts; otherwise one ExecStart per provider, run in order. Hand-added
-    options are kept. An existing timer file is left alone (its interval may have been changed by hand)."""
+    options are kept. An existing timer file is left alone (its interval may have been changed by hand).
+    On Windows: balance.cmd and balance.vbs in <Hermes home>/account-pool-timer (the task is registered by
+    _timer_on)."""
+    if WINDOWS:
+        keep = _timer_lines()
+        opts = _timer_opts(keep)
+        opts = f" {opts}" if opts else ""
+        lines = [keep.get(p) or winsys.command(_hermes_bin(), p, opts) for p in provs]
+        winsys.write_files(_root(), lines, None if _default_root() else str(_root()), _timer_description(provs))
+        return
     d = _unit_dir()
     d.mkdir(parents=True, exist_ok=True)
     root = _root()
@@ -3252,6 +3437,13 @@ def _write_timer(provs: list) -> None:
 
 def _timer_on(provs: list) -> None:
     _write_timer(provs)
+    if WINDOWS:
+        winsys.install_task(_root(), _timer_description(provs))
+        try:
+            winsys.start_task()                         # first run now, in the background
+        except RuntimeError:
+            pass                                        # the task runs within 5 minutes anyway
+        return
     _systemctl("daemon-reload")
     _systemctl("enable", "--now", f"{UNIT_NAME}.timer")
     _systemctl("start", "--no-block", f"{UNIT_NAME}.service")       # first run now, in the background
@@ -3261,6 +3453,13 @@ def _timer_drop(provider: str, provs: list) -> None:
     if provs == [ALL]:
         provs = _pool_providers()
     rest = [p for p in provs if p != provider]
+    if WINDOWS:
+        if rest:
+            _write_timer(rest)                          # the task runs balance.cmd, which now has these lines
+        else:
+            winsys.delete_task()
+            winsys.remove_files(_root())
+        return
     if rest:
         _write_timer(rest)
         _systemctl("daemon-reload")
@@ -3274,11 +3473,47 @@ def _timer_drop(provider: str, provs: list) -> None:
     _systemctl("daemon-reload")
 
 
+def _is_dir_link(path: Path) -> bool:
+    """A symlink, or on Windows a directory junction (what _link_tracker makes without Developer Mode)."""
+    return path.is_symlink() or (WINDOWS and winsys.is_junction(path))
+
+
 def _link_tracker(link: Path, target: Path) -> None:
+    """Link the tracker folder into a profile. On Windows a symlink needs Developer Mode or admin rights,
+    so it falls back to a directory junction, which any user may create."""
     link.parent.mkdir(parents=True, exist_ok=True)
-    if link.is_symlink() and not link.exists():  # dangling link from an older install
+    if _is_dir_link(link) and not link.exists():   # dangling link from an older install
+        _unlink_link(link)
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError:
+        if not WINDOWS:
+            raise
+        winsys.junction(link, target)
+
+
+def _unlink_link(link: Path) -> None:
+    if WINDOWS:
+        winsys.unlink_dir_link(link)
+    else:
         link.unlink()
-    link.symlink_to(target)
+
+
+def _timer_where() -> str:
+    """Where the timer lives, for setup's plan."""
+    if WINDOWS:
+        return f'a Task Scheduler task "{winsys.TASK_NAME}" ({winsys.task_dir(_root())})'
+    return f"systemd user units in {_unit_dir()}"
+
+
+def _timer_available() -> bool:
+    return WINDOWS or bool(shutil.which("systemctl"))
+
+
+def _timer_log_hint() -> str:
+    if WINDOWS:
+        return f"the log {winsys.log_path(_root())}"
+    return "journalctl --user -u hermes-account-balance.service -n 20"
 
 
 def _cmd_setup(args) -> int:
@@ -3302,12 +3537,12 @@ def _cmd_setup(args) -> int:
         changes.append((text, fn))
 
     if undo:
-        linked = [n for n, h in named if (h / "plugins" / "account-pool-tracker").is_symlink()
+        linked = [n for n, h in named if _is_dir_link(h / "plugins" / "account-pool-tracker")
                   and (h / "plugins" / "account-pool-tracker").resolve() == tracker.resolve()]
         for n in linked:
             link = home_of[n] / "plugins" / "account-pool-tracker"
             change(f"remove the session tracker from {n} (plugins.enabled and the link {link})",
-                   lambda n=n, link=link: (_set_enabled(home_of[n], "account-pool-tracker", False), link.unlink()))
+                   lambda n=n, link=link: (_set_enabled(home_of[n], "account-pool-tracker", False), _unlink_link(link)))
         listed = [n for n, _ in named if "account-pool" in lists[n][0]]
         for n in listed:
             change(f"unlist account-pool from plugins.enabled of {n}",
@@ -3315,7 +3550,9 @@ def _cmd_setup(args) -> int:
         follows, provs = _timer_follows_pool(), _timer_providers()
         if follows or provider in provs:
             rest = [p for p in provs if p != provider]
-            gone = f"remove the balance timer ({_unit_dir()}/{UNIT_NAME}.service and .timer)"
+            gone = (f'remove the balance timer (the Task Scheduler task "{winsys.TASK_NAME}" and '
+                    f'{winsys.task_dir(root)})' if WINDOWS else
+                    f"remove the balance timer ({_unit_dir()}/{UNIT_NAME}.service and .timer)")
             if follows:
                 change(f"take {provider} out of the balance timer: it then runs {', '.join(rest)} only, one line each, "
                        f"and no longer picks up providers you add later" if rest else gone,
@@ -3342,7 +3579,7 @@ def _cmd_setup(args) -> int:
             status.append(("Session tracker", "not installed, so `who`, tokens and sessions stay empty. Install it, "
                            "then run setup again: hermes plugins install account-pool-tracker"))
         else:
-            ver = (re.search(r"^version:\s*['\"]?([\w.]+)", (tracker / "plugin.yaml").read_text(), re.M) or [None, "?"])[1]
+            ver = (re.search(r"^version:\s*['\"]?([\w.]+)", (tracker / "plugin.yaml").read_text(encoding="utf-8"), re.M) or [None, "?"])[1]
             todo = 0
             if "account-pool-tracker" not in lists["default"][0]:
                 todo += 1
@@ -3368,7 +3605,7 @@ def _cmd_setup(args) -> int:
         state = (f"runs every provider with accounts (now: {now}), {'active' if active else 'NOT active'}" if follows else
                  f"runs {', '.join(provs)}, {'active' if active else 'NOT active'}" if lines else
                  "active, but not from this setup (no unit file found)" if active else "not installed")
-        if want_timer and not shutil.which("systemctl"):
+        if want_timer and not _timer_available():
             status.append(("Balance timer", "systemd not found: run `hermes account all balance` every few "
                            "minutes some other way (cron)"))
         elif want_timer and not follows and provider not in lines:
@@ -3376,12 +3613,13 @@ def _cmd_setup(args) -> int:
             change((f"switch the balance timer from {', '.join(lines)} to every provider with accounts (now: {pool_now}; "
                     f"providers you add later are included by themselves): every 5 minutes runs hermes account all balance")
                    if lines else
-                   (f"install the balance timer: systemd user units in {_unit_dir()}, every 5 minutes runs "
+                   (f"install the balance timer: {_timer_where()}, every 5 minutes runs "
                     f"hermes account all balance (every provider with accounts, now: {pool_now}; providers you add "
                     f"later are included by themselves)"),
                    lambda: _timer_on([ALL]))
         elif want_timer and not active:
-            change("start the balance timer (systemctl --user enable --now)", lambda: _timer_on(list(lines)))
+            change("start the balance timer (" + ("Task Scheduler" if WINDOWS else "systemctl --user enable --now")
+                   + ")", lambda: _timer_on(list(lines)))
         if not want_timer and not follows and provider not in lines:
             state += f"; add --timer to balance {provider} (and every other provider with accounts) every 5 minutes"
         status.append(("Balance timer", state))

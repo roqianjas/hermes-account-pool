@@ -20,7 +20,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 HOME = os.environ.get("HERMES_HOME", "")
-if not HOME or Path(HOME).resolve().is_relative_to((Path.home() / ".hermes").resolve()):
+if not HOME or any(Path(HOME).resolve().is_relative_to(h.resolve()) for h in  # the real Hermes home, also on Windows
+                  [Path.home() / ".hermes"] + ([Path(os.environ["LOCALAPPDATA"]) / "hermes"] if os.environ.get("LOCALAPPDATA") else [])):
     sys.exit("Set HERMES_HOME to a sandbox outside ~/.hermes first (see the docstring).")
 sys.path.insert(0, os.environ.get("HERMES_AGENT_DIR", str(Path.home() / ".hermes" / "hermes-agent")))
 
@@ -134,7 +135,8 @@ data = json.loads(path.read_text())
 check("buckets" not in data and old not in data["counts"]["anthropic"]["bob@example.com"]["default"]["fake-model"]
       and "carol@example.com" in data["counts"]["anthropic"] and "?" not in data["counts"]["anthropic"]["carol@example.com"],
       "late 1.1.0 buckets folded in, buckets older than 8 days dropped with their empty levels")
-check(oct(path.stat().st_mode & 0o777) == "0o600" and "fake-key" not in path.read_text(), "token file mode 600, no credential")
+check((os.name == "nt" or oct(path.stat().st_mode & 0o777) == "0o600") and "fake-key" not in path.read_text(encoding="utf-8"),
+      "token file mode 600 (no Unix modes on Windows), no credential")
 
 # ── grouping and API list prices ─────────────────────────────────────────────
 rows, since = core._token_rows("anthropic")

@@ -1,0 +1,101 @@
+name: tests
+
+# The sandbox tests on a fresh Hermes install, on Windows and on Linux. On Windows the timer test also
+# runs against the real Task Scheduler, and install.ps1 / uninstall.ps1 run end to end in a throwaway
+# Hermes home. Nothing here signs in to a provider or sends a request to one.
+#
+# Started by hand (Actions > tests > Run workflow) so a push never waits on it. Add `push:` and
+# `pull_request:` below to run it on every change.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Hermes Agent with its Windows installer
+        shell: pwsh
+        run: |
+          $ProgressPreference = "SilentlyContinue"
+          $installer = Join-Path $env:RUNNER_TEMP "hermes-install.ps1"
+          Invoke-RestMethod https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1 -OutFile $installer
+          powershell -NoProfile -ExecutionPolicy Bypass -File $installer -NonInteractive -SkipBrowser -SkipComputerUse
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $bin = Join-Path $env:LOCALAPPDATA "hermes\bin"
+          $bin | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          & (Join-Path $bin "hermes.exe") --version
+
+      - name: Find Hermes' Python
+        shell: pwsh
+        run: |
+          $agent = Join-Path $env:LOCALAPPDATA "hermes\hermes-agent"
+          $py = Join-Path $agent "venv\Scripts\python.exe"
+          if (-not (Test-Path $py)) {
+            $py = (Get-ChildItem (Join-Path $env:LOCALAPPDATA "hermes") -Recurse -Filter python.exe -ErrorAction SilentlyContinue |
+                   Where-Object { $_.FullName -match 'venv\\Scripts\\python\.exe$' } | Select-Object -First 1).FullName
+          }
+          & $py -c "import sys; sys.path.insert(0, r'$agent'); import agent.credential_pool, hermes_cli; print(sys.version)"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "HERMES_PY=$py" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "HERMES_AGENT_DIR=$agent" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Sandbox tests
+        shell: pwsh
+        run: |
+          & $env:HERMES_PY tests/run_all.py
+          exit $LASTEXITCODE
+
+      - name: Timer test against the real Task Scheduler
+        shell: pwsh
+        env:
+          HAP_REAL_WINDOWS: "1"
+        run: |
+          & $env:HERMES_PY tests/run_all.py windows_sandbox
+          exit $LASTEXITCODE
+
+      - name: install.ps1 and uninstall.ps1 in a throwaway Hermes home
+        shell: pwsh
+        run: |
+          $home_ = Join-Path $env:RUNNER_TEMP "hap-home"
+          New-Item -ItemType Directory -Force -Path $home_ | Out-Null
+          $env:HERMES_HOME = $home_
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+          if ($LASTEXITCODE -ne 0) { throw "install.ps1 failed" }
+          if (-not (Test-Path "$home_\plugins\account-pool\winsys.py")) { throw "plugin not copied" }
+          hermes account help | Select-Object -First 5
+          if ($LASTEXITCODE -ne 0) { throw "hermes account help failed" }
+          hermes account anthropic doctor
+          schtasks /Query /TN "Hermes Account Balance" | Out-Host
+          if ($LASTEXITCODE -ne 0) { throw "the Task Scheduler task is missing" }
+          if (-not (Select-String -Quiet -Path "$home_\account-pool-timer\balance.cmd" -Pattern "account all balance")) { throw "balance.cmd" }
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1 -Yes
+          if ($LASTEXITCODE -ne 0) { throw "uninstall.ps1 failed" }
+          schtasks /Query /TN "Hermes Account Balance" 2>$null | Out-Null
+          if ($LASTEXITCODE -eq 0) { throw "the task is still there after uninstall" }
+          if (Test-Path "$home_\plugins\account-pool") { throw "the plugin is still there after uninstall" }
+          Write-Host "install.ps1 and uninstall.ps1: ok"
+          exit 0
+
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Hermes Agent with its installer
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash -s -- --non-interactive --skip-browser
+          ~/.hermes/hermes-agent/venv/bin/python -c "import agent.credential_pool, hermes_cli, sys; print(sys.version)"
+
+      - name: Sandbox tests
+        run: ~/.hermes/hermes-agent/venv/bin/python tests/run_all.py
+
+      - name: Shell scripts
+        run: bash -n install.sh uninstall.sh

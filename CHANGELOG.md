@@ -1,6 +1,21 @@
 # Changelog
 
-All releases of the `account-pool` plugin and its session tracker `account-pool-tracker` (now 1.5.0).
+All releases of the `account-pool` plugin and its session tracker `account-pool-tracker` (now 1.5.1).
+
+## 3.13.0
+
+Windows support: the plugin, the timer and the alerts run on Hermes' own Windows install, without WSL.
+
+- **The timer is a Task Scheduler task on Windows.** `setup --timer` writes `balance.cmd` and `balance.vbs` to `%LOCALAPPDATA%\hermes\account-pool-timer\` and registers the task **Hermes Account Balance** for your user: every 5 minutes while you are signed in, on battery too, a missed run made up at once, one run at a time, no admin rights. `wscript` starts `balance.cmd` with no window, so nothing flashes on the screen. `balance.cmd` holds one line per run, like the systemd service's `ExecStart` lines: options added by hand are kept, `setup --undo` for one provider expands `all` into the others, and a custom `HERMES_HOME` is set in the file. The run's output goes to `balance.log` (moved to `balance.log.1` at 1 MB) and `last-run.json` keeps its start, end and exit code.
+- `doctor` and the Accounts page read the task: active, last run, next run, the result, and the log to look at when a run failed. `doctor` warns when the last run is far behind, since Task Scheduler runs the task only while you are signed in.
+- **Desktop alerts on Windows** are Windows notifications, sent through Windows PowerShell (title and text in environment variables, the script with `-EncodedCommand`, so no text is ever quoted on a command line). The alert settings on the page say which way alerts go on this computer.
+- **The session tracker in other profiles** is linked with a symlink, or with a directory junction when Windows does not allow symlinks (they need Developer Mode or admin rights). `setup --undo` and `uninstall.ps1` remove the link, never the tracker it points to.
+- **`install.ps1` and `uninstall.ps1`** do on Windows what `install.sh` and `uninstall.sh` do on Linux: copy both plugins into the Hermes home (`%LOCALAPPDATA%\hermes` or `HERMES_HOME`), back up the previous copy, run `setup` and `doctor`; and on removal delete the task, the links and the plugins, keeping your data files.
+- The timer runs the `hermes.exe` Hermes' Windows installer puts in `%LOCALAPPDATA%\hermes\bin\`. `balance.cmd` names the user's folders as `%LOCALAPPDATA%` and `%USERPROFILE%`, so a user name with letters outside ASCII cannot break it; any other non-ASCII path is written with its short 8.3 name.
+- Windows-safe internals, also used on Linux: the parked-accounts lock and the tracker's locks use `msvcrt` byte locks on Windows (`flock` elsewhere); a file another process has open is replaced after a short retry instead of failing; every data and config file is read and written as UTF-8 whatever the system's code page; child `hermes` commands start without a console window. On Windows the activity log tells the timer's runs from yours by an environment variable the task sets, and `doctor` finds Hermes processes through `psutil`, never with `os.kill(pid, 0)`, which on Windows would send them Ctrl+C. Unix file modes are not checked on Windows.
+- `hermes plugins install` reports 14 scan findings instead of 12: `schtasks` and Windows PowerShell in `winsys.py`.
+- Tracker 1.5.1: the Windows locks and UTF-8 files above; nothing else changed.
+- Tests: new `tests/windows_sandbox.py` (51 checks), which runs the Windows code on any system with a stand-in Task Scheduler, and on Windows against the real one with `HAP_REAL_WINDOWS=1`. New `tests/run_all.py` runs every sandbox test, each in its own sandbox, on Linux, macOS or Windows. The Windows pieces were also run with Windows' own Python, `cmd.exe` and `wscript.exe` under Wine: `balance.cmd` and `balance.vbs` (exit codes, log rotation, `%LOCALAPPDATA%`, a non-ASCII path), junctions, the locks between processes and the file replace while a reader holds the file. New workflow `.github/workflows/tests.yml` installs Hermes on a Windows and a Linux runner and runs the tests, `install.ps1` and `uninstall.ps1`. The other suites are unchanged (64/18/79/6/65/53/27/79/35 checks, UI 137).
 
 ## 3.12.1
 

@@ -19,7 +19,8 @@ import time
 from pathlib import Path
 
 HOME = os.environ.get("HERMES_HOME", "")
-if not HOME or Path(HOME).resolve().is_relative_to((Path.home() / ".hermes").resolve()):
+if not HOME or any(Path(HOME).resolve().is_relative_to(h.resolve()) for h in  # the real Hermes home, also on Windows
+                  [Path.home() / ".hermes"] + ([Path(os.environ["LOCALAPPDATA"]) / "hermes"] if os.environ.get("LOCALAPPDATA") else [])):
     sys.exit("Set HERMES_HOME to a sandbox outside ~/.hermes first (see the docstring).")
 sys.path.insert(0, os.environ.get("HERMES_AGENT_DIR", str(Path.home() / ".hermes" / "hermes-agent")))
 
@@ -94,7 +95,7 @@ call("bob@example.com", dict.fromkeys(U, 0), session="s2")                    # 
 call("bob@example.com", {"input_tokens": "<redacted>"}, session="s2")         # junk must not raise
 
 path = Path(HOME) / "account-pool-tokens.json"
-check(path.exists() and stat.S_IMODE(path.stat().st_mode) == 0o600, "token file written with mode 600")
+check(path.exists() and (os.name == "nt" or stat.S_IMODE(path.stat().st_mode) == 0o600), "token file written with mode 600")
 raw = path.read_text()
 check(not any(s in raw for s in ("fake-key", "access_token", "refresh_token")), "no credential in the token file")
 buckets, since = core._token_buckets("anthropic")

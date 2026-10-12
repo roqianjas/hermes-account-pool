@@ -20,9 +20,10 @@ from __future__ import annotations
 import json
 import os
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
-VERSION = "1.5.0"                 # keep in step with plugin.yaml
+VERSION = "1.5.1"                 # keep in step with plugin.yaml
 KEEP_SECONDS = 24 * 3600
 TOKEN_BUCKET = 900                 # seconds per token bucket
 TOKEN_KEEP = 8 * 24 * 3600         # token buckets older than this are dropped
@@ -67,13 +68,53 @@ def _find_agent(session_id: str):
     return fallback if not session_id else None
 
 
-def _write(root: Path, key: str, record: dict) -> None:
-    import fcntl
-    path = root / "account-pool-sessions.json"
-    with open(root / "account-pool-sessions.lock", "w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+@contextmanager
+def _locked(path: Path, timeout: float = 30):
+    """An exclusive lock between processes: flock on Linux and macOS, a byte lock (msvcrt) on Windows."""
+    with open(path, "a+b") as fh:
+        if os.name != "nt":
+            import fcntl
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            yield
+            return
+        import msvcrt
+        deadline = time.monotonic() + timeout
+        while True:
+            fh.seek(0)
+            try:
+                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                break
+            except OSError:
+                if time.monotonic() > deadline:
+                    raise
+                time.sleep(0.05)
         try:
-            data = json.loads(path.read_text())
+            yield
+        finally:
+            fh.seek(0)
+            try:
+                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+            except OSError:
+                pass
+
+
+def _replace(src: Path, dst: Path) -> None:
+    """os.replace; on Windows a file another process has open cannot be replaced for that moment."""
+    for attempt in range(40):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if os.name != "nt" or attempt == 39:
+                raise
+            time.sleep(0.05)
+
+
+def _write(root: Path, key: str, record: dict) -> None:
+    path = root / "account-pool-sessions.json"
+    with _locked(root / "account-pool-sessions.lock"):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             data = {"version": 1, "sessions": {}}
         sessions = data.setdefault("sessions", {})
@@ -99,17 +140,17 @@ def _write(root: Path, key: str, record: dict) -> None:
         data["sessions"] = {k: v for k, v in sessions.items() if v.get("last_seen", 0) >= cutoff}
         tmp = path.with_suffix(".tmp")
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
             json.dump(data, fh, indent=1)
-        os.replace(tmp, path)
+        _replace(tmp, path)
 
 
 def _replace_json(path: Path, data: dict) -> None:
     tmp = path.with_suffix(".tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as fh:
+    with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
         json.dump(data, fh, separators=(",", ":"))
-    os.replace(tmp, path)
+    _replace(tmp, path)
 
 
 def _upgrade_tokens(data, now: float) -> dict:
@@ -163,12 +204,10 @@ def _add_tokens(root: Path, provider: str, label: str, profile: str, model: str,
             vals.append(0)
     if not any(vals):
         return
-    import fcntl
     path = root / "account-pool-tokens.json"
-    with open(root / "account-pool-tokens.lock", "w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with _locked(root / "account-pool-tokens.lock"):
         try:
-            data = json.loads(path.read_text())
+            data = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             data = {"version": 2, "bucket": TOKEN_BUCKET, "since": now, "counts": {}}
         data = _upgrade_tokens(data, now)

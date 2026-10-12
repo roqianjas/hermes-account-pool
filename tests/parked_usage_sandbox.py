@@ -22,7 +22,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 HOME = os.environ.get("HERMES_HOME", "")
-if not HOME or Path(HOME).resolve().is_relative_to((Path.home() / ".hermes").resolve()):
+if not HOME or any(Path(HOME).resolve().is_relative_to(h.resolve()) for h in  # the real Hermes home, also on Windows
+                  [Path.home() / ".hermes"] + ([Path(os.environ["LOCALAPPDATA"]) / "hermes"] if os.environ.get("LOCALAPPDATA") else [])):
     sys.exit("Set HERMES_HOME to a sandbox outside ~/.hermes first (see the docstring).")
 os.environ["XDG_CONFIG_HOME"] = str(Path(HOME) / "xdg")
 sys.path.insert(0, os.environ.get("HERMES_AGENT_DIR", str(Path.home() / ".hermes" / "hermes-agent")))

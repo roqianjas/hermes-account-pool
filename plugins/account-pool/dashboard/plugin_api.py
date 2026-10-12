@@ -386,7 +386,8 @@ def notify_status(provider: str = "anthropic"):
         profiles = ["default"] + sorted(d.name for d in (root / "profiles").iterdir()
                                         if (d / "config.yaml").exists()) if (root / "profiles").is_dir() else ["default"]
         return {
-            "desktop": bool(cfg["notify"].get("desktop")), "notify_send": bool(core.shutil.which("notify-send")),
+            "desktop": bool(cfg["notify"].get("desktop")), "notify_send": core._desktop_channel()[0],
+            "desktop_via": core._desktop_channel()[1],
             "telegram": bool(core._telegram_target(cfg)), "telegram_setting": cfg["notify"].get("telegram"),
             "via": cfg["notify"].get("telegram_via") or "default", "profiles": profiles,
             "alert_all_above": cfg.get("alert_all_above", 80),

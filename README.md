@@ -2,7 +2,7 @@
 
 Run several accounts of one provider in [Hermes Agent](https://hermes-agent.nousresearch.com/docs) and manage them from one command, `hermes account`, or from an Accounts page in Hermes Desktop. Add accounts with a verified email, see live usage per account, spread the load before an account runs out, start an idle account's 5-hour window early, park accounts for a while or on a weekly schedule, see which bot is on which account and how many tokens each bot uses, mask the emails for a screenshot, and get an alert or a daily summary.
 
-Version 3.12.1 · MIT · Hermes Agent ≥ 0.21.5 · Linux with systemd · Indonesian PDF guide in [`docs/`](docs/hermes-account-pool.pdf)
+Version 3.13.0 · MIT · Hermes Agent ≥ 0.21.5 · Linux or Windows 10/11 · Indonesian PDF guide in [`docs/`](docs/hermes-account-pool.pdf)
 
 ![The Accounts page in Hermes Desktop: eight accounts in rotation with their 5-hour usage, the bots on each account, two parked accounts with their reset times, two park schedules and the forecast](docs/screenshots/accounts.png)
 
@@ -64,13 +64,24 @@ hermes account anthropic doctor                  # everything OK?
 hermes account anthropic usage                   # live usage per account
 ```
 
-Without a git checkout, `hermes plugins install` does the same in three commands ([Install with hermes plugins install](#install-with-hermes-plugins-install)). From then on the timer keeps the pool ordered. Day to day you mostly need `usage`, `who`, `park` and `doctor`. In Hermes Desktop, restart the app once and switch the page on in Capabilities > Plugins to get the same in a page ([Hermes Desktop page](#hermes-desktop-page)).
+On Windows, in PowerShell (no WSL needed):
+
+```powershell
+git clone https://github.com/roqianjas/hermes-account-pool.git
+cd hermes-account-pool
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -SetStrategy
+
+hermes account anthropic add alice@example.com
+hermes account anthropic doctor
+```
+
+Without a git checkout, `hermes plugins install` does the same in three commands, on Linux and Windows alike ([Install with hermes plugins install](#install-with-hermes-plugins-install)). From then on the timer keeps the pool ordered. Day to day you mostly need `usage`, `who`, `park` and `doctor`. In Hermes Desktop, restart the app once and switch the page on in Capabilities > Plugins to get the same in a page ([Hermes Desktop page](#hermes-desktop-page)).
 
 ## Requirements
 
-- Hermes Agent ≥ 0.21.5 on Linux. The timer needs systemd user services (`systemctl --user`).
+- Hermes Agent ≥ 0.21.5 on Linux or on Windows 10/11 (Hermes' own Windows install, no WSL needed). The timer uses systemd user services on Linux (`systemctl --user`) and Task Scheduler on Windows, without admin rights. On macOS the commands work; run `hermes account all balance` with launchd or cron instead of the timer.
 - Two or more accounts of the same provider. Built-in usage support: Claude Pro / Max / Team (`anthropic`) and ChatGPT Plus / Pro / Team (`openai-codex`). Other providers get the generic commands (see [Providers](#providers)).
-- Optional: `notify-send` (package `libnotify-bin`) for desktop alerts, and a Telegram bot configured in Hermes with `TELEGRAM_ALLOWED_USERS` for Telegram alerts.
+- Optional: desktop alerts need `notify-send` on Linux (package `libnotify-bin`); Windows shows them as Windows notifications through Windows PowerShell, which every Windows 10 and 11 has. Telegram alerts need a Telegram bot configured in Hermes with `TELEGRAM_ALLOWED_USERS`.
 - Optional: Hermes Desktop with desktop plugins, for the Accounts page. Tested with Hermes Agent 0.21.5 and 0.21.6.
 
 ## Install, update, uninstall
@@ -95,6 +106,38 @@ Run it as the user Hermes runs as. `install.sh` copies `account-pool` (with the 
 | `--no-timer` | Skip the timer. Run `balance` yourself. |
 | `-h`, `--help` | Show the options. |
 
+### Install on Windows
+
+Hermes runs natively on Windows, and so does this plugin: no WSL. In PowerShell, as your own user (no admin rights):
+
+```powershell
+git clone https://github.com/roqianjas/hermes-account-pool.git
+cd hermes-account-pool
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -SetStrategy
+```
+
+`install.ps1` does what `install.sh` does: it copies both plugins to `%LOCALAPPDATA%\hermes\plugins\` (or `$env:HERMES_HOME\plugins\`), enables `account-pool`, runs `hermes account <provider> setup --yes --timer` and then `doctor`. `-ExecutionPolicy Bypass` applies to this one run only; it is needed because Windows blocks downloaded scripts by default.
+
+| Option | Effect |
+|---|---|
+| `-Provider anthropic,openai-codex` | Providers to run `setup` for (default `anthropic`) |
+| `-SetStrategy` | Set `fill_first` for each provider in every profile |
+| `-NoTracker` | Skip the session tracker |
+| `-NoTimer` | Skip the Task Scheduler task |
+
+Without git, use `hermes plugins install` below; it works the same on Windows. What is different on Windows:
+
+| | Linux | Windows |
+|---|---|---|
+| Timer | systemd user units in `~/.config/systemd/user/` | the Task Scheduler task **Hermes Account Balance**, with its files in `%LOCALAPPDATA%\hermes\account-pool-timer\` |
+| Timer log | `journalctl --user -u hermes-account-balance.service` | `account-pool-timer\balance.log` (kept under 1 MB) |
+| When the timer runs | always, also before you sign in | while you are signed in to Windows; a missed run is made up when you sign in |
+| Desktop alerts | `notify-send` | Windows notifications (shown under Windows PowerShell's name) |
+| Tracker in other profiles | a symlink | a symlink, or a directory junction when Windows does not allow symlinks (no Developer Mode) |
+| Uninstall from git | `./uninstall.sh` | `powershell -ExecutionPolicy Bypass -File .\uninstall.ps1` |
+
+Everything else, the commands and the Accounts page included, is the same.
+
 ### Install with `hermes plugins install`
 
 The same two folders, straight from this repository, without a git checkout:
@@ -107,10 +150,10 @@ hermes account anthropic setup --timer --strategy
 
 Run them in the default profile (without `-p`): the command lives there, and `setup` links the tracker from there into the other profiles ([What setup does](#what-setup-does)).
 
-Hermes scans a plugin from GitHub before it installs it, and stops when the scan has findings. For `account-pool` it reports 12, all expected:
+Hermes scans a plugin from GitHub before it installs it, and stops when the scan has findings. For `account-pool` it reports 14, all expected:
 
-- 11 `subprocess` calls: `notify-send` (desktop alerts), `hermes send` (Telegram alerts), `systemctl --user` five times (timer state for `doctor` and the page, `setup --timer`), `hermes config set` (`strategy`), `hermes auth add` (`add`, `relogin`), `hermes auth remove` (`remove`), and `hermes -p <profile> plugins enable` / `config set` (`setup`);
-- 1 read of `/proc/self/cgroup`, to know whether the process is the timer's service.
+- 13 `subprocess` calls: `notify-send` (desktop alerts on Linux), `hermes send` (Telegram alerts), `systemctl --user` five times (timer state for `doctor` and the page, `setup --timer` on Linux), `schtasks` and Windows PowerShell in `winsys.py` (the timer and desktop alerts on Windows), `hermes config set` (`strategy`), `hermes auth add` (`add`, `relogin`), `hermes auth remove` (`remove`), and `hermes -p <profile> plugins enable` / `config set` (`setup`);
+- 1 read of `/proc/self/cgroup`, to know whether the process is the timer's service (Linux only).
 
 Each one is in the [Security and privacy disclosure](#security-and-privacy-disclosure). In a terminal, Hermes lists the findings and asks `Install anyway? Only continue if you trust the source. [y/N]`: read them and answer `y`. Without a terminal (a script, an agent's shell) it stops instead; add `--force` there. The tracker has no findings, `hermes plugins update` installs new versions without asking again, and `install.sh` copies the folders itself, so neither is stopped by the scan.
 
@@ -142,12 +185,12 @@ It shows what it found and every change it would make, asks once, then makes the
 |---|---|
 | Accounts page | Adds `account-pool` to `plugins.enabled` of every profile under `$HERMES_HOME/profiles/` ([why](#why-every-profile-lists-account-pool)). Profiles get no command and no tools from it. A profile with `account-pool` in `plugins.disabled` is skipped and named. |
 | Session tracker | Enables `account-pool-tracker` in the default profile. In every other profile it links `plugins/account-pool-tracker` to the default profile's copy and enables it there with `hermes -p <profile> plugins enable`. One copy means one update for every profile. |
-| `--timer` | Writes `hermes-account-balance.service` and `hermes-account-balance.timer` to `~/.config/systemd/user/`, enables the timer and starts a first run in the background. The service runs `hermes account all balance` every 5 minutes: every provider with accounts, so a provider that gets its first account later (Codex, for example) is balanced from the next run, with no second `setup`. A unit from 3.10.2 or older has one line per provider; `setup --timer` for a provider it lacks switches it to `all`. A custom `HERMES_HOME` is written into the service. Options you added by hand (`--threshold 85`) and a changed interval are kept. |
+| `--timer` | Linux: writes `hermes-account-balance.service` and `hermes-account-balance.timer` to `~/.config/systemd/user/`, enables the timer and starts a first run in the background. Windows: writes `balance.cmd` and `balance.vbs` to `%LOCALAPPDATA%\hermes\account-pool-timer\`, registers the Task Scheduler task **Hermes Account Balance** for your user (every 5 minutes, no admin rights, no window) and starts a first run. The service runs `hermes account all balance` every 5 minutes: every provider with accounts, so a provider that gets its first account later (Codex, for example) is balanced from the next run, with no second `setup`. A unit from 3.10.2 or older has one line per provider; `setup --timer` for a provider it lacks switches it to `all`. A custom `HERMES_HOME` is written into the service. Options you added by hand (`--threshold 85`) and a changed interval are kept. |
 | `--strategy` | Sets `credential_pool_strategies.<provider>: fill_first` in every profile that has another value. `balance` needs it (see [Concepts](#concepts)). |
 | `--undo` | Removes the tracker links and the `plugins.enabled` entries in the other profiles, and takes the provider out of the timer: the timer then runs the other providers with accounts, one line each, and no longer picks up new ones; it goes when no provider is left. It keeps both plugins in the default profile, the accounts, parked accounts, settings, data files and strategies, and names parked accounts that would stay out of rotation. |
 | `--yes` | No question. Without a terminal (cron, an agent's shell) `setup` shows the plan and changes nothing unless `--yes` is given. |
 
-Every config change goes through `hermes config set` or `hermes plugins enable`, so the files keep Hermes' own format and checks. Without the tracker installed, `setup` says how to install it and leaves that part out. On a system without systemd, `--timer` says so; run `balance` some other way (cron).
+Every config change goes through `hermes config set` or `hermes plugins enable`, so the files keep Hermes' own format and checks. Without the tracker installed, `setup` says how to install it and leaves that part out. On a system without systemd or Task Scheduler (macOS), `--timer` says so; run `balance` some other way (launchd, cron).
 
 A custom `HERMES_HOME` is respected. Running sessions load the tracker after `/reset` or after a gateway or desktop restart. After an update, `doctor` and the Accounts page name each process that still runs the older tracker. The Accounts page needs two more steps in Hermes Desktop, see [Turn the page on](#turn-the-page-on). A profile created later needs `setup` again before Hermes Desktop can show the page while it runs that profile; `doctor` names such profiles.
 
@@ -155,7 +198,8 @@ Check the result:
 
 ```bash
 hermes account anthropic doctor
-systemctl --user list-timers hermes-account-balance.timer
+systemctl --user list-timers hermes-account-balance.timer      # Linux
+schtasks /Query /TN "Hermes Account Balance"                   # Windows
 ```
 
 ### Update
@@ -178,6 +222,8 @@ git pull
 ./install.sh                # add the same --set-strategy / --provider options you installed with
 ```
 
+On Windows: `git pull`, then `powershell -ExecutionPolicy Bypass -File .\install.ps1` with the options you installed with.
+
 The previous plugin folder is backed up to `$HERMES_HOME/plugin-backups/<name>.<timestamp>` (outside `plugins/`, so Hermes never loads it twice). Accounts, parked accounts, history and settings are kept. `install.sh` without `--set-strategy` leaves your strategy as it is. Restart Hermes Desktop after any update so it loads the new page and its backend.
 
 ### Uninstall
@@ -195,7 +241,8 @@ hermes plugins remove account-pool
 Git install:
 
 ```bash
-./uninstall.sh
+./uninstall.sh                                                  # Linux
+powershell -ExecutionPolicy Bypass -File .\uninstall.ps1        # Windows
 ```
 
 It removes the timer, both plugins (the Accounts page included), the tracker symlinks and the `account-pool` entry in each profile's `plugins.enabled`. Your accounts in the credential pool are not touched. Parked accounts are **not** returned to rotation: the script warns you and asks first. Data files and `credential_pool_strategies` stay; the script lists the files you can delete by hand.
@@ -894,7 +941,7 @@ Check: hermes account anthropic sessions --hours 1
 
 Alerts are sent by `balance`, so they need the timer. Channels:
 
-- **Desktop**: `notify-send`, on by default.
+- **Desktop**: `notify-send` on Linux, a Windows notification on Windows; on by default.
 - **Telegram**: on automatically when Hermes has a Telegram bot. The message goes with `hermes send` to the first user in `TELEGRAM_ALLOWED_USERS` (your private chat), using the default profile's bot. If the default profile has no working bot, use another profile's: `notify telegram-via=<profile>`.
 
 Run `notify test` after setting up.
@@ -967,6 +1014,10 @@ Why benching at 90% helps: when an account hits its limit, Hermes retries once a
 
 ## The timer
 
+`hermes account <provider> setup --timer` installs it; `doctor` and the Accounts page show its state, last run and next run on both systems.
+
+### Linux (systemd)
+
 ```bash
 systemctl --user list-timers hermes-account-balance.timer           # status and next run
 journalctl --user -u hermes-account-balance.service -n 20 -o cat    # recent runs
@@ -980,6 +1031,25 @@ systemctl --user enable --now hermes-account-balance.timer          # start agai
 - **Providers**: the timer runs `hermes account all balance`, so every provider with accounts is balanced, including one that gets its first account later. On a unit from 3.10.2 or older (one `ExecStart` line per provider), `doctor` warns about a provider with accounts that the timer misses; `hermes account <provider> setup --timer` switches the unit to `all`.
 - **Only some providers**: replace the `all` line with one line per provider (`ExecStart=... account anthropic balance`), or run `hermes account <provider> setup --undo` for the one to leave out.
 - **Remove**: `hermes account <provider> setup --undo` with only that provider left removes the timer; `systemctl --user disable --now hermes-account-balance.timer` stops it at once.
+
+### Windows (Task Scheduler)
+
+```powershell
+schtasks /Query /TN "Hermes Account Balance" /V /FO LIST            # status, last and next run
+Get-Content "$env:LOCALAPPDATA\hermes\account-pool-timer\balance.log" -Tail 20   # recent runs
+schtasks /Run /TN "Hermes Account Balance"                          # run now
+schtasks /Change /TN "Hermes Account Balance" /DISABLE              # stop
+schtasks /Change /TN "Hermes Account Balance" /ENABLE               # start again
+```
+
+The task runs `wscript.exe balance.vbs`, which runs `balance.cmd` with no window, so nothing flashes on the screen every 5 minutes. Both files are in `%LOCALAPPDATA%\hermes\account-pool-timer\` (under `HERMES_HOME` when you set one).
+
+- **When it runs**: every 5 minutes while you are signed in to Windows, on battery too. After the computer was off or asleep, the missed run is made up at once. It never runs two at a time and stops a run after 10 minutes.
+- **Threshold**: add `--threshold 85` to the `account all balance` line in `balance.cmd`. `setup` keeps options you added there, as it does on Linux.
+- **Interval**: open Task Scheduler (`taskschd.msc`), task **Hermes Account Balance**, Triggers, and change *Repeat task every*. Do not go much below 5 minutes.
+- **Only some providers**: replace the `all` line in `balance.cmd` with one line per provider, or run `hermes account <provider> setup --undo` for the one to leave out.
+- **Remove**: `hermes account <provider> setup --undo` with only that provider left deletes the task and its files; `uninstall.ps1` does too.
+- **Log**: each run appends to `balance.log`; at 1 MB the file moves to `balance.log.1`. `last-run.json` next to it holds the start, end and exit code of the last run, which `doctor` and the page read.
 
 The timer uses no AI tokens unless you turn on automatic wake (`wake auto-on`): it calls the usage endpoints and, for alerts and the daily summary, your notification channels. With automatic wake it also sends one tiny model request when an account's window is not running.
 
@@ -1008,10 +1078,12 @@ Adding an adapter for another provider is a single class; see [CONTRIBUTING.md](
 | `plugins/account-pool/dashboard/` | The page's backend (`plugin_api.py`) and its manifest. `dist/index.js` only tells the browser dashboard that the page lives in Hermes Desktop. |
 | `plugins/account-pool-tracker/` | A `post_api_request` hook that records `{profile, session, platform, model, account label, tracker version, process id, Kanban task}` and adds each call's token counts to its account, profile and model. No commands, no tools, no credentials; it swallows every error so it can never break a bot. |
 | `plugins/account-pool-tracker/README.md` | The tracker's own page: what it records, and why it needs in-process plugins. |
-| `install.sh`, `uninstall.sh` | Install and remove from a git checkout. `install.sh` copies the plugins and runs `setup`; the systemd units are written by `setup`. |
+| `plugins/account-pool/winsys.py` | The Windows parts: the Task Scheduler task and its two files, Windows notifications, directory junctions. Loaded on Windows only. |
+| `install.sh`, `uninstall.sh` | Install and remove from a git checkout on Linux. `install.sh` copies the plugins and runs `setup`; the systemd units are written by `setup`. |
+| `install.ps1`, `uninstall.ps1` | The same for Windows, in PowerShell. The Task Scheduler task is written by `setup`. |
 | `docs/screenshots/` | Screenshots of the Accounts page, taken by `tests/ui/screenshots.mjs` from a Hermes Desktop that shows the test fixtures. |
 
-Data files, all mode `600`, in `$HERMES_HOME`:
+Data files in `$HERMES_HOME` (`%LOCALAPPDATA%\hermes` on Windows), mode `600` on Linux; on Windows they inherit your user folder's permissions, which only you and administrators can read:
 
 | File | Content |
 |---|---|
@@ -1023,6 +1095,7 @@ Data files, all mode `600`, in `$HERMES_HOME`:
 | `account-pool-alerts.json` | Alerts already sent, so each incident is reported once |
 | `account-pool-state.json` | When the daily summary was last sent, which schedule windows were already applied, each account's last wake (time, model or the reason it failed), and the last model list per provider (time and ids) |
 | `account-pool.json` | Settings: alert channels, daily summary, park schedules, wake, email masking |
+| `account-pool-timer/` | Windows only: `balance.cmd`, `balance.vbs`, `balance.log` and `last-run.json` of the timer |
 
 How tokens are handled:
 
@@ -1066,22 +1139,24 @@ There is no telemetry, no update check and no other host. Opening the page or sw
 
 **Local listener.** Only during a Codex browser sign-in started on the Accounts page, the page's backend listens on `127.0.0.1:1455` (loopback only, not reachable from other computers) for the browser's return from OpenAI. It accepts only the sign-in it was started for and closes when that sign-in ends, is cancelled, or after 15 minutes. `add` and `relogin` in a terminal leave the listener to `hermes auth add`.
 
-**Background work.** Nothing runs on its own unless you install the timer (`setup --timer`, or `install.sh` without `--no-timer`). The timer is a systemd user unit that runs `hermes account all balance` every 5 minutes, for every provider with accounts: it reads every account's usage, reorders the pool, benches and releases accounts, applies timed parks and schedules, retries token refreshes and sends alerts. After `wake auto-on` it also wakes accounts whose 5-hour window is not running (at most about 5 tiny requests per account per day). The tracker runs inside every Hermes process that loads it, as a `post_api_request` hook (see its [README](plugins/account-pool-tracker/README.md)).
+**Background work.** Nothing runs on its own unless you install the timer (`setup --timer`, or `install.sh` / `install.ps1` without the no-timer option). The timer is a systemd user unit on Linux and a Task Scheduler task for your user on Windows; it runs `hermes account all balance` every 5 minutes, for every provider with accounts: it reads every account's usage, reorders the pool, benches and releases accounts, applies timed parks and schedules, retries token refreshes and sends alerts. After `wake auto-on` it also wakes accounts whose 5-hour window is not running (at most about 5 tiny requests per account per day). The tracker runs inside every Hermes process that loads it, as a `post_api_request` hook (see its [README](plugins/account-pool-tracker/README.md)).
 
 **Commands it runs.**
 
 | Command | Why |
 |---|---|
-| `systemctl --user` | timer state for `doctor` and the page; `setup --timer` and `--undo` install, start and remove the units |
-| `notify-send` | desktop alerts |
+| `systemctl --user` | Linux: timer state for `doctor` and the page; `setup --timer` and `--undo` install, start and remove the units |
+| `schtasks` | Windows: the same for the Task Scheduler task (`/Create /XML`, `/Query /XML`, `/Run`, `/Delete`) |
+| `notify-send` | Linux: desktop alerts |
+| `powershell.exe` | Windows: desktop alerts, as a Windows notification (the script is passed with `-EncodedCommand`; title and text through environment variables) |
 | `hermes config set` | `strategy`, `setup` (`plugins.enabled`, `credential_pool_strategies`) |
 | `hermes plugins enable account-pool-tracker` | `setup`, once per profile |
 | `hermes auth add`, `hermes auth remove` | `add`, `relogin` and `remove` in a terminal |
 | `hermes send` | Telegram alerts and the daily summary |
 
-**Reads outside its own files.** Every profile's `config.yaml` (strategy and plugin lists), every profile's `state.db` read-only (session titles for `sessions`), `/proc/self/cgroup` (whether the process is the timer's service, so the activity log says `timer` rather than `cli`), `/proc/<pid>/cmdline` of Hermes processes (`doctor`: which process still runs an older tracker), Hermes' price files, and the state of the systemd units. `hermes plugins validate` lists the `/proc/self/cgroup` read as a `caution`; that is all it is for.
+**Reads outside its own files.** Every profile's `config.yaml` (strategy and plugin lists), every profile's `state.db` read-only (session titles for `sessions`), `/proc/self/cgroup` on Linux (whether the process is the timer's service, so the activity log says `timer` rather than `cli`; on Windows the timer's `balance.cmd` sets `HERMES_ACCOUNT_POOL_TIMER=1` instead), the command line of Hermes processes (`doctor`: which process still runs an older tracker; `/proc/<pid>/cmdline` on Linux, `psutil` on Windows), Hermes' price files, and the state of the systemd units or the Task Scheduler task. `hermes plugins validate` lists the `/proc/self/cgroup` read as a `caution`; that is all it is for.
 
-**Writes outside its own files.** `auth.json`, as above. `config.yaml` of the profiles, only through `hermes config set` and `hermes plugins enable`, only from `setup`, `strategy` and the page's rotation dialog. The tracker links `profiles/<name>/plugins/account-pool-tracker`. The systemd units in `~/.config/systemd/user/`.
+**Writes outside its own files.** `auth.json`, as above. `config.yaml` of the profiles, only through `hermes config set` and `hermes plugins enable`, only from `setup`, `strategy` and the page's rotation dialog. The tracker links `profiles/<name>/plugins/account-pool-tracker` (a symlink, or a directory junction on Windows). The systemd units in `~/.config/systemd/user/` on Linux; the Task Scheduler task **Hermes Account Balance** and `account-pool-timer/` on Windows.
 
 **Who can use it.** The command registers in the default profile only, so bots in other profiles cannot run it, and it registers no tools. The page is part of Hermes Desktop and its backend requires Desktop's session token. One account action runs at a time.
 
@@ -1110,7 +1185,11 @@ There is no telemetry, no update check and no other host. Opening the page or sw
 | `report`: `API $` shows `-` or ends in `+` | The model has no price in Hermes' price list, or the tokens were counted before tracker 1.3.0 | Nothing to fix; those tokens are left out of the price |
 | `doctor`: strategy is not fill_first | A profile uses `round_robin` or another strategy | `hermes account <provider> strategy fill_first`, or **Use fill_first** on the page |
 | `doctor`: profiles with their OWN pool | Someone ran `hermes -p <profile> auth add` | Remove those entries in that profile (`hermes -p <profile> auth remove ...`) and add the accounts from the default profile |
-| `doctor`: last run failed | The timer's last `balance` failed | `journalctl --user -u hermes-account-balance.service -n 20` |
+| `doctor`: last run failed | The timer's last `balance` failed | Linux: `journalctl --user -u hermes-account-balance.service -n 20`. Windows: the end of `%LOCALAPPDATA%\hermes\account-pool-timer\balance.log` |
+| Windows, `doctor`: the timer's last run was a while ago | Task Scheduler runs the task only while you are signed in, so this is normal after the computer was off or signed out | Nothing, if you were away; it runs again within 5 minutes of signing in. Otherwise see `balance.log` and Task Scheduler's history for **Hermes Account Balance** |
+| Windows, `setup`: `Task Scheduler refused the task` | A company policy blocks scheduled tasks for normal users | Ask the administrator, or run `hermes account all balance` yourself now and then |
+| Windows: `install.ps1 cannot be loaded because running scripts is disabled` | Windows blocks downloaded scripts by default | Start it as `powershell -ExecutionPolicy Bypass -File .\install.ps1` (this run only) |
+| Windows: no desktop alert | Windows notifications are off for Windows PowerShell, or Focus / Do not disturb is on | Settings > System > Notifications, allow Windows PowerShell; `hermes account <provider> notify test` |
 | `hermes account`: unknown command | Run with `-p <profile>`; the plugin is in the default profile only | Run it without `-p` |
 | Accounts page: `The account-pool backend did not answer` | Hermes Desktop runs a profile that does not list `account-pool` (a profile created after the install, or an install older than 3.5.1), or was not restarted after the install | `hermes account <provider> setup`, then restart Hermes Desktop. `doctor` names the profiles that miss it |
 | `add needs a terminal` or `relogin needs a terminal` | It ran from cron, an agent's shell or another place without a terminal, where nobody can paste the sign-in code | Run it in a terminal, or use **Add account** / **Sign in again** on the Accounts page |
@@ -1135,6 +1214,9 @@ There is no telemetry, no update check and no other host. Opening the page or sw
 
 **My quota in claude.ai (or another usage tool) is fine. Why does `usage` say rate-limited?**
 Two different limits. Your model quota is what the bots spend. The usage endpoint that tools read to *display* that quota has its own request limit. When it is hit, only the display is affected: bots keep running, and the plugin shows the last known value.
+
+**Do I need WSL on Windows?**
+No. Since 3.13.0 the plugin runs on Hermes' own Windows install: the timer is a Task Scheduler task, alerts are Windows notifications, and the commands and the Accounts page work as on Linux. A Hermes inside WSL works too; it then counts as Linux.
 
 **Does the plugin use AI tokens?**
 Only for `wake`, and only when you run it or switch on `wake auto-on`: one request with a one-word answer per wake, which leaves the window at 0%. Everything else reads usage and reorders the pool without calling a model.
@@ -1189,7 +1271,8 @@ At least two. `report` tells you when the whole pool was nearly full at the same
 - `add` and `relogin` need a terminal (or the Accounts page) to show the sign-in link, paste the code or type the key. Without one they stop at once with the command to run, instead of waiting for input.
 - The Codex browser sign-in needs the browser on the computer that runs Hermes (or the Accounts page, which takes the pasted address). OpenAI accepts only `http://localhost:1455/auth/callback` as the return address for the Codex client, so the port cannot be changed.
 - The Accounts page follows the Hermes Desktop plugin SDK as of Hermes Agent 0.21.5. A future SDK change can break the page; the command is not affected.
-- Linux with systemd only, for the timer. The commands themselves work wherever Hermes runs.
+- The timer needs systemd (Linux) or Task Scheduler (Windows 10 and 11). On macOS run `hermes account all balance` every few minutes with launchd or cron. On Windows the task runs only while you are signed in.
+- Windows support (3.13.0) is covered by `tests/windows_sandbox.py`, which drives the Windows code with a stand-in for Task Scheduler. The Windows pieces (`balance.cmd` and `balance.vbs` through `cmd.exe` and `wscript.exe`, junctions, the file locks) were also run with Windows' own Python under Wine. Registering the task with the real Task Scheduler follows how Hermes registers its own gateway task on Windows; the `tests` workflow (`.github/workflows/tests.yml`, started by hand) runs it on a Windows runner. Please report what you see on your machine.
 
 ## Contributing, changelog, license
 

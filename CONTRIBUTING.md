@@ -8,14 +8,18 @@ Bug reports, fixes and adapters for more providers are welcome. This page covers
 |---|---|
 | `plugins/account-pool/__init__.py` | The `hermes account` command: argument parsing, every action, balance, alerts, history |
 | `plugins/account-pool/providers.py` | Provider adapters: usage, identity, parked-token refresh, page sign-in, wake |
+| `plugins/account-pool/winsys.py` | The Windows parts: the Task Scheduler task (`balance.cmd`, `balance.vbs`, task XML), Windows notifications, directory junctions. Every call to a Windows tool goes through `winsys.run()`, so tests can replace it |
 | `plugins/account-pool/plugin.yaml` | Plugin metadata and version |
 | `plugins/account-pool/desktop/plugin.js` | The Accounts page in Hermes Desktop (one ES module, no build step) |
 | `plugins/account-pool/dashboard/plugin_api.py` | The page's backend: FastAPI routes under `/api/plugins/account-pool/` |
 | `plugins/account-pool/dashboard/manifest.json` | Tells Hermes to mount `plugin_api.py`; `dist/index.js` is a stub for the browser dashboard |
 | `tests/api_sandbox.py`, `tests/profile_backend.py`, `tests/tokens_sandbox.py`, `tests/features_sandbox.py`, `tests/insights_sandbox.py`, `tests/setup_sandbox.py`, `tests/codex_sandbox.py`, `tests/wake_privacy_sandbox.py`, `tests/parked_usage_sandbox.py`, `tests/ui/` | Backend tests in a sandbox (actions and the page's sign-ins, Codex browser and device code included; backend launched under a profile; token counting; the tracker check, tokens per session, bot alerts, the activity log and the forecast; tokens per bot and model, API prices, the hour chart, the daily summary and park schedules; `setup`, the terminal's Codex sign-in and the refusals without a terminal; Codex identity, usage, park, parked-token refresh and balance; the timer's `all balance` and the daily summary of an idle provider; `wake` and automatic wake for both providers, email masking in the output, alerts and routes), and the page in jsdom |
+| `tests/windows_sandbox.py` | The Windows code on any system: `core.WINDOWS` switched on, `winsys.run` replaced by a stand-in Task Scheduler that keeps the task XML. With `HAP_REAL_WINDOWS=1` on Windows it uses the real Task Scheduler and waits for the task's first run |
+| `tests/run_all.py` | Runs every sandbox test, each in its own throwaway Hermes home, on Linux, macOS or Windows |
+| `.github/workflows/tests.yml` | Installs Hermes on a Windows and a Linux runner and runs the tests, `install.ps1` and `uninstall.ps1` (started by hand) |
 | `tests/ui/fixture_api.py`, `tests/ui/screenshots.mjs` | A backend that answers from `tests/ui/fixtures.json`, and the script that takes `docs/screenshots/` from a Hermes Desktop running it |
 | `plugins/account-pool-tracker/` | The `post_api_request` hook behind `who`, with its own `README.md` |
-| `install.sh`, `uninstall.sh` | Install and remove from a git checkout. `install.sh` copies the plugins and runs `hermes account <provider> setup --yes`; the systemd units are written by `setup` (`_write_timer`) |
+| `install.sh`, `uninstall.sh`, `install.ps1`, `uninstall.ps1` | Install and remove from a git checkout, on Linux (bash) and Windows (PowerShell). The install scripts copy the plugins and run `hermes account <provider> setup --yes`; the systemd units or the Task Scheduler task are written by `setup` (`_write_timer`, `_timer_on`) |
 | `docs/make_doc.py` | Generates `docs/hermes-account-pool.pdf` (Indonesian guide) |
 
 ## Adding a provider adapter
@@ -194,11 +198,28 @@ SB=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" hap-sandbox.XXXX)
 HERMES_HOME=$SB ~/.hermes/hermes-agent/venv/bin/python tests/parked_usage_sandbox.py
 rm -rf "$SB"
 
+# the Windows code: Task Scheduler task, balance.cmd/.vbs, notifications, junctions, doctor
+# (own sandbox; a stand-in Task Scheduler, so it runs on Linux too)
+SB=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" hap-sandbox.XXXX)
+HERMES_HOME=$SB ~/.hermes/hermes-agent/venv/bin/python tests/windows_sandbox.py
+rm -rf "$SB"
+
 # the page in jsdom, every tab, dialog and button, answered from tests/ui/fixtures.json
 node tests/ui/run.mjs
 ```
 
+All sandbox tests in one go, each in its own sandbox, on any system:
+
+```bash
+~/.hermes/hermes-agent/venv/bin/python tests/run_all.py                 # Linux and macOS
+& "$env:LOCALAPPDATA\hermes\hermes-agent\venv\Scripts\python.exe" tests\run_all.py   # Windows, PowerShell
+```
+
+On Windows, `$env:HAP_REAL_WINDOWS = "1"` before `tests\run_all.py windows_sandbox` uses the real Task Scheduler: it registers the task **Hermes Account Balance** for the sandbox, waits for its first run and deletes it again. Do that only when you have no real timer installed, because the task name is the same.
+
 `tests/ui/run.mjs` borrows React, jsdom and Testing Library from the `node_modules` of your Hermes Agent checkout (`~/.hermes/hermes-agent`, or set `HERMES_AGENT_DIR`). All of them print one line per check and exit 1 on a failure.
+
+Windows-specific code must keep working when tested on Linux: route every Windows tool through `winsys.run()` (or a function the test can replace), check `WINDOWS` rather than `os.name` in the core, and read and write text files with `encoding="utf-8"`, because Windows' default encoding is the local code page.
 
 Testing `install.sh`, `setup --timer` or `uninstall.sh` in a sandbox needs care: `HERMES_HOME` isolates the plugins and configs, but systemd user services do not follow it. Set `XDG_CONFIG_HOME=$SB/xdg` so the unit files go into the sandbox, and run `install.sh --no-timer` and `uninstall.sh` only as a copy without its `systemctl` lines, or they start, stop or disable your real timer. Do not run `hermes plugins enable` or `hermes account ... add` in an empty `HERMES_HOME`: Hermes' first-run bootstrap waits there. Copy a `config.yaml` in first, as `tests/setup_sandbox.py` does.
 

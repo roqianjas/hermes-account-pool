@@ -3782,6 +3782,7 @@
  "/notify?provider=anthropic": {
   "desktop": true,
   "notify_send": true,
+  "desktop_via": "notify-send",
   "telegram": true,
   "telegram_setting": "auto",
   "via": "default",
