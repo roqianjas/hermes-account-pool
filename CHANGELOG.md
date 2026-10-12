@@ -2,6 +2,14 @@
 
 All releases of the `account-pool` plugin and its session tracker `account-pool-tracker` (now 1.5.0).
 
+## 3.12.1
+
+`setup` and `doctor` no longer need PyYAML.
+
+- Hermes 0.21.6 and later read YAML with their own module (`hermes_yaml`, on ruamel) and no longer install PyYAML. On a fresh install, for example on Windows, `hermes account <provider> setup` stopped with `ModuleNotFoundError: No module named 'yaml'`. The plugin now reads `config.yaml` through `hermes_yaml` and falls back to PyYAML only on older Hermes releases. Installs that happened to have PyYAML through another package were not affected.
+- `config.yaml` is read as UTF-8 whatever the system's locale encoding is.
+- Tests: `tests/setup_sandbox.py` 50 → 53 checks (setup, the plugin lists and the strategies with `import yaml` failing).
+
 ## 3.12.0
 
 The Wake dialog gets a select-all box and a model list from the provider.

@@ -234,6 +234,21 @@ def _hermes_env() -> dict:
     return env
 
 
+def _read_yaml(path: Path) -> dict:
+    """A profile's config.yaml as a dict; {} when it is missing or cannot be read. Hermes 0.21.6 and later
+    read YAML with their own module (hermes_yaml, on ruamel) and no longer install PyYAML, so PyYAML is
+    only the fallback for older Hermes releases."""
+    try:
+        from hermes_yaml import safe_load
+    except ImportError:
+        from yaml import safe_load
+    try:
+        data = safe_load(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def _atomic_json(path: Path, data) -> None:
     tmp = path.with_suffix(".tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -1576,14 +1591,10 @@ def _profile_homes() -> list:
 
 def _strategies(provider: str) -> list:
     """[(profile, value of credential_pool_strategies.<provider> or None when unset)]."""
-    import yaml
     out = []
     for name, home in _profile_homes():
-        try:
-            cfg = yaml.safe_load((home / "config.yaml").read_text()) or {}
-        except Exception:
-            cfg = {}
-        value = (cfg.get("credential_pool_strategies") or {}).get(provider) if isinstance(cfg, dict) else None
+        strategies = _read_yaml(home / "config.yaml").get("credential_pool_strategies")
+        value = strategies.get(provider) if isinstance(strategies, dict) else None
         out.append((name, str(value) if value else None))
     return out
 
@@ -1781,7 +1792,6 @@ def _tracker_who(g: dict) -> str:
 
 def _doctor_checks(provider: str) -> list:
     """[(level, text)] with level ok / warn / fail. Probes the usage endpoint once."""
-    import yaml
     root = _root()
     checks = []                                    # (level, text) level: ok / warn / fail
 
@@ -1816,11 +1826,7 @@ def _doctor_checks(provider: str) -> list:
     # tracker plugin per profile
     missing = []
     for name, home in profiles:
-        try:
-            cfg = yaml.safe_load((home / "config.yaml").read_text()) or {}
-        except Exception:
-            cfg = {}
-        enabled = ((cfg.get("plugins") or {}).get("enabled")) or []
+        enabled = _plugin_lists(home)[0]
         if "account-pool-tracker" not in enabled or not (home / "plugins" / "account-pool-tracker").exists():
             missing.append(name)
     add("ok" if not missing else "warn",
@@ -1847,12 +1853,8 @@ def _doctor_checks(provider: str) -> list:
     if (root / "desktop-plugins" / "account-pool").is_dir():
         missing = []
         for name, home in profiles:
-            try:
-                cfg = yaml.safe_load((home / "config.yaml").read_text()) or {}
-            except Exception:
-                cfg = {}
-            plugins = cfg.get("plugins") or {}
-            if "account-pool" not in (plugins.get("enabled") or []) or "account-pool" in (plugins.get("disabled") or []):
+            enabled, disabled = _plugin_lists(home)
+            if "account-pool" not in enabled or "account-pool" in disabled:
                 missing.append(name)
         add("ok" if not missing else "warn",
             "Accounts page backend enabled in every profile" if not missing else
@@ -3178,12 +3180,7 @@ def _run_hermes(profile: str, *args: str) -> None:
 
 def _plugin_lists(home: Path) -> tuple:
     """(plugins.enabled, plugins.disabled) of one profile's config.yaml."""
-    import yaml
-    try:
-        cfg = yaml.safe_load((home / "config.yaml").read_text()) or {}
-    except Exception:
-        cfg = {}
-    plugins = cfg.get("plugins") if isinstance(cfg, dict) else None
+    plugins = _read_yaml(home / "config.yaml").get("plugins")
     plugins = plugins if isinstance(plugins, dict) else {}
 
     def names(v):

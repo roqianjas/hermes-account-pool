@@ -16,7 +16,7 @@ from reportlab.platypus import (CondPageBreak, Image, KeepTogether, PageBreak, P
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 from reportlab.platypus.tableofcontents import TableOfContents
 
-VERSION = "3.12.0"
+VERSION = "3.12.1"
 REPO = "github.com/roqianjas/hermes-account-pool"
 FOOTER = f"Hermes plugin account-pool {VERSION} · {REPO}"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hermes-account-pool.pdf")
@@ -1464,6 +1464,9 @@ table([
     [C("usage") + ": n/a (rate-limited) atau \"last known\"", "Endpoint pengukur pemakaian dipanggil sangat sering "
      "(oleh plugin, aplikasi pemantau lain, atau model picker Hermes Desktop). Ini bukan kuota model Anda.",
      "Tunggu beberapa menit. Bot tidak terpengaruh; balance menaruh akun tanpa data di belakang"],
+    [C("setup") + "/" + C("doctor") + ": " + C("No module named 'yaml'"), "Plugin 3.12.0 atau lebih lama di Hermes "
+     "0.21.6 ke atas, yang tidak lagi memasang PyYAML", C("hermes plugins update account-pool") + " (3.12.1), lalu "
+     + C("setup") + " lagi"],
     ["Login: \"Sign in again to continue\"", "Login di browser sudah lama (kebijakan Anthropic)", "Klik, login ulang sebagai akun yang sama"],
     [C("add") + ": discarded", "Browser login sebagai akun lain, atau akun yang sudah ada di pool",
      "Pakai profil Chrome akun itu atau jendela private baru, lalu " + C("add") + " lagi"],
@@ -1687,6 +1690,10 @@ table([
 H1("19. Riwayat versi")
 table([
     ["Versi", "Perubahan"],
+    ["3.12.1", C("setup") + " dan " + C("doctor") + " tidak lagi butuh PyYAML. Hermes 0.21.6 ke atas membaca YAML "
+     "dengan modulnya sendiri dan tidak lagi memasang PyYAML, jadi di instalasi baru (misalnya di Windows) "
+     + C("setup") + " berhenti dengan " + C("No module named 'yaml'") + ". " + C("config.yaml") + " dibaca "
+     "sebagai UTF-8."],
     ["3.12.0", "Dialog Wake: kotak <b>pilih semua</b> di kepala tabel (centang semua akun yang bisa dibangunkan, "
      "atau kosongkan), dan pesan bila semua jendela sedang berjalan. Model wake dipilih dari daftar model akun yang "
      "diambil dari provider (tanpa kuota, disimpan, dibaca ulang paling cepat tiap 6 jam), dengan kolom teks bila "

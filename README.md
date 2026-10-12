@@ -2,7 +2,7 @@
 
 Run several accounts of one provider in [Hermes Agent](https://hermes-agent.nousresearch.com/docs) and manage them from one command, `hermes account`, or from an Accounts page in Hermes Desktop. Add accounts with a verified email, see live usage per account, spread the load before an account runs out, start an idle account's 5-hour window early, park accounts for a while or on a weekly schedule, see which bot is on which account and how many tokens each bot uses, mask the emails for a screenshot, and get an alert or a daily summary.
 
-Version 3.12.0 · MIT · Hermes Agent ≥ 0.21.5 · Linux with systemd · Indonesian PDF guide in [`docs/`](docs/hermes-account-pool.pdf)
+Version 3.12.1 · MIT · Hermes Agent ≥ 0.21.5 · Linux with systemd · Indonesian PDF guide in [`docs/`](docs/hermes-account-pool.pdf)
 
 ![The Accounts page in Hermes Desktop: eight accounts in rotation with their 5-hour usage, the bots on each account, two parked accounts with their reset times, two park schedules and the forecast](docs/screenshots/accounts.png)
 
@@ -1090,6 +1090,7 @@ There is no telemetry, no update check and no other host. Opening the page or sw
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `usage` shows `n/a (usage endpoint rate-limited ...)` or `last known` | The usage endpoint was queried very often in a short time (by this plugin, other usage tools, or Hermes Desktop's model picker). This is the measuring endpoint, not your model quota. | Wait a few minutes. Bots are not affected, and `balance` keeps accounts without data after the others. |
+| `setup` or `doctor` stops with `ModuleNotFoundError: No module named 'yaml'` | Plugin 3.12.0 or older on Hermes 0.21.6 or later, which no longer installs PyYAML | `hermes plugins update account-pool` (3.12.1 reads YAML with Hermes' own module), then run `setup` again |
 | Sign-in page says "Sign in again to continue" | The browser's login is old (Anthropic policy) | Click it and sign in as the same account |
 | `add` says `discarded` | The browser was signed in as another account, or as one already in the pool | Use that account's own Chrome profile or a fresh private window, then run `add` again |
 | `Cancelled (Ctrl+C). Nothing was added.` | You pressed Ctrl+C during sign-in | Expected. Run `add` again when ready. |

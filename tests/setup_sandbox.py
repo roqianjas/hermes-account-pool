@@ -27,7 +27,10 @@ SB = Path(HOME)
 os.environ["XDG_CONFIG_HOME"] = str(SB / "xdg")
 sys.path.insert(0, os.environ.get("HERMES_AGENT_DIR", str(Path.home() / ".hermes" / "hermes-agent")))
 
-import yaml  # noqa: E402
+try:                                     # Hermes 0.21.6+ ships hermes_yaml and no PyYAML
+    from hermes_yaml import safe_dump as yaml_dump, safe_load as yaml_load  # noqa: E402
+except ImportError:
+    from yaml import safe_dump as yaml_dump, safe_load as yaml_load  # noqa: E402
 from agent.credential_pool import PooledCredential, load_pool  # noqa: E402
 
 PLUGINS = Path(__file__).resolve().parent.parent / "plugins"
@@ -89,7 +92,7 @@ def run(handler, provider="anthropic", **kw):
 
 def cfg(name):
     home = SB if name == "default" else SB / "profiles" / name
-    return yaml.safe_load((home / "config.yaml").read_text()) or {}
+    return yaml_load((home / "config.yaml").read_text(encoding="utf-8")) or {}
 
 
 def enabled(name):
@@ -98,7 +101,7 @@ def enabled(name):
 
 def write_cfg(home, data):
     home.mkdir(parents=True, exist_ok=True)
-    (home / "config.yaml").write_text(yaml.safe_dump(data))
+    (home / "config.yaml").write_text(yaml_dump(data), encoding="utf-8")
 
 
 write_cfg(SB, {"plugins": {"enabled": ["account-pool"]}})
@@ -327,6 +330,23 @@ try:
     print(f"info - this Hermes has the Codex browser sign-in: {core._codex_browser_signin()}")
 finally:
     builtins.input = real_input
+
+# A fresh Hermes 0.21.6+ install has no PyYAML (Hermes reads YAML with hermes_yaml): setup and doctor's profile
+# checks must not need it. sys.modules[name] = None makes `import yaml` raise ImportError.
+saved_yaml = sys.modules.get("yaml")
+sys.modules["yaml"] = None
+try:
+    core._tty = lambda: False                # any Continue? prompt is answered no at once
+    lists = core._plugin_lists(SB)
+    check(lists[0] == [str(x) for x in enabled("default")] and lists[0], "config.yaml is read without PyYAML")
+    check(isinstance(core._strategies("anthropic"), list), "strategies are read without PyYAML")
+    rc, text = run(core._cmd_setup, provider="anthropic", yes=False, timer=False, strategy=False, undo=False)
+    check(rc in (0, 1) and "Traceback" not in text and "yaml" not in text.lower(), "setup runs without PyYAML")
+finally:
+    if saved_yaml is None:
+        sys.modules.pop("yaml", None)
+    else:
+        sys.modules["yaml"] = saved_yaml
 
 print(f"\n{len(failures)} failure(s)")
 sys.exit(1 if failures else 0)
