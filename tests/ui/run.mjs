@@ -85,9 +85,11 @@ async function rest(path, opts = {}) {
     return { ok: true, rc: 0, output: `${b.action} done for ${b.target}` }
   }
   if (path === '/signin/start') {
+    if (b.method === 'browser' && b.target === 'busy@example.com')   // Hermes fell back to a device code
+      return { flow: 'F2', kind: 'device', url: 'https://auth.example/device', user_code: 'ABCD-1234', label: b.target, mode: b.mode, verify: true, expires_in: 900, notice: 'Port 1455 on this computer is taken (another Codex sign-in may be waiting, maybe in a terminal), so Hermes signs in with a code instead.' }
     if (b.method === 'browser') {
       const deny = b.target === 'deny@example.com'
-      return { flow: deny ? 'F4' : 'F3', kind: 'browser', url: 'https://auth.openai.com/oauth/authorize?x=' + (deny ? 4 : 3), user_code: null, listening: !deny, label: b.target, mode: b.mode, verify: true, expires_in: 900 }
+      return { flow: deny ? 'F4' : 'F3', kind: 'browser', url: 'https://auth.openai.com/oauth/authorize?x=' + (deny ? 4 : 3), user_code: null, listening: true, label: b.target, mode: b.mode, verify: true, expires_in: 900, notice: null }
     }
     if (b.provider === 'openai-codex' || b.mode === 'relogin')
       return { flow: 'F2', kind: 'device', url: 'https://auth.example/device', user_code: 'ABCD-1234', label: b.target, mode: b.mode, verify: true, expires_in: 900 }
@@ -379,8 +381,6 @@ await click(screen.getByText('Close'))
 await click(screen.getAllByText('Add account')[0].closest('button'))
 await act(async () => { fireEvent.change(document.querySelector('input[placeholder="name@example.com"]'), { target: { value: 'deny@example.com' } }) })
 await click(screen.getByText('Start sign-in'))
-await screen.findByText(/Port 1455 on this computer is taken/)
-ok(true, 'busy port: the page asks for the address')
 await screen.findByText(/OpenAI refused the sign-in/, {}, { timeout: 5000 })
 ok(screen.getByText('Start sign-in') && document.querySelector('input[placeholder="name@example.com"]').value === 'deny@example.com',
   'a refused sign-in goes back to the start, email kept')
@@ -392,6 +392,13 @@ ok(lastPost('/signin/start').body.method === 'device' && screen.getByText(/sign 
   'device code sign-in with the workspace hint')
 await click(screen.getByText('Cancel'))
 ok(lastPost('/signin/cancel')?.body.flow === 'F2', 'cancel ends the device sign-in')
+await click(screen.getAllByText('Add account')[0].closest('button'))
+await act(async () => { fireEvent.change(document.querySelector('input[placeholder="name@example.com"]'), { target: { value: 'busy@example.com' } }) })
+await click(screen.getByText('Start sign-in'))
+await screen.findByText('ABCD-1234')
+ok(lastPost('/signin/start').body.method === 'browser' && /Port 1455 on this computer is taken/.test(document.querySelector('[data-notice="signin"]')?.textContent || ''),
+  'busy callback port: Hermes signs in with a device code and the page says why')
+await click(screen.getByText('Cancel'))
 cleanup()
 
 // a profile that does not use fill_first -> banner with the fix
@@ -601,6 +608,36 @@ await click(screen.getByLabelText(/^Emails are masked/))
 await waitFor(() => ok(lastPost('/privacy')?.body.on === false && document.body.textContent.includes('alice@example.com'),
   'the eye button turns masking off again'))
 cleanup()
+
+// Telegram: the bot's home channel, and a warning when the bot has none
+store.provider = 'anthropic'
+const savedNotify = fx['/notify?provider=anthropic']
+fx['/notify?provider=anthropic'] = { ...savedNotify, telegram_home: false, telegram_chat: null }
+mount('page')
+await click(await screen.findByText('Alerts'))
+await screen.findByText('Desktop notifications')
+ok(screen.getByText(/To the bot's home channel \(send \/sethome/) && /no home channel yet/.test(document.querySelector('[data-telegram-home]')?.textContent || ''),
+  'telegram: the home channel is named, and a missing one is warned about')
+cleanup()
+fx['/notify?provider=anthropic'] = { ...savedNotify, telegram_home: null, telegram_chat: '123456' }
+mount('page')
+await click(await screen.findByText('Alerts'))
+await screen.findByText('Desktop notifications')
+ok(screen.getByText(/To chat 123456/) && !document.querySelector('[data-telegram-home]'), 'telegram: a chat set with telegram-to= is named')
+cleanup()
+fx['/notify?provider=anthropic'] = savedNotify
+
+// a parked account removed from the pool outside account-pool
+const savedParked = fx['/status?provider=anthropic'].parked
+fx['/status?provider=anthropic'].parked = savedParked.map((r, i) => i === 0 ? { ...r, gone: true, usage: null } : r)
+mount('page')
+await click(await screen.findByText('Accounts', { selector: 'button' }))
+await screen.findByText('Next session starts on')
+const rowOf = label => [...document.querySelectorAll('tbody tr')].find(tr => tr.textContent.includes(label) && tr.textContent.includes('when unparked'))
+ok(/not in the pool/.test(rowOf(savedParked[0].label)?.textContent || '') && !/not in the pool/.test(rowOf(savedParked[1].label)?.textContent || ''),
+  'a parked account that left the pool is flagged, the others are not')
+cleanup()
+fx['/status?provider=anthropic'].parked = savedParked
 
 // status bar chip
 mount('chip')

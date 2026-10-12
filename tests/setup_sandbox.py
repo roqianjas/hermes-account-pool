@@ -1,13 +1,13 @@
-"""`hermes account <provider> setup` (profiles, tracker, timer) and the no-terminal refusals, in a throwaway
-Hermes home.
+"""`hermes account <provider> setup` (profiles, session tracking, the retired tracker, timer) and the
+no-terminal refusals, in a throwaway Hermes home.
 
     SB=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" hap-sandbox.XXXX)
     HERMES_HOME=$SB ~/.hermes/hermes-agent/venv/bin/python tests/setup_sandbox.py
     rm -rf "$SB"
 
 systemd is not isolated by HERMES_HOME, so `systemctl` is replaced by a recorder and the unit files go to
-$SB/xdg (XDG_CONFIG_HOME). `hermes plugins enable` is replaced by the same config write it makes, so no
-second Hermes starts. Refuses to run against a Hermes home under ~/.hermes.
+$SB/xdg (XDG_CONFIG_HOME). `hermes plugins remove` is replaced by what it does (delete the folder, forget
+the name), so no second Hermes starts. Refuses to run against a Hermes home under ~/.hermes.
 """
 import builtins
 import contextlib
@@ -61,12 +61,10 @@ def fake_systemctl(*args):
 
 def fake_hermes(profile, *args):
     HERMES.append((profile, args))
-    assert args[:2] == ("plugins", "enable"), args
+    assert args[:2] == ("plugins", "remove"), args
     home = SB if profile == "default" else SB / "profiles" / profile
-    enabled, disabled = core._plugin_lists(home)
-    if args[2] in disabled:
-        core._set_config_value(home, "plugins.disabled", json.dumps([n for n in disabled if n != args[2]]))
-    core._set_enabled(home, args[2], True)
+    shutil.rmtree(home / "plugins" / args[2])
+    core._set_enabled(home, args[2], False)
 
 
 core._systemctl = fake_systemctl
@@ -105,14 +103,20 @@ def write_cfg(home, data):
     (home / "config.yaml").write_text(yaml_dump(data), encoding="utf-8")
 
 
-write_cfg(SB, {"plugins": {"enabled": ["account-pool"]}})
-write_cfg(SB / "profiles" / "w1", {"model": {"default": "x"}})
+# an install from before 4.0: the separate account-pool-tracker plugin, enabled in default and linked into w1
+write_cfg(SB, {"plugins": {"enabled": ["account-pool", "account-pool-tracker"]}})
+write_cfg(SB / "profiles" / "w1", {"model": {"default": "x"}, "plugins": {"enabled": ["account-pool-tracker"]}})
 write_cfg(SB / "profiles" / "w2", {"plugins": {"disabled": ["account-pool"]}})
 write_cfg(SB / "profiles" / "w3", {"plugins": {"enabled": ["foo"], "disabled": ["account-pool-tracker"]},
                                    "credential_pool_strategies": {"anthropic": "round_robin"}})
-TRACKER = SB / "plugins" / "account-pool-tracker"
-shutil.copytree(PLUGINS / "account-pool-tracker", TRACKER, ignore=shutil.ignore_patterns("__pycache__"))
-link = {n: SB / "profiles" / n / "plugins" / "account-pool-tracker" for n in ("w1", "w2", "w3")}
+OLD_TRACKER = SB / "plugins" / "account-pool-tracker"
+OLD_TRACKER.mkdir(parents=True)
+(OLD_TRACKER / "plugin.yaml").write_text("name: account-pool-tracker\nversion: 1.5.1\n", encoding="utf-8")
+(OLD_TRACKER / "__init__.py").write_text("VERSION = '1.5.1'\n", encoding="utf-8")
+old_link = SB / "profiles" / "w1" / "plugins" / "account-pool-tracker"
+old_link.parent.mkdir(parents=True)
+old_link.symlink_to(OLD_TRACKER, target_is_directory=True)
+link = {n: SB / "profiles" / n / "plugins" / "account-pool" for n in ("w1", "w2", "w3")}
 UNITS = SB / "xdg" / "systemd" / "user"
 
 # ── the plan, without a terminal and without --yes: nothing changes ─────────
@@ -121,28 +125,38 @@ check(rc == 1 and "Changes:" in text and "no terminal to answer, so no" in text 
       "setup shows the plan; without a terminal and without --yes it changes nothing")
 check("list account-pool in plugins.enabled of w1" in text and "of w3" in text and "of w2" not in text
       and "skipped, in plugins.disabled: w2" in text, "page backend: listed where missing, a profile that disabled it is skipped")
-check("enable the session tracker in the default profile" in text and "link the session tracker into w1" in text
-      and "enable the session tracker in w3 (it is in plugins.disabled there now)" in text,
-      "tracker: default enable, link per profile, a disabled one is named")
+check("link account-pool into w1" in text and "link account-pool into w3" in text and "into w2" not in text
+      and "active in 1 of 4 profile(s); not in w2" in text,
+      "session tracking: account-pool linked into each profile, not where it is disabled")
+check("remove the retired account-pool-tracker from w1" in text and "from w3" not in text
+      and "remove the retired account-pool-tracker plugin from the default profile" in text,
+      "the retired tracker: its link in w1 and the plugin in default are planned for removal")
 check("add --timer to balance anthropic (and every other provider with accounts) every 5 minutes" in text
       and "not fill_first in w3; add --strategy to set it" in text, "timer and strategy are only offered")
-check(enabled("w1") == [] and not link["w1"].exists() and not CALLS and not HERMES, "nothing was written")
+check(enabled("w1") == ["account-pool-tracker"] and not link["w1"].exists() and old_link.is_symlink()
+      and OLD_TRACKER.is_dir() and not CALLS and not HERMES, "nothing was written")
 
 # ── --yes applies it ─────────────────────────────────────────────────────────
 rc, text = run(core._cmd_setup, yes=True)
-check(rc == 0 and text.count("  done: ") == 9 and "FAILED" not in text, "setup --yes applies every step")
-check(enabled("w1") == ["account-pool", "account-pool-tracker"] and enabled("w3") == ["foo", "account-pool", "account-pool-tracker"]
-      and enabled("w2") == ["account-pool-tracker"] and "account-pool-tracker" in enabled("default"),
-      "plugins.enabled per profile, other entries kept, w2 still without account-pool")
-check(all(link[n].is_symlink() and link[n].resolve() == TRACKER.resolve() for n in link), "tracker links point at the default copy")
-check((cfg("w3").get("plugins") or {}).get("disabled") == [], "enabling the tracker in w3 took it off plugins.disabled")
+check(rc == 0 and text.count("  done: ") == 6 and "FAILED" not in text, "setup --yes applies every step")
+check(enabled("w1") == ["account-pool"] and enabled("w3") == ["foo", "account-pool"] and enabled("w2") == []
+      and enabled("default") == ["account-pool"],
+      "plugins.enabled per profile, other entries kept, w2 still without account-pool, the old tracker unlisted")
+check(all(link[n].is_symlink() and link[n].resolve() == core.PLUGIN_DIR for n in ("w1", "w3"))
+      and not link["w2"].exists(), "the account-pool links point at the default copy")
+check(not old_link.is_symlink() and not old_link.exists() and not OLD_TRACKER.exists()
+      and HERMES == [("default", ("plugins", "remove", "account-pool-tracker"))],
+      "the retired tracker is gone: its link in w1 and, through `hermes plugins remove`, the default copy")
+check((cfg("w3").get("plugins") or {}).get("disabled") == ["account-pool-tracker"],
+      "plugins.disabled is left as it was")
 check(cfg("w3")["credential_pool_strategies"]["anthropic"] == "round_robin" and not CALLS,
       "without --strategy / --timer neither the strategy nor systemd is touched")
 acts = core._read_activity("anthropic", 0)
-check(len([a for a in acts if a["kind"] == "setup"]) == 9 and all(a["by"] == "cli" for a in acts),
+check(len([a for a in acts if a["kind"] == "setup"]) == 6 and all(a["by"] == "cli" for a in acts),
       "each step is in the activity log")
 rc, text = run(core._cmd_setup, yes=True)
-check(rc == 0 and "Nothing to change." in text and "active in 4 of 4 profile(s)" in text, "a second run changes nothing")
+check(rc == 0 and "Nothing to change." in text and "active in 3 of 4 profile(s); not in w2" in text,
+      "a second run changes nothing")
 
 # ── which hermes the unit runs: the one the user installed, not Hermes' internal launcher ──
 import tempfile  # noqa: E402
@@ -225,29 +239,23 @@ svc = (UNITS / "hermes-account-balance.service").read_text()
 check(rc == 0 and list(core._timer_lines()) == ["anthropic"] and ("daemon-reload",) in CALLS
       and "it then runs anthropic only" in text and "account anthropic balance --threshold 85\n" in svc,
       "undo for one provider keeps the timer for the others, one line each, options kept")
-(SB / "account-pool-parked.json").write_text(json.dumps({"parked": [{"_provider": "anthropic", "id": "pk0001",
-                                                                       "label": "dave@example.com"}]}))
+(SB / "account-pool-parking.json").write_text(json.dumps({"version": 4, "parked": [
+    {"_provider": "anthropic", "id": "pk0001", "label": "dave@example.com"}]}))
 rc, text = run(core._cmd_setup, undo=True, yes=True)
-(SB / "account-pool-parked.json").unlink()
-check(rc == 0 and not any(link[n].exists() or link[n].is_symlink() for n in link), "undo removes the tracker links")
+(SB / "account-pool-parking.json").unlink()
+check(rc == 0 and not any(link[n].exists() or link[n].is_symlink() for n in link)
+      and core.PLUGIN_DIR.is_dir(), "undo removes the account-pool links, never what they point at")
 check(enabled("w1") == [] and enabled("w3") == ["foo"] and enabled("w2") == []
-      and (cfg("w3").get("plugins") or {}).get("disabled") == [], "undo takes both names off plugins.enabled, adds nothing to disabled")
+      and (cfg("w3").get("plugins") or {}).get("disabled") == ["account-pool-tracker"],
+      "undo takes account-pool off plugins.enabled, adds nothing to disabled")
 check(not (UNITS / "hermes-account-balance.service").exists() and not (UNITS / "hermes-account-balance.timer").exists()
       and ("disable", "--now", "hermes-account-balance.timer") in CALLS, "undo removes the timer when no provider is left")
-check("account-pool-tracker" in enabled("default") and TRACKER.is_dir() and "Kept:" in text,
-      "the plugins in the default profile stay")
-check("1 anthropic account(s) are parked and stay out of rotation: dave@example.com" in text,
-      "undo names the parked accounts that would stay out of rotation")
+check(enabled("default") == ["account-pool"] and "Kept:" in text, "account-pool in the default profile stays")
+check("1 anthropic account(s) are parked and stay out of rotation: dave@example.com" in text
+      and "up to 30 days" in text, "undo names the parked accounts and how long Hermes holds them")
 rc, text = run(core._cmd_setup, undo=True, yes=True)
 check(rc == 0 and "Nothing to change." in text, "undo twice: nothing to change")
 core._pool_providers = real_pool_providers
-
-# ── no tracker installed ─────────────────────────────────────────────────────
-shutil.move(str(TRACKER), str(SB / "tracker.off"))
-rc, text = run(core._cmd_setup)
-check("not installed" in text and "hermes plugins install account-pool-tracker" in text
-      and "link the session tracker" not in text, "without the tracker: install hint, no tracker steps")
-shutil.move(str(SB / "tracker.off"), str(TRACKER))
 
 # ── no systemd ───────────────────────────────────────────────────────────────
 real_which = core.shutil.which

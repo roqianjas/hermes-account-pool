@@ -6,6 +6,8 @@ from ../__init__.py, so the page and `hermes account` always agree.
 
 Rules this file keeps:
   * No route returns a token. Rows carry label, id, state and numbers only.
+  * No login is handled here: Add account and Sign in again run Hermes' own
+    `hermes auth add` and relay its link and the pasted code (see ../signin.py).
   * Reading the page costs no network call: usage comes from the history the
     balance timer writes every 5 minutes. Only the buttons call providers, and
     live usage is limited to one refresh per provider every 2 minutes, because
@@ -59,7 +61,7 @@ providers = core.providers
 _LOCK = threading.Lock()                 # core functions share module state: one action at a time
 _LIVE: dict[str, dict] = {}              # provider -> {"ts", "rows"} from the last live refresh
 _NET: dict[str, float] = {}              # provider -> time of the last balance/check from this page
-_FLOWS: dict[str, dict] = {}             # sign-in flows; the PKCE/device state never leaves the server
+_FLOWS: dict[str, dict] = {}             # running `hermes auth add` relays, by flow id
 _TIMER: dict[str, Any] = {"ts": 0.0, "data": None}
 
 
@@ -218,8 +220,8 @@ def _rotation_mode(provider: str) -> dict:
 def _status(provider: str) -> dict:
     ad = providers.get(provider)
     pool = core._pool(provider)
-    entries = sorted(pool.entries(), key=lambda e: e.priority)
-    parked = [p for p in core._read_parked() if p["_provider"] == provider]
+    entries = core._rotation(provider, pool)
+    parked = core._parked_entries(provider, pool)
     now = time.time()
 
     hist = _history_tail(provider, 24) if ad.has_usage else []
@@ -292,11 +294,12 @@ def _status(provider: str) -> dict:
         rotation[-1]["tokens"] = tokens_for(e.label, rotation[-1]["usage"])
     parked_rows = [{
         "id": p.get("id"), "label": p.get("label", "?"), "since": p.get("_parked_at"),
-        "until": p.get("_until"), "dead": bool(p.get("_dead")), "auth": p.get("auth_type", ""), "by": p.get("_by"),
+        "until": p.get("_until"), "dead": e is not None and getattr(e, "last_status", None) == "dead",
+        "gone": e is None, "auth": getattr(e, "auth_type", "") or "", "by": p.get("_by"),
         "usage": usage_for(p.get("label", "?")), "spark": spark.get(p.get("label", "?"), []),
         "peak": peak.get(p.get("label", "?")),
         "window": window_for(p.get("label", "?")) if ad.has_usage else None,
-    } for p in parked]
+    } for p, e in parked]
     for row in parked_rows:
         row["tokens"] = tokens_for(row["label"], row["usage"])
     other_sessions = [s for a in who["accounts"] if a["label"] not in {e.label for e in entries}
@@ -311,7 +314,7 @@ def _status(provider: str) -> dict:
     return {
         "provider": provider, "providers": plist, "window": ad.window, "has_usage": ad.has_usage,
         "has_identity": ad.has_identity, "web_signin": ad.has_web_signin and core._oauth_provider(provider),
-        "signin_methods": list(getattr(ad, "signin_methods", ()) or ()),
+        "signin_methods": _signin_methods(provider),
         "rotation": rotation, "parked": parked_rows, "other_sessions": other_sessions,
         "sessions_active": who["count"], "who_minutes": WHO_MINUTES,
         "snapshot": {"ts": hist[-1]["ts"] if hist else None, "count": len(hist)},
@@ -382,13 +385,16 @@ def notify_status(provider: str = "anthropic"):
         p = _provider(provider)
         at = core._daily_at(core._config())
         cfg = core._config()
+        tgt = core._telegram_target(cfg)
         root = core._root()
         profiles = ["default"] + sorted(d.name for d in (root / "profiles").iterdir()
                                         if (d / "config.yaml").exists()) if (root / "profiles").is_dir() else ["default"]
         return {
             "desktop": bool(cfg["notify"].get("desktop")), "notify_send": core._desktop_channel()[0],
             "desktop_via": core._desktop_channel()[1],
-            "telegram": bool(core._telegram_target(cfg)), "telegram_setting": cfg["notify"].get("telegram"),
+            "telegram": bool(tgt), "telegram_setting": cfg["notify"].get("telegram"),
+            "telegram_chat": tgt.split(":", 1)[1] if tgt and ":" in tgt else None,
+            "telegram_home": core._telegram_home_set(cfg) if tgt == "telegram" else None,
             "via": cfg["notify"].get("telegram_via") or "default", "profiles": profiles,
             "alert_all_above": cfg.get("alert_all_above", 80),
             "daily": f"{at[0]:02d}:{at[1]:02d}" if at else None,
@@ -566,15 +572,43 @@ def doctor(body: dict):
 
 
 # ── sign-in from the page (add / relogin) ────────────────────────────────────
+# The page cannot type into a terminal, so the backend runs `hermes auth add` (the same command
+# `hermes account <provider> add` runs) and relays it: the sign-in link to the page, the pasted code
+# to the command. Hermes does the OAuth exchange and saves the account; no token passes through here.
+
+signin = core._load_module("account_pool_signin", "signin.py")
+
+
+def _signin_methods(provider: str) -> list:
+    methods = [m for m in (getattr(providers.get(provider), "signin_methods", ()) or ())
+               if m != "browser" or core._codex_browser_signin()]
+    return methods
+
 
 def _drop_flow(fid: str) -> None:
-    """Forget a sign-in and free what it holds (the browser method's listener on port 1455)."""
+    """Forget a sign-in: stop its `hermes auth add` (which frees a callback port it listens on) and remove
+    an account that command may have saved after the page gave up on it."""
     flow = _FLOWS.pop(fid, None)
-    if flow is not None:
-        try:
-            providers.get(flow["provider"]).signin_close(flow["state"])
-        except Exception:
-            pass
+    if flow is None:
+        return
+    relay = flow.get("relay")
+    if relay is not None:
+        running = relay.returncode() is None
+        relay.close()
+        if running and not flow.get("done"):
+            _drop_new(flow)
+
+
+def _drop_new(flow: dict) -> None:
+    try:
+        with _exclusive():
+            pool = core._pool(flow["provider"])
+            for e in [e for e in pool.entries() if e.id not in flow["before"] and e.label == flow["label"]]:
+                idx, _, _ = pool.resolve_target(e.id)
+                if idx is not None:
+                    pool.remove_index(idx)
+    except Exception:  # noqa: BLE001 - cleanup must never fail a request
+        pass
 
 
 def _expire_flows() -> None:
@@ -584,7 +618,8 @@ def _expire_flows() -> None:
 
 @router.post("/signin/start")
 def signin_start(body: dict):
-    """Start an OAuth sign-in for a new account (mode=add) or an existing one (mode=relogin)."""
+    """Start `hermes auth add` for a new account (mode=add) or an existing one (mode=relogin) and return
+    what the user needs: the sign-in link, and for a device sign-in the code to enter."""
     _expire_flows()
     p = _provider(body.get("provider"))
     mode = body.get("mode")
@@ -592,12 +627,12 @@ def signin_start(body: dict):
     ad = providers.get(p)
     if mode not in ("add", "relogin") or not target:
         raise HTTPException(400, "mode must be add or relogin, with a target.")
-    if not (ad.has_web_signin and core._oauth_provider(p)):
+    methods = _signin_methods(p)
+    if not (methods and core._oauth_provider(p)):
         raise HTTPException(400, f"Sign-in from the desktop is not available for {p}. "
                                  f"Use the terminal: hermes account {p} {mode} {target}")
-    methods = tuple(getattr(ad, "signin_methods", ()) or ())
-    method = body.get("method") or (methods[0] if methods else None)
-    if methods and method not in methods:
+    method = body.get("method") or methods[0]
+    if method not in methods:
         raise HTTPException(400, f"Sign-in method must be one of: {', '.join(methods)}.")
     flow = {"provider": p, "mode": mode, "created": time.time(), "verify": ad.has_identity}
     with _exclusive():
@@ -611,25 +646,29 @@ def signin_start(body: dict):
                 flow["label"], flow["old_id"], flow["old_priority"] = core._relogin_target(p, target)
         except SystemExit as x:
             raise HTTPException(400, _exit_text(x))
-    if method == "browser":                  # one listener per computer: an older browser sign-in gives way
+        flow["before"] = {e.id for e in core._pool(p).entries()}
+    if method == "browser":                  # one callback port per computer: an older browser sign-in gives way
         for fid in [k for k, v in _FLOWS.items() if v.get("kind") == "browser"]:
             _drop_flow(fid)
     try:
-        info = ad.signin_start(method)
+        relay, info = signin.start(core._signin_cmd(p, flow["label"], method), core._hermes_env(), method,
+                                   windows=core.WINDOWS, no_window=core.winsys.NO_WINDOW if core.WINDOWS else 0)
     except Exception as x:
-        raise HTTPException(502, f"Could not start the sign-in: {str(x)[:200] or type(x).__name__}")
-    flow.update(kind=info["kind"], state=info["state"], lock=threading.Lock())
+        raise HTTPException(502, f"Could not start the sign-in: {str(x)[:300] or type(x).__name__}")
+    flow.update(kind=info["kind"], relay=relay, lock=threading.Lock())
     fid = secrets.token_urlsafe(16)
     _FLOWS[fid] = flow
+    notice = ("Port 1455 on this computer is taken (another Codex sign-in may be waiting, maybe in a terminal), "
+              "so Hermes signs in with a code instead." if method == "browser" and info["kind"] == "device" else None)
     return {"flow": fid, "kind": info["kind"], "url": info["url"], "user_code": info.get("user_code"),
             "listening": info.get("listening"), "label": flow["label"], "mode": mode, "verify": flow["verify"],
-            "expires_in": SIGNIN_TTL}
+            "expires_in": SIGNIN_TTL, "notice": notice}
 
 
 @router.post("/signin/step")
 def signin_step(body: dict):
-    """Finish with a pasted code (kind=code, or the address a browser sign-in ended on), or check once
-    whether a device or browser sign-in finished. "final": the flow is gone, the page starts again."""
+    """Hand a pasted code (kind=code, or the address a browser sign-in ended on) to `hermes auth add`, or
+    check once whether a device or browser sign-in finished. "final": the flow is gone, the page starts again."""
     _expire_flows()
     fid = str(body.get("flow") or "")
     flow = _FLOWS.get(fid)
@@ -637,32 +676,45 @@ def signin_step(body: dict):
         return {"status": "error", "final": True, "message": "This sign-in expired or was cancelled. Start again."}
     if not flow["lock"].acquire(blocking=False):     # a poll and a pasted address at the same moment
         return {"status": "pending"}
+    relay = flow["relay"]
     try:
-        ad = providers.get(flow["provider"])
         try:
-            creds = ad.signin_step(flow["state"], str(body.get("code") or ""))
-        except Exception as x:
-            msg = str(x) if isinstance(x, ValueError) else f"Sign-in failed: {str(x)[:200] or type(x).__name__}"
-            final = bool(flow["state"].get("used"))
-            if final:
+            rc = signin.step(relay, str(body.get("code") or ""))
+        except ValueError as x:
+            return {"status": "error", "final": False, "message": str(x)}
+        except Exception as x:  # noqa: BLE001 - a broken pipe: the command already ended
+            rc = relay.returncode(wait=5)
+            if rc is None:
                 _drop_flow(fid)
-            return {"status": "error", "final": final, "message": msg}
-        if creds is None:
+                return {"status": "error", "final": True,
+                        "message": f"Sign-in failed: {str(x)[:200] or type(x).__name__}. Start again."}
+        if rc is None:
+            if flow["kind"] == "code" and str(body.get("code") or "").strip():
+                _drop_flow(fid)
+                return {"status": "error", "final": True,
+                        "message": "hermes auth add did not finish after the code. Start again."}
             return {"status": "pending"}
-        _drop_flow(fid)                              # tokens are single-use: never run the same flow twice
+        flow["done"] = True
+        _drop_flow(fid)
     finally:
         flow["lock"].release()
     p, label = flow["provider"], flow["label"]
+    if rc != 0:
+        _drop_new(flow)
+        reason = relay.tail() or f"exit code {rc}"
+        return {"status": "error", "final": True,
+                "message": f"Sign-in failed: {reason}. A code or link works once and only for a few minutes: "
+                           f"start again."}
     with _exclusive():
         with core._capture() as buf:
             try:
+                new = [e for e in core._pool(p).entries() if e.id not in flow["before"]]
+                if not new:
+                    raise SystemExit("hermes auth add finished, but no new account is in the pool. Start again.")
                 if flow["mode"] == "add":
-                    core._add_check(p, label)
-                    fresh = core._store_signin(p, label, creds)
-                    rc = core._accept_added(p, label, fresh, flow["verify"])
+                    rc = core._accept_added(p, label, new[0], flow["verify"])
                 else:
-                    fresh = core._store_signin(p, label, creds)
-                    rc = core._accept_relogin(p, label, flow["old_id"], flow["old_priority"], fresh)
+                    rc = core._accept_relogin(p, label, flow["old_id"], flow["old_priority"], new[0])
             except SystemExit as x:
                 core._p(_exit_text(x))
                 rc = 1

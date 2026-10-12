@@ -7,19 +7,20 @@ Bug reports, fixes and adapters for more providers are welcome. This page covers
 | Path | Content |
 |---|---|
 | `plugins/account-pool/__init__.py` | The `hermes account` command: argument parsing, every action, balance, alerts, history |
-| `plugins/account-pool/providers.py` | Provider adapters: usage, identity, parked-token refresh, page sign-in, wake |
+| `plugins/account-pool/providers.py` | Provider adapters: usage, identity, wake and its model list, the page's sign-in methods |
+| `plugins/account-pool/tracker.py` | The session tracker: the `post_api_request` hook behind `who`, `sessions` and the token counts. Registered in every profile |
+| `plugins/account-pool/signin.py` | **Add account** and **Sign in again** on the page: runs `hermes auth add` and relays its link, code and prompts |
 | `plugins/account-pool/winsys.py` | The Windows parts: the Task Scheduler task (`balance.cmd`, `balance.vbs`, task XML), Windows notifications, directory junctions. Every call to a Windows tool goes through `winsys.run()`, so tests can replace it |
 | `plugins/account-pool/plugin.yaml` | Plugin metadata and version |
 | `plugins/account-pool/desktop/plugin.js` | The Accounts page in Hermes Desktop (one ES module, no build step) |
 | `plugins/account-pool/dashboard/plugin_api.py` | The page's backend: FastAPI routes under `/api/plugins/account-pool/` |
 | `plugins/account-pool/dashboard/manifest.json` | Tells Hermes to mount `plugin_api.py`; `dist/index.js` is a stub for the browser dashboard |
-| `tests/api_sandbox.py`, `tests/profile_backend.py`, `tests/tokens_sandbox.py`, `tests/features_sandbox.py`, `tests/insights_sandbox.py`, `tests/setup_sandbox.py`, `tests/codex_sandbox.py`, `tests/wake_privacy_sandbox.py`, `tests/parked_usage_sandbox.py`, `tests/ui/` | Backend tests in a sandbox (actions and the page's sign-ins, Codex browser and device code included; backend launched under a profile; token counting; the tracker check, tokens per session, bot alerts, the activity log and the forecast; tokens per bot and model, API prices, the hour chart, the daily summary and park schedules; `setup`, the terminal's Codex sign-in and the refusals without a terminal; Codex identity, usage, park, parked-token refresh and balance; the timer's `all balance` and the daily summary of an idle provider; `wake` and automatic wake for both providers, email masking in the output, alerts and routes), and the page in jsdom |
+| `tests/api_sandbox.py`, `tests/profile_backend.py`, `tests/tokens_sandbox.py`, `tests/features_sandbox.py`, `tests/insights_sandbox.py`, `tests/setup_sandbox.py`, `tests/codex_sandbox.py`, `tests/wake_privacy_sandbox.py`, `tests/parked_usage_sandbox.py`, `tests/ui/` | Backend tests in a sandbox (actions and the page's sign-ins, Codex browser and device code included, run through Hermes' real `hermes auth add` with `tests/hermes_auth_add.py`; backend launched under a profile; token counting; the tracker check, tokens per session, bot alerts, the activity log and the forecast; tokens per bot and model, API prices, the hour chart, the daily summary and park schedules; `setup`, the terminal's Codex sign-in and the refusals without a terminal; Codex identity, usage, park in Hermes' pool, the parked-token refresh through Hermes and balance; the timer's `all balance` and the daily summary of an idle provider; `wake` and automatic wake for both providers, email masking in the output, alerts and routes), and the page in jsdom |
 | `tests/windows_sandbox.py` | The Windows code on any system: `core.WINDOWS` switched on, `winsys.run` replaced by a stand-in Task Scheduler that keeps the task XML. With `HAP_REAL_WINDOWS=1` on Windows it uses the real Task Scheduler and waits for the task's first run |
 | `tests/run_all.py` | Runs every sandbox test, each in its own throwaway Hermes home, on Linux, macOS or Windows |
 | `.github/workflows/tests.yml` | Installs Hermes on a Windows and a Linux runner and runs the tests, `install.ps1` and `uninstall.ps1` (started by hand) |
 | `tests/ui/fixture_api.py`, `tests/ui/screenshots.mjs` | A backend that answers from `tests/ui/fixtures.json`, and the script that takes `docs/screenshots/` from a Hermes Desktop running it |
-| `plugins/account-pool-tracker/` | The `post_api_request` hook behind `who`, with its own `README.md` |
-| `install.sh`, `uninstall.sh`, `install.ps1`, `uninstall.ps1` | Install and remove from a git checkout, on Linux (bash) and Windows (PowerShell). The install scripts copy the plugins and run `hermes account <provider> setup --yes`; the systemd units or the Task Scheduler task are written by `setup` (`_write_timer`, `_timer_on`) |
+| `install.sh`, `uninstall.sh`, `install.ps1`, `uninstall.ps1` | Install and remove from a git checkout, on Linux (bash) and Windows (PowerShell). The install scripts copy the plugin and run `hermes account <provider> setup --yes`; the systemd units or the Task Scheduler task are written by `setup` (`_write_timer`, `_timer_on`) |
 | `docs/make_doc.py` | Generates `docs/hermes-account-pool.pdf` (Indonesian guide) |
 
 ## Adding a provider adapter
@@ -40,24 +41,10 @@ class MyProvider(Adapter):
     def identity(self, entry):
         """Return the real account email/name, or None."""
 
-    def refresh_parked(self, record):
-        """Refresh a PARKED OAuth account's expired access token.
-        Return {"access_token", "refresh_token", "expires_at_ms"}, or None."""
-
-    # Sign-in from the Accounts page (optional). signin_methods lists the methods, default first.
+    # Sign-in from the Accounts page (optional): the methods `hermes auth add <provider>` offers,
+    # default first. "code" (paste the code shown after authorizing), "browser" (the provider sends
+    # the browser back to Hermes) or "device" (enter a code on the provider's page).
     signin_methods = ("code",)
-
-    def signin_start(self, method=None):
-        """Start a sign-in: {"kind": "code" | "device" | "browser", "url", "user_code"?,
-        "listening"?, "state": dict kept by the page's backend, never sent to the page}."""
-
-    def signin_step(self, state, code=""):
-        """The login result `hermes auth add <provider>` stores, or None while a device or browser
-        sign-in is still waiting. Raise ValueError with a message for the user when it failed; set
-        state["used"] = True first when the sign-in cannot be finished any more."""
-
-    def signin_close(self, state):
-        """Free what a started sign-in holds (a callback listener). Called on cancel, expiry and finish."""
 
     # Wake (optional): start the account's short window with one tiny request.
     short_window_seconds = 5 * 3600
@@ -82,14 +69,15 @@ class MyProvider(Adapter):
 ADAPTERS = {a.name: a for a in (Anthropic(), OpenAICodex(), MyProvider())}
 ```
 
+An adapter never stores, refreshes or exchanges a token. It reads `entry.access_token` to call the provider's API; when that token has expired, the core asks Hermes to refresh it (`CredentialPool.try_refresh_matching`) before it calls `usage`, `models` or `wake`, and Hermes saves the new pair. Logins come only from `hermes auth add`.
+
 Implement only what the provider allows. Methods you leave out stay off: `has_usage`, `has_identity`, `has_web_signin`, `has_wake` and `has_models` are detected automatically.
 
 | You implement | Unlocks |
 |---|---|
 | `usage` | `usage`, `report`, usage-based `balance`, the "every account above N%" alert |
 | `identity` | real-email column in `check`, verification in `add` and `relogin` |
-| `refresh_parked` | live usage for parked OAuth accounts whose token expired |
-| `signin_start`, `signin_step` (and `signin_close` for a listener) | **Add account** and **Sign in again** on the Accounts page. The result must have the shape Hermes' own `hermes auth add` login returns, because the core saves it through Hermes' `_OAUTH_ADD_SPECS` |
+| `signin_methods` | **Add account** and **Sign in again** on the Accounts page. The page's backend runs `hermes auth add <provider> --type oauth --label <email>` (`signin.py`) and relays the link and code it prints, so the provider needs an OAuth login in Hermes. `signin.py` recognises the link, the device page and the prompts by their text; a provider whose `hermes auth add` prints them differently needs a pattern there and a case in `tests/hermes_auth_add.py` |
 | `wake` (with `last_window` set in `usage`) | `wake`, automatic wake in `balance`, **Wake** on the page. A window counts as not running when `reset` is `None` or past, or when it is at 0% with a full `window_seconds` left (how Codex reports an untouched window) |
 | `models` (and `default_model` when the default depends on the list) | `wake models` and the model list in the Wake dialog; without it the dialog shows a text field |
 
@@ -99,7 +87,7 @@ When a request fails, set `self.last_error = self.explain(err, entry)` before re
 
 1. **Never print or log tokens.** `entry.access_token` only goes into the request header.
 2. **Return `None` on any failure** (network error, unexpected JSON, 4xx). The core then skips the feature for that account instead of reordering the pool on bad data.
-3. **Refresh tokens may be single-use.** In `refresh_parked`, return the new pair. The core writes it back under a file lock right away; do not cache tokens anywhere else.
+3. **Never refresh, store or cache a token.** Refresh tokens may be single use, and only Hermes may spend them: it refreshes through its pool and writes the new pair back at once. An adapter that refreshed by itself would sign the account out of Hermes.
 4. **Send a real client `User-Agent`.** Python's default (`Python-urllib/3.x`) can be rate-limited much sooner than the provider's own clients. On Anthropic's usage endpoint the same token got HTTP 429 with the default and 200 with `claude-code/2.1.0` in the same second. Copy the headers Hermes itself uses for that endpoint when there is one (see `agent/account_usage.py` in Hermes).
 5. **Use the standard library only** (`urllib`, `json`), or Hermes' own clients (the Anthropic wake uses Hermes' `build_anthropic_client`, so its headers and identity follow Hermes). Plugins run inside the Hermes venv; do not add dependencies.
 6. **Undocumented endpoints are allowed, but say so** in a comment. `doctor` reports FAIL when `usage` stops answering.
@@ -112,10 +100,10 @@ The page and the command share one code base. `plugin_api.py` loads `__init__.py
 
 Rules for the page:
 
-1. **No tokens in responses.** Return labels, ids, states and numbers. A sign-in's secret state stays in the backend's `_FLOWS`.
-2. **No provider request on a GET.** Views read files only (pool, parked file, history, sessions). Buttons that call the provider go through a POST and a rate limit: `LIVE_MIN_GAP` for live usage, `NET_MIN_GAP` for balance, check and wake.
+1. **No tokens in responses, and none in the backend.** Return labels, ids, states and numbers. A sign-in in progress is a `hermes auth add` process (`signin.py`); `_FLOWS` keeps that process, the label and the link's `state`, never a verifier or a token.
+2. **No provider request on a GET.** Views read files only (pool, park list, history, sessions). Buttons that call the provider go through a POST and a rate limit: `LIVE_MIN_GAP` for live usage, `NET_MIN_GAP` for balance, check and wake.
 3. **One action at a time.** POST routes that change the pool run inside `_exclusive()`, which also points `HERMES_HOME` at the default root, so every profile sees the shared pool.
-4. **The command stays in the default profile.** `setup` lists `account-pool` in every profile's `plugins.enabled`, because Hermes Desktop mounts the page's routes only for plugins enabled in the profile it runs. `register()` returns early in a profile (`_in_profile()`); keep anything you add to `register()` behind that check.
+4. **The command stays in the default profile.** `setup` lists `account-pool` in every profile's `plugins.enabled`, because Hermes Desktop mounts the page's routes only for plugins enabled in the profile it runs. `setup` also links the plugin into each profile's `plugins/`, so the session tracker runs there. `register()` adds the tracker hook everywhere and returns before the command in a profile (`_in_profile()`); keep anything else you add to `register()` behind that check.
 5. **Plain ESM in `plugin.js`.** Import only from `@hermes/plugin-sdk`, `react` and `react/jsx-runtime`, write elements with the file's `h()` (React's `createElement` imported as `rh`; never call `rh` yourself), and style with the desktop's `--ui-*` variables so themes keep working. An identifier that is not imported is a runtime `ReferenceError`; `tests/ui/run.mjs` catches it.
 6. **Use the SDK's controls.** `Select`, `Switch`, `Input`, `Button` and `SegmentedControl` follow the theme. A native `<select>` opens a list that Chromium draws in system colors, white on a dark theme. Reach SDK exports that older Hermes versions lack through `import * as sdk`, with a fallback, so a missing export cannot stop the page from loading. Use `MTip` instead of `Tip` for labels with line breaks: the desktop's tooltip collapses them.
 7. **Email masking happens in `h()`.** With masking on, `h()` masks emails in string children and in the props listed in `MASKED_PROPS` (`title`, `description`, `label`, `text`, ...), and `notify()` masks toasts. Data keeps the real labels, so actions still send the real target. A new component that shows text from another prop name needs that name in `MASKED_PROPS`. The rule is the same as `_mask_email()` in `__init__.py`; change both together.
@@ -148,8 +136,8 @@ Usage needs a real account, so test `usage` and `balance --dry-run` with one, a 
 The page has these tests, none needing a real account:
 
 ```bash
-# backend: fake API-key accounts and fake sign-ins, in a sandbox. The Codex browser sign-in
-# listens on a free port for the test, never on the real 1455
+# backend: fake API-key accounts and page sign-ins, in a sandbox. The sign-ins run Hermes' own
+# `hermes auth add` code with the provider calls replaced (tests/hermes_auth_add.py); no port is bound
 SB=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" hap-sandbox.XXXX)
 HERMES_HOME=$SB ~/.hermes/hermes-agent/venv/bin/python tests/api_sandbox.py
 rm -rf "$SB"
@@ -159,7 +147,7 @@ SB=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" hap-sandbox.XXXX)
 HERMES_HOME=$SB ~/.hermes/hermes-agent/venv/bin/python tests/profile_backend.py
 rm -rf "$SB"
 
-# token counting: tracker hook, report, page backend (own sandbox)
+# token counting: the session tracker's hook, report, page backend (own sandbox)
 SB=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" hap-sandbox.XXXX)
 HERMES_HOME=$SB ~/.hermes/hermes-agent/venv/bin/python tests/tokens_sandbox.py
 rm -rf "$SB"
@@ -169,18 +157,19 @@ SB=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" hap-sandbox.XXXX)
 HERMES_HOME=$SB ~/.hermes/hermes-agent/venv/bin/python tests/features_sandbox.py
 rm -rf "$SB"
 
-# tracker check, sessions, bot alerts, activity log, forecast (own sandbox; nothing is sent)
+# session tracking check, sessions, bot alerts, activity log, forecast (own sandbox; nothing is sent)
 SB=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" hap-sandbox.XXXX)
 HERMES_HOME=$SB ~/.hermes/hermes-agent/venv/bin/python tests/insights_sandbox.py
 rm -rf "$SB"
 
-# setup, setup --undo and the refusals without a terminal (own sandbox; systemctl and
-# `hermes plugins enable` are replaced by recorders, the units go to $SB/xdg)
+# setup (links, the update from 3.x), setup --undo and the refusals without a terminal (own sandbox;
+# systemctl and `hermes plugins remove` are replaced by recorders, the units go to $SB/xdg)
 SB=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" hap-sandbox.XXXX)
 HERMES_HOME=$SB ~/.hermes/hermes-agent/venv/bin/python tests/setup_sandbox.py
 rm -rf "$SB"
 
-# openai-codex: identity, check, usage, park/unpark, parked-token refresh, balance, doctor,
+# openai-codex: identity, check, usage, park/unpark in Hermes' pool, the parked-token refresh
+# through Hermes, balance, doctor,
 # `all balance` over two providers and the daily summary of an idle provider
 # (own sandbox; fake ChatGPT tokens and a fake usage endpoint, nothing reaches OpenAI)
 SB=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" hap-sandbox.XXXX)
@@ -193,7 +182,8 @@ SB=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" hap-sandbox.XXXX)
 HERMES_HOME=$SB ~/.hermes/hermes-agent/venv/bin/python tests/wake_privacy_sandbox.py
 rm -rf "$SB"
 
-# parked accounts: the timer reads them, the history marks them, the pool's numbers leave them out
+# parked accounts: the move from the 3.x park file, the timer reads them, the history marks them,
+# the pool's numbers leave them out, Hermes' early release is parked again
 SB=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" hap-sandbox.XXXX)
 HERMES_HOME=$SB ~/.hermes/hermes-agent/venv/bin/python tests/parked_usage_sandbox.py
 rm -rf "$SB"
@@ -228,7 +218,7 @@ Screenshots for `docs/screenshots/` come from a second Hermes Desktop with its o
 A quick static check before committing:
 
 ```bash
-~/.hermes/hermes-agent/venv/bin/python -m py_compile plugins/account-pool/*.py plugins/account-pool/dashboard/*.py plugins/account-pool-tracker/*.py
+~/.hermes/hermes-agent/venv/bin/python -m py_compile plugins/account-pool/*.py plugins/account-pool/dashboard/*.py
 node --input-type=module --check < plugins/account-pool/desktop/plugin.js
 python3 -m pyflakes plugins/        # if pyflakes is installed
 ```

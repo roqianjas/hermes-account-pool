@@ -367,7 +367,7 @@ check(any("alice@example.com" in x and x.startswith("Parked") for x in log)
 run("unpark", "alice@example.com")
 SHOWN = []
 real_run, real_which = core.subprocess.run, core.shutil.which
-core.shutil.which = lambda name: "/usr/bin/" + name
+core.shutil.which = lambda name, **kw: "/usr/bin/" + name
 core.subprocess.run = lambda cmd, **kw: SHOWN.append(cmd) or SimpleNamespace(returncode=0, stdout="", stderr="")
 sent = core._notify("bob@example.com needs sign-in", "Sign in again: bob@example.com")
 core.subprocess.run, core.shutil.which = real_run, real_which
@@ -520,8 +520,7 @@ CREQ.clear()
 rc, out = run("wake", "ann@example.com", provider=C)
 check(rc == 0 and CREQ[0][2]["model"] == "gpt-6-sol", "codex wake: the model set with model=<id>")
 
-blob = "".join(p.read_text() for p in ROOT.glob("account-pool*") if p.suffix in (".json", ".jsonl")
-               and p.name != "account-pool-parked.json")
+blob = "".join(p.read_text() for p in ROOT.glob("account-pool*") if p.suffix in (".json", ".jsonl"))
 check(blob and not any(x in blob for x in ("fake-at-", "fake-rt-", CTOK["ann@example.com"], "refresh_token")),
       "no token in the settings, state, history or activity files")
 

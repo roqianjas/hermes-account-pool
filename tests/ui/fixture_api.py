@@ -133,7 +133,7 @@ def live():
 @router.post("/doctor")
 def doctor():
     return {"checks": [{"level": "ok", "text": "credential_pool_strategies.anthropic is fill_first in every profile"},
-                       {"level": "ok", "text": "session tracker active in every profile"},
+                       {"level": "ok", "text": "session tracking active in every profile"},
                        {"level": "ok", "text": "balance timer active, last run 2 minutes ago"}], "empty": False}
 
 

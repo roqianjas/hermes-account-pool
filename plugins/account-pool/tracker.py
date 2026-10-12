@@ -1,19 +1,21 @@
-"""Record which credential-pool account each session is using, and how many tokens each account used.
+"""Session tracking for account-pool: which pool account each session uses, and the tokens it used.
 
-Companion to the `account-pool` plugin (`hermes account <provider> who`, `report`, the Accounts page).
-Hermes does not persist the account chosen for a session, so this hook reads
-the live pool from the running agent after each API call and writes:
+account-pool registers `on_api_request` as its post_api_request hook in every profile (the `account`
+command only in the default profile). Hermes does not persist the account chosen for a session, so the
+hook reads the live pool of the running agent after each API call and writes:
 
 - {profile, session, platform, model, account, since when on that account, tracker version, process id,
   Kanban task} to <hermes root>/account-pool-sessions.json. Throttled: once per session per minute, or
   immediately when the session's account changes. The version and process id let `doctor` name a process
-  that still runs an older tracker after an update.
+  that still runs an older plugin after an update.
 - the call's token counts (input, output, cache read, cache write, 1 request) added to a
   15-minute bucket of that account, profile and model, and of that profile, session and model, in
   <hermes root>/account-pool-tokens.json. Every call.
 
-Both files are mode 600 and hold labels, ids and numbers only, never credentials.
-Any failure is swallowed so the hook can never break a turn.
+A call without a session id is not counted: guessing the agent could put tokens on the wrong account.
+Both files are mode 600 and hold labels, ids and numbers only, never credentials. Any failure is
+swallowed so the hook can never break a turn. Before 4.0 this was the separate account-pool-tracker
+plugin; while a process still has that one loaded, this hook leaves the counting to it.
 """
 from __future__ import annotations
 
@@ -23,11 +25,12 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-VERSION = "1.5.1"                 # keep in step with plugin.yaml
+VERSION = "4.0.0"                 # account-pool's version: keep in step with plugin.yaml
 KEEP_SECONDS = 24 * 3600
 TOKEN_BUCKET = 900                 # seconds per token bucket
 TOKEN_KEEP = 8 * 24 * 3600         # token buckets older than this are dropped
 _last: dict[str, tuple[str, float]] = {}
+_legacy: list = [None, 0.0]        # [old tracker loaded in this process?, checked at]
 
 
 def _home() -> Path:
@@ -46,26 +49,44 @@ def _root_and_profile() -> tuple[Path, str]:
 
 
 def _find_agent(session_id: str):
-    """Find the AIAgent for this session.
+    """Find the AIAgent for this session, or None.
 
     Hooks run on a helper thread while the calling turn waits, so the agent is
     on another thread's stack: scan every thread's frames for a local `agent`
-    (or `self`) with a credential pool and the matching session id.
+    (or `self`) with a credential pool and this session id. Without a session id
+    there is nothing to match, and any other agent found could be on another
+    account, so the call is not counted.
     """
     import sys
-    fallback = None
+    if not session_id:
+        return None
     for frame in sys._current_frames().values():
         depth = 0
         while frame is not None and depth < 60:
             for name in ("agent", "self"):
                 obj = frame.f_locals.get(name)
-                if obj is not None and hasattr(obj, "_credential_pool") and hasattr(obj, "session_id"):
-                    if session_id and getattr(obj, "session_id", None) == session_id:
-                        return obj
-                    fallback = fallback or obj
+                if (obj is not None and hasattr(obj, "_credential_pool")
+                        and getattr(obj, "session_id", None) == session_id):
+                    return obj
             frame = frame.f_back
             depth += 1
-    return fallback if not session_id else None
+    return None
+
+
+def _legacy_tracker_loaded() -> bool:
+    """True while this process also runs the old account-pool-tracker plugin (1.x): it counts the same
+    calls, so this hook stays out of the way until that process restarts. Checked once a minute."""
+    import sys
+    now = time.time()
+    if _legacy[0] is None or now - _legacy[1] > 60:
+        found = False
+        for mod in list(sys.modules.values()):
+            path = str(getattr(mod, "__file__", "") or "").replace("\\", "/")
+            if path.endswith("account-pool-tracker/__init__.py") and str(getattr(mod, "VERSION", "")).startswith("1."):
+                found = True
+                break
+        _legacy[0], _legacy[1] = found, now
+    return bool(_legacy[0])
 
 
 @contextmanager
@@ -228,16 +249,19 @@ def _add_tokens(root: Path, provider: str, label: str, profile: str, model: str,
         _replace_json(path, data)
 
 
-def _on_api_request(**kw) -> None:
+def on_api_request(**kw) -> None:
+    """account-pool's post_api_request hook."""
     try:
-        agent = _find_agent(kw.get("session_id") or "")
+        session_id = str(kw.get("session_id") or "")
+        if not session_id or _legacy_tracker_loaded():
+            return
+        agent = _find_agent(session_id)
         pool = getattr(agent, "_credential_pool", None) if agent is not None else None
         if pool is None:
             return
         entry = pool.current()
         if entry is None:
             return
-        session_id = kw.get("session_id") or getattr(agent, "session_id", "") or "?"
         root, profile = _root_and_profile()
         key = f"{profile}:{session_id}"
         label = entry.label or entry.id
@@ -274,6 +298,3 @@ def _on_api_request(**kw) -> None:
     except Exception:
         pass
 
-
-def register(ctx) -> None:
-    ctx.register_hook("post_api_request", _on_api_request)

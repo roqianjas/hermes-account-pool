@@ -119,7 +119,8 @@ def rl(primary, secondary=None, reached=False):
 
 
 def entries():
-    return [(e.label, e.id) for e in sorted(load_pool(P).entries(), key=lambda e: e.priority)]
+    """The accounts in rotation: parked ones stay in Hermes' pool, held out of it."""
+    return [(e.label, e.id) for e in core._rotation(P)]
 
 
 pool = load_pool(P)
@@ -159,22 +160,35 @@ rc, text = run(core._cmd_usage)
 cy = next((ln for ln in text.splitlines() if "cy@example.com" in ln), "")
 check("n/a" in cy and "401" in cy, "usage: a refused token is reported, not hidden")
 
-# ── park / unpark keep the whole login ───────────────────────────────────────
+# ── park / unpark: the login stays in Hermes' pool, held out of rotation there ─
+from agent.credential_pool import _exhausted_until  # noqa: E402
+from hermes_cli import auth as hermes_auth  # noqa: E402
+
+
+def pool_entry(label):
+    return next((e for e in load_pool(P).entries() if e.label == label), None)
+
+
 before = {e.label: e.to_dict() for e in load_pool(P).entries()}
 rc, text = run(core._cmd_park, target="ben@example.com")
 check(rc == 0 and [lab for lab, _ in entries()] == ["ann@example.com", "cy@example.com"], "park")
+held = pool_entry("ben@example.com")
 parked = [p for p in core._read_parked() if p["_provider"] == P]
-check(len(parked) == 1 and parked[0]["refresh_token"] == "rt-1" and parked[0]["source"] == "manual:loopback_pkce"
-      and parked[0]["base_url"].endswith("/codex"), "parked record keeps refresh token, source and base URL")
+check(len(parked) == 1 and set(parked[0]) <= set(core.PARK_KEYS) and held is not None
+      and held.refresh_token == "rt-1" and held.source == "manual:loopback_pkce" and held.base_url.endswith("/codex"),
+      "parked: the login stays in Hermes' pool as it was; the park list holds labels and times, no token")
+check(core._park_mark(held) and held.last_error_code is None and _exhausted_until(held) > time.time() + 29 * 86400,
+      "Hermes holds it out of rotation: exhausted, reason parked, for 30 days, no HTTP code (no early quota probe)")
 rc, text = run(core._cmd_list)
 check("parked (1)" in text and "ben@example.com" in text, "list shows the parked account")
 rc, text = run(core._cmd_unpark, target="ben@example.com")
-back = {e.label: e.to_dict() for e in load_pool(P).entries()}["ben@example.com"]
+back = pool_entry("ben@example.com").to_dict()
 check(rc == 0 and all(back.get(k) == before["ben@example.com"].get(k)
-                      for k in ("access_token", "refresh_token", "source", "base_url", "auth_type", "label")),
-      "unpark restores the same login")
+                      for k in ("access_token", "refresh_token", "source", "base_url", "auth_type", "label"))
+      and back.get("last_status") in (None, "ok") and not core._read_parked(),
+      "unpark: Hermes releases the same login, the park is forgotten")
 
-# ── parked account with an expired token: refreshed, or marked for a new sign-in ──
+# ── parked account with an expired token: Hermes refreshes it, or marks it for a new sign-in ──
 expired = jwt("cy@example.com", exp_in=-600)
 pool = load_pool(P)
 idx, cur, _ = pool.resolve_target("cy@example.com")
@@ -191,32 +205,34 @@ fresh = jwt("cy@example.com")
 def fake_refresh(access_token, refresh_token, timeout_seconds=20.0):
     REFRESH.append(refresh_token)
     if refresh_token == "dead-rt":
-        raise RuntimeError("invalid_grant: refresh token already used")
+        raise hermes_auth.AuthError("refresh token already used", provider=P, code="invalid_grant", relogin_required=True)
     return {"access_token": fresh, "refresh_token": "rt-2b", "last_refresh": "2026-02-02T00:00:00Z"}
 
 
-auth_codex.refresh_codex_oauth_pure = fake_refresh
+auth_codex.refresh_codex_oauth_pure = hermes_auth.refresh_codex_oauth_pure = fake_refresh
 USAGE[fresh] = rl(20, 40)
 rc, text = run(core._cmd_usage)
-rec = next(p for p in core._read_parked() if p.get("label") == "cy@example.com")
-check(REFRESH == ["rt-2"] and rec["access_token"] == fresh and rec["refresh_token"] == "rt-2b"
-      and rec.get("last_refresh") == "2026-02-02T00:00:00Z", "parked token refreshed once, rotated pair saved")
+cye = pool_entry("cy@example.com")
+check(REFRESH == ["rt-2"] and cye.access_token == fresh and cye.refresh_token == "rt-2b" and core._park_mark(cye),
+      "parked token refreshed once by Hermes, the rotated pair saved in its pool, still parked")
 cy = next((ln for ln in text.splitlines() if "cy@example.com" in ln), "")
 check("PARKED" in cy and "40%" in cy, "usage of the parked account read with the new token")
 rc, text = run(core._cmd_usage)
 check(REFRESH == ["rt-2"], "a fresh parked token is not refreshed again")
-items = core._read_parked()
-for p in items:
-    if p.get("label") == "cy@example.com":
-        p["access_token"], p["refresh_token"] = expired, "dead-rt"
-core._write_parked(items)
+pool = load_pool(P)
+idx, cur, _ = pool.resolve_target("cy@example.com")
+pool.remove_index(idx)
+d = cur.to_dict()
+d["access_token"], d["refresh_token"] = expired, "dead-rt"
+pool.add_entry(PooledCredential.from_dict(P, d))
 rc, text = run(core._cmd_usage)
 cy = next((ln for ln in text.splitlines() if "cy@example.com" in ln), "")
 check("sign-in expired" in cy and f"hermes account {P} remove cy@example.com" in cy,
       "a dead parked login says how to fix it")
 rc, text = run(core._cmd_unpark, target="cy@example.com")
 rc, text = run(core._cmd_remove, target="cy@example.com")
-check(rc == 0 and "cy@example.com" not in json.dumps(entries()) and not core._read_parked(), "remove")
+check(rc == 0 and "cy@example.com" not in json.dumps(entries()) and not core._read_parked()
+      and pool_entry("cy@example.com") is None, "remove")
 
 # ── guards, balance, doctor ──────────────────────────────────────────────────
 run(core._cmd_park, target="ann@example.com")
@@ -271,10 +287,9 @@ check(quiet == [] and state.get("daily:openrouter") == today and not any("openro
       "daily summary skipped for a provider with nothing to report, and not retried that day")
 check(busy and any(t.startswith(f"Hermes {P}") for t, _ in SENT), "daily summary sent for a provider with usage")
 
-blob = "".join(p.read_text() for p in Path(HOME).glob("account-pool-*")
-               if p.suffix in (".json", ".jsonl") and p.name != "account-pool-parked.json")
+blob = "".join(p.read_text() for p in Path(HOME).glob("account-pool-*") if p.suffix in (".json", ".jsonl"))
 check(blob and not any(t in blob for t in (TOK["ann@example.com"], TOK["ben@example.com"], "rt-0", "refresh_token")),
-      "no token in the history, alert or state files (only auth.json and the parked file hold logins)")
+      "no token in any account-pool file, the park list included (only Hermes' auth.json holds logins)")
 
 print(f"\n{len(failures)} failure(s)")
 sys.exit(1 if failures else 0)

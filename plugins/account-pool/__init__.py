@@ -7,11 +7,11 @@ Every command follows one pattern:
     hermes account <provider> list             accounts in rotation + parked accounts
     hermes account <provider> check            health: dead, rate-limited, wrong label, duplicate
     hermes account <provider> usage            live usage per account (providers with a usage adapter)
-    hermes account <provider> park <target>    take an account out of rotation, keep its login
+    hermes account <provider> park <target>    hold an account out of rotation, keep its login
     hermes account <provider> unpark <target>  put a parked account back into rotation
     hermes account <provider> balance          order accounts by live usage, bench nearly-full ones
     hermes account <provider> who|report|relogin|doctor|notify   (see `hermes account help`)
-    hermes account <provider> setup            profiles, tracker and timer after hermes plugins install
+    hermes account <provider> setup            profiles, session tracking and timer after install
     hermes account <provider> wake             start the 5-hour window of idle accounts (one tiny request)
     hermes account <provider> privacy on|off   mask emails in the output, alerts and the Accounts page
     hermes account help | hermes account <provider> help
@@ -20,13 +20,16 @@ Every command follows one pattern:
 fill_first`: new sessions then always start on the least-used account, and an
 account above the threshold is benched until its usage window resets.
 
-Provider-specific code (usage, real identity, parked-token refresh) lives in
-providers.py as adapters; everything else works for every pool provider.
+Provider-specific code (usage, real identity, wake) lives in providers.py as
+adapters; everything else works for every pool provider.
 
-Pool changes go through the credential pool API (remove_index, add_entry,
-move_entry, mark_exhausted_and_rotate, reset_status), so locking and the
-auth.json format stay owned by Hermes. Parked accounts are stored in
-$HERMES_HOME/account-pool-parked.json (mode 600).
+Logins stay in Hermes. Pool changes go through the credential pool API
+(remove_index, add_entry, move_entry, mark_exhausted_and_rotate, reset_status,
+try_refresh_matching), reads of other profiles through read_credential_pool, and
+sign-ins through `hermes auth add`, so locking, token refresh and the auth.json
+format stay owned by Hermes. A parked account stays in the pool, marked exhausted
+(reason "parked") until its end time; $HERMES_HOME/account-pool-parking.json
+(mode 600) lists the parks by label, id and time, never a token.
 """
 from __future__ import annotations
 
@@ -140,6 +143,7 @@ def _load_providers():
 
 providers = _load_providers()
 winsys = _load_module("account_pool_winsys", "winsys.py")      # Task Scheduler, toasts, junctions
+tracker = _load_module("account_pool_tracker_hook", "tracker.py")   # session tracking (post_api_request hook)
 WINDOWS = os.name == "nt"
 
 
@@ -198,8 +202,21 @@ def _home() -> Path:
         return Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
 
 
+PARK_REASON = "parked"            # last_error_reason of a parked pool entry: `hermes auth list` shows "exhausted parked"
+PARK_HOLD = 30 * 86400            # a park without --until is held this long; every balance run renews it
+PARK_KEYS = ("_provider", "id", "label", "_parked_at", "_parked_at_h", "_until", "_until_h", "_by")
+
+
 def _parked_path() -> Path:
-    return _home() / "account-pool-parked.json"
+    """Which pool entries are parked, and until when. Labels, ids and times only: a parked account stays in
+    Hermes' pool (auth.json), held out of rotation there."""
+    return _home() / "account-pool-parking.json"
+
+
+def _legacy_parked_paths() -> list:
+    """Park files of account-pool 3.x and of the earlier plugin. They held whole logins; _migrate_parked()
+    moves those back into Hermes' pool and deletes the file."""
+    return [_home() / "account-pool-parked.json", _home() / "akun-claude-parked.json"]
 
 
 def _norm(provider: str) -> str:
@@ -210,30 +227,155 @@ def _norm(provider: str) -> str:
         return (provider or "").strip().lower()
 
 
-def _read_parked() -> list[dict]:
-    path = _parked_path()
-    legacy = _home() / "akun-claude-parked.json"          # from the earlier plugin
-    if not path.exists() and legacy.exists():
-        path = legacy
+def _load_parked(path: Path) -> list[dict]:
     if not path.exists():
         return []
     try:
         items = json.loads(path.read_text(encoding="utf-8")).get("parked", [])
     except Exception:
         raise SystemExit(f"Parked-accounts file is corrupt: {path}")
-    for it in items:
-        it.setdefault("_provider", "anthropic")
-    return items
+    out = []
+    for it in items if isinstance(items, list) else []:
+        if isinstance(it, dict) and it.get("id"):
+            it.setdefault("_provider", "anthropic")
+            out.append(it)
+    return out
+
+
+def _read_parked() -> list[dict]:
+    _migrate_parked()
+    return _load_parked(_parked_path())
 
 
 def _write_parked(items: list[dict]) -> None:
+    """Save the park list. Only the PARK_KEYS fields are written, so no token can end up in it."""
     path = _parked_path()
+    clean = [{k: it[k] for k in PARK_KEYS if k in it} for it in items]
     tmp = path.with_suffix(".tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
-        json.dump({"version": 3, "parked": items}, fh, indent=2)
+        json.dump({"version": 4, "parked": clean}, fh, indent=2)
     _replace(tmp, path)
     os.chmod(path, 0o600)
+
+
+def _park_mark(entry) -> bool:
+    """True when Hermes holds this pool entry out of rotation as parked."""
+    return (getattr(entry, "last_status", None) == "exhausted"
+            and getattr(entry, "last_error_reason", None) == PARK_REASON)
+
+
+def _hold_until(item: dict) -> float:
+    until = item.get("_until")
+    return float(until) if until else time.time() + PARK_HOLD
+
+
+def _hold(pool, entry_id: str, until: float) -> bool:
+    """Hold one pool entry out of rotation until `until`, with Hermes' own pool API: the entry stays in
+    auth.json, marked exhausted with reason "parked" and that reset time. No HTTP status code: Hermes
+    probes an exhausted Codex entry with a 429 for an early quota reset and would put it back.
+    True when Hermes holds it (a DEAD entry stays DEAD, which is out of rotation as well)."""
+    pool.mark_exhausted_and_rotate(status_code=None, credential_id=entry_id, error_context={
+        "reason": PARK_REASON, "message": "parked by account-pool", "reset_at": until})
+    after = next((e for e in pool.entries() if e.id == entry_id), None)
+    return after is not None and (getattr(after, "last_status", None) == "dead" or _park_mark(after))
+
+
+def _migrate_parked() -> None:
+    """account-pool 3.x kept a parked account's whole login in its own file. Put every such account back
+    into Hermes' pool, held out of rotation there the way `park` does now, then delete the file. Runs
+    once, on first use after the update; a failure keeps the old file, so nothing is lost."""
+    old = [p for p in _legacy_parked_paths() if p.exists()]
+    if not old:
+        return
+    from agent.credential_pool import PooledCredential
+    with _file_lock(_parked_path().with_suffix(".lock")):
+        for path in old:
+            if not path.exists():
+                continue
+            moved = {}
+            for it in _load_parked(path):
+                provider = _norm(it["_provider"])
+                label = it.get("label") or it["id"]
+                pool = _pool(provider)
+                if not any(e.id == it["id"] for e in pool.entries()):
+                    pool.add_entry(PooledCredential.from_dict(
+                        provider, {k: v for k, v in it.items() if not k.startswith("_")}))
+                parked = [p for p in _load_parked(_parked_path())
+                          if not (_norm(p["_provider"]) == provider and p["id"] == it["id"])]
+                if it.get("_until") and float(it["_until"]) <= time.time():
+                    _write_parked(parked)
+                    moved.setdefault(provider, []).append(f"{label} (back in rotation: its park time is over)")
+                    continue
+                rec = dict({k: it[k] for k in PARK_KEYS if k in it}, _provider=provider)
+                _write_parked(parked + [rec])
+                if not _hold(pool, it["id"], _hold_until(rec)):
+                    raise SystemExit(f"Could not move parked account {label} into Hermes' pool; "
+                                     f"{path} is kept. Run the command again.")
+                moved.setdefault(provider, []).append(label)
+            path.unlink()
+            for provider, labels in moved.items():
+                _log(provider, "park", f"Parked accounts moved into Hermes' pool (held out of rotation there): "
+                                       f"{', '.join(labels)}.")
+
+
+def _parked_ids(provider: str) -> set:
+    return {p["id"] for p in _read_parked() if p["_provider"] == provider}
+
+
+def _rotation(provider: str, pool=None) -> list:
+    """The provider's pool entries that are in rotation (every entry but the parked ones), by priority."""
+    pool = pool if pool is not None else _pool(provider)
+    parked = _parked_ids(provider)
+    return sorted((e for e in pool.entries() if e.id not in parked), key=lambda e: e.priority)
+
+
+def _parked_entries(provider: str, pool) -> list:
+    """[(park record, pool entry or None when it left the pool)] of the provider's parked accounts."""
+    by_id = {e.id: e for e in pool.entries()}
+    return [(it, by_id.get(it["id"])) for it in _read_parked() if it["_provider"] == provider]
+
+
+def _hold_parks(provider: str, pool, dry: bool = False) -> list[str]:
+    """Keep the park list and Hermes' pool in step (each balance run): park again an account Hermes put
+    back before its time (`hermes auth reset`, an expired hold), renew open-ended parks, forget a park
+    whose account left the pool, and release an entry held as parked that the list does not name."""
+    actions, now = [], time.time()
+    items = _read_parked()
+    keep = []
+    by_id = {e.id: e for e in pool.entries()}
+    for it in items:
+        if it["_provider"] != provider:
+            keep.append(it)
+            continue
+        e = by_id.get(it["id"])
+        if e is None:
+            actions.append(f"forget the park of {it.get('label')}: it is no longer in the pool")
+            continue
+        keep.append(it)
+        if (it.get("_until") and float(it["_until"]) <= now) or getattr(e, "last_status", None) == "dead":
+            continue                                   # due (step 1 returns it) or out of rotation anyway
+        until = _hold_until(it)
+        try:
+            reset = float(getattr(e, "last_error_reset_at", None) or 0)
+        except (TypeError, ValueError):
+            reset = 0.0
+        if not _park_mark(e):
+            actions.append(f"park {it.get('label')} again (Hermes had put it back in rotation)")
+            if not dry:
+                _hold(pool, e.id, until)
+        elif (not it.get("_until") and reset < now + PARK_HOLD / 2) or (it.get("_until") and abs(reset - until) > 120):
+            if not dry:
+                _hold(pool, e.id, until)               # renew an open-ended park, or fix a moved end time
+    listed = {it["id"] for it in keep if it["_provider"] == provider}
+    for e in pool.entries():
+        if _park_mark(e) and e.id not in listed:
+            actions.append(f"release {e.label}: held as parked in Hermes, but not parked here")
+            if not dry:
+                pool.reset_status(e.id)
+    if len(keep) != len(items) and not dry:
+        _write_parked(keep)
+    return actions
 
 
 def _pool(provider: str):
@@ -242,7 +384,8 @@ def _pool(provider: str):
 
 
 def _entries(provider: str):
-    return sorted(_pool(provider).entries(), key=lambda e: e.priority)
+    """The accounts in rotation (parked ones excluded), by priority."""
+    return _rotation(provider)
 
 
 def _hhmm(ts) -> str:
@@ -510,29 +653,59 @@ LOG_LINES = {
     "schedule": r"^Schedule saved",
     "unschedule": r"^Schedule removed",
     "strategy": r"^(Rotation strategy \[|FAILED )",
-    "notify": r"^(desktop alerts|telegram alerts|Telegram alerts are now|Daily summary (on|off)|Bot alerts)",
+    "notify": r"^(desktop alerts|telegram alerts|Telegram alerts (are now|go to)|Daily summary (on|off)|Bot alerts)",
     "wake": r"^(Automatic wake (on|off)|Wake model)",
     "privacy": r"^Email masking (on|off)",
 }
 
 
 def _telegram_target(cfg: dict):
-    t = (cfg.get("notify") or {}).get("telegram")
+    """Where Telegram alerts go, as a `hermes send -t` target: "telegram" (the bot's home channel, set with
+    /sethome in a chat) for the default "auto", or "telegram:<chat id>" set with `notify telegram-to=`.
+    None when Telegram alerts are off, or "auto" while Hermes has no Telegram bot set up."""
+    t = str((cfg.get("notify") or {}).get("telegram") or "").strip()
     if not t:
         return None
-    if t != "auto":
-        return t
-    env = _root() / ".env"
+    if t == "auto":
+        bot = _telegram_bot(cfg)
+        return None if bot is not None and not bot[0] else "telegram"
+    if re.fullmatch(r"-?\d+", t):
+        return f"telegram:{t}"
+    return t
+
+
+def _telegram_bot(cfg: dict):
+    """(bot set up, home channel set) for the Telegram bot that sends the alerts, from Hermes' own gateway
+    config; None when it cannot be told from here (alerts through another profile's bot)."""
+    via = (cfg["notify"].get("telegram_via") or "default").strip()
+    if via != ("default" if not _in_profile() else _home().name):
+        return None
     try:
-        for line in env.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line.startswith("TELEGRAM_ALLOWED_USERS="):
-                first = line.split("=", 1)[1].strip().strip("'\"").split(",")[0].strip()
-                if first:
-                    return f"telegram:{first}"
+        from gateway.config import Platform, load_gateway_config
+        gc = load_gateway_config()
+        return Platform.TELEGRAM in gc.get_connected_platforms(), gc.get_home_channel(Platform.TELEGRAM) is not None
     except Exception:
-        pass
-    return None
+        return None
+
+
+def _telegram_home_set(cfg: dict):
+    """Whether that bot has a home channel: True/False, or None when it cannot be told."""
+    bot = _telegram_bot(cfg)
+    return None if bot is None else bot[1]
+
+
+TELEGRAM_HOME_HINT = ("send /sethome to the bot in the chat that should get the alerts, "
+                      "or name a chat: hermes account <provider> notify telegram-to=<chat id>")
+
+
+def _telegram_where(target, home_set=None) -> str:
+    if not target:
+        return "off"
+    if target == "telegram":
+        if home_set is False:
+            return "on, but the bot has no home channel yet, so nothing arrives: " + TELEGRAM_HOME_HINT
+        return "on (the bot's home channel; set it with /sethome in that chat)"
+    return f"on (chat {target.split(':', 1)[-1]})"
 
 
 def _desktop_channel() -> tuple:
@@ -659,7 +832,7 @@ def _run_alerts(provider: str, pool, known) -> list[str]:
     cfg = _config()
     limit = float(cfg.get("alert_all_above", 80))
     current = {}
-    for e in pool.entries():
+    for e in _rotation(provider, pool):
         if getattr(e, "last_status", None) == "dead":
             current[f"{provider}:dead:{e.id}"] = (
                 f"Hermes: {e.label} needs sign-in",
@@ -1082,11 +1255,14 @@ def _is_cooling(entry) -> bool:
 
 
 def _entry_state(entry) -> str:
-    """active, BENCHED (by balance), LIMITED (by the provider), COOLING (failed refresh) or DEAD."""
+    """active, BENCHED (by balance), LIMITED (by the provider), COOLING (failed refresh), PARKED (held as
+    parked in Hermes' pool) or DEAD."""
     status = getattr(entry, "last_status", None)
     if status == "dead":
         return "DEAD"
     if status == "exhausted":
+        if _park_mark(entry):
+            return "PARKED"
         if MARK in (getattr(entry, "last_error_message", None) or ""):
             return "BENCHED"
         return "COOLING" if _is_cooling(entry) else "LIMITED"
@@ -1102,7 +1278,10 @@ def _problems(provider, entry, ident):
     elif status == "exhausted":
         code = getattr(entry, "last_error_code", None)
         reset = getattr(entry, "last_error_reset_at", None)
-        if MARK in msg:
+        if _park_mark(entry):
+            out.append("held as parked in Hermes' pool, but not on the park list: the next balance run "
+                       "puts it back in rotation")
+        elif MARK in msg:
             out.append(f"BENCHED by balance: {msg.replace(MARK, '').strip()}, back at {_hhmm(reset)}")
         elif code in (429, 402) or getattr(entry, "last_error_reason", None):
             out.append(f"RATE LIMITED (HTTP {code or '?'}), resets around {_hhmm(reset)}")
@@ -1119,16 +1298,19 @@ def _problems(provider, entry, ident):
 
 def _cmd_list(args) -> int:
     provider = _norm(args.provider)
-    entries = _entries(provider)
-    parked = [p for p in _read_parked() if p["_provider"] == provider]
+    pool = _pool(provider)
+    entries = _rotation(provider, pool)
+    parked = _parked_entries(provider, pool)
     _p(f"[{provider}] in rotation ({len(entries)}):")
     for n, e in enumerate(entries, 1):
         _p(f"  #{n}  {e.label:34s} id={e.id}  status={getattr(e, 'last_status', None) or 'ok'}")
     _p(f"[{provider}] parked ({len(parked)}):" + ("" if parked else " -"))
-    for p in parked:
+    for p, e in parked:
         until = f"  until {p['_until_h']}" if p.get("_until") else ""
         by = " (schedule)" if p.get("_by") == "schedule" else ""
-        _p(f"  -   {p.get('label', '?'):34s} id={p.get('id')}  since {p.get('_parked_at_h', '?')}{until}{by}")
+        note = ("  (no longer in the pool)" if e is None else
+                "  (sign-in dead)" if getattr(e, "last_status", None) == "dead" else "")
+        _p(f"  -   {p.get('label', '?'):34s} id={p.get('id')}  since {p.get('_parked_at_h', '?')}{until}{by}{note}")
     rows = _schedule_rows(provider)
     if rows:
         _p(f"[{provider}] park schedules ({len(rows)}):")
@@ -1171,48 +1353,37 @@ def _cmd_check(args) -> int:
     return 1 if bad else 0
 
 
-def _refresh_parked(provider: str, item: dict) -> dict:
-    """Refresh an expired access token of a PARKED OAuth account via its adapter.
+def _home_override(home: Path):
+    """Context manager: Hermes' own readers (auth store, config) use `home` in this thread only."""
+    import contextlib
 
-    OAuth refresh tokens are often single-use (Anthropic's are), so the rotated pair is written back
-    to the parked file under a lock straight after the POST. On invalid_grant the
-    record is flagged so `usage` shows it as needing a new sign-in.
-    """
-    from types import SimpleNamespace
-    ad = providers.get(provider)
-    if type(ad).refresh_parked is providers.Adapter.refresh_parked:
-        return item
-    if item.get("auth_type") != "oauth" or item.get("_dead"):
-        return item
-    if not _token_expired(SimpleNamespace(expires_at_ms=item.get("expires_at_ms"), access_token=item.get("access_token"))):
-        return item
-    with _file_lock(_parked_path().with_suffix(".lock")):
-        items = _read_parked()                     # re-read: another run may have refreshed it
-        cur = next((p for p in items if p["_provider"] == provider and p.get("id") == item.get("id")), None)
-        if cur is None:
-            return item
-        if not _token_expired(SimpleNamespace(expires_at_ms=cur.get("expires_at_ms"), access_token=cur.get("access_token"))):
-            return cur
+    @contextlib.contextmanager
+    def scope():
         try:
-            new = ad.refresh_parked(cur)
-            if not new:
-                return cur
-            cur.update(new)
-            cur.pop("_dead", None)
-        except Exception as x:
-            text = str(x)
-            if "invalid_grant" in text or "400" in text:
-                cur["_dead"] = text[:160]
-            else:
-                return cur                             # network etc.: leave untouched
-        _write_parked(items)
-        return cur
+            from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+        except ImportError:
+            yield
+            return
+        token = set_hermes_home_override(str(home))
+        try:
+            yield
+        finally:
+            reset_hermes_home_override(token)
+    return scope()
+
+
+def _pool_slice(home: Path, provider=None):
+    """Hermes' persisted credential pool as `home` sees it (`hermes_cli.auth.read_credential_pool`): every
+    provider's entries as dicts, or one provider's list. A profile without its own entries for a provider
+    sees the shared (root) ones."""
+    from hermes_cli.auth import read_credential_pool
+    with _home_override(home):
+        return read_credential_pool(provider)
 
 
 def _pool_providers() -> list:
     try:
-        data = json.loads((_root() / "auth.json").read_text(encoding="utf-8"))
-        names = {k for k, v in (data.get("credential_pool") or {}).items() if v}
+        names = {k for k, v in (_pool_slice(_root()) or {}).items() if v}
     except Exception:
         names = set()
     names |= {p["_provider"] for p in _read_parked()}
@@ -1243,46 +1414,66 @@ def _usage_rows(provider: str) -> list:
     """Live usage of every account, rotation first, then parked.
 
     Each row: label, id, state (see _entry_state, or PARKED), parked, usage = (percent, reset_epoch,
-    detail) or None, and note = why usage is missing ("dead" for a parked account whose login died).
+    detail) or None, and note = why usage is missing ("dead" for a parked account whose login died,
+    "gone" for one that left the pool).
     """
     pool = _pool(provider)
     rows = []
-    for e in sorted(pool.entries(), key=lambda x: x.priority):
+    for e in _rotation(provider, pool):
         e = _refresh_if_expired(provider, pool, e)
         state = _entry_state(e)
         u = _usage_full(provider, e) if state != "DEAD" else None
         rows.append({"label": e.label, "id": e.id, "state": state, "parked": False, "usage": u,
                      "note": "" if u or state == "DEAD" else _usage_reason(provider)})
-    for item in [p for p in _read_parked() if p["_provider"] == provider]:
-        item = _refresh_parked(provider, item)
+    for item, e in _parked_entries(provider, pool):
         row = {"label": item.get("label", "?"), "id": item.get("id"), "state": "PARKED", "parked": True,
-               "usage": None, "note": "dead"}
-        if not item.get("_dead"):
-            row["usage"] = _usage_full(provider, _parked_entry(item))
+               "usage": None, "note": "gone" if e is None else "dead"}
+        fresh = _fresh_parked(provider, pool, item, e)
+        if fresh is not None:
+            row["usage"] = _usage_full(provider, fresh)
             row["note"] = "" if row["usage"] else _usage_reason(provider)
+        elif e is not None and getattr(_find_entry(pool, e.id), "last_status", None) != "dead":
+            row["note"] = _usage_reason(provider)
         rows.append(row)
     return rows
 
 
-def _parked_entry(item: dict):
-    """A parked record as the minimal entry the adapters read (the label keys the 5-hour window)."""
-    from types import SimpleNamespace
-    return SimpleNamespace(label=item.get("label", "?"), id=item.get("id"), access_token=item.get("access_token"),
-                           auth_type=item.get("auth_type"))
+def _find_entry(pool, entry_id):
+    return next((e for e in pool.entries() if e.id == entry_id), None)
 
 
-def _parked_usage(provider: str) -> list:
+def _fresh_parked(provider: str, pool, item: dict, entry):
+    """A parked entry whose access token can be used to read its usage, or None (no entry, sign-in dead,
+    refresh failed). An expired token is refreshed by Hermes (`pool.try_refresh_matching`); a refresh
+    clears the entry's status in Hermes, so the park is put back on it at once."""
+    if entry is None or getattr(entry, "last_status", None) == "dead":
+        return None
+    if not _oauth(entry) or not _token_expired(entry):
+        return entry
+    try:
+        fresh = pool.try_refresh_matching(credential_id=entry.id)
+    except Exception:
+        fresh = None
+    after = _find_entry(pool, entry.id)
+    if after is None or getattr(after, "last_status", None) == "dead":
+        return None
+    _hold(pool, entry.id, _hold_until(item))
+    return _find_entry(pool, entry.id) if fresh is not None else None
+
+
+def _parked_usage(provider: str, pool=None) -> list:
     """(entry, (percent, reset)) of every parked account whose usage could be read, for the history.
-    Expired tokens are refreshed first; accounts whose sign-in died are skipped. Reading costs no quota."""
+    Expired tokens are refreshed through Hermes first; accounts whose sign-in died are skipped.
+    Reading costs no quota."""
+    pool = pool if pool is not None else _pool(provider)
     out = []
-    for item in [p for p in _read_parked() if p["_provider"] == provider and not p.get("_dead")]:
-        item = _refresh_parked(provider, item)
-        if item.get("_dead"):
+    for item, e in _parked_entries(provider, pool):
+        fresh = _fresh_parked(provider, pool, item, e)
+        if fresh is None:
             continue
-        ent = _parked_entry(item)
-        u = _usage(provider, ent)
+        u = _usage(provider, fresh)
         if u is not None:
-            out.append((ent, u))
+            out.append((fresh, u))
     return out
 
 
@@ -1308,6 +1499,9 @@ def _cmd_usage(args) -> int:
             last = group
         if u == "dead" and state == "PARKED":
             _p(f"  {label:34s} {state:8s}   n/a  sign-in expired: hermes account {provider} remove {label}, then add {label}")
+        elif u == "gone" and state == "PARKED":
+            _p(f"  {label:34s} {state:8s}   n/a  no longer in the pool (removed outside account-pool); "
+               f"the next balance run forgets the park")
         elif u is None or isinstance(u, str):
             _p(f"  {label:34s} {state:8s}   n/a" + (f"  ({u})" if u else ""))
         else:
@@ -1363,59 +1557,57 @@ def _cmd_park(args) -> int:
     pool = _pool(provider)
     index, matched, error = pool.resolve_target(args.target)
     if matched is None or index is None:
-        item = _find_parked(provider, args.target)
-        if item:
-            raise SystemExit(f"{item.get('label', args.target)} is already parked. "
-                             f"Undo: hermes account {provider} unpark {item.get('label', args.target)}")
         raise SystemExit(f"{error} See: hermes account {provider} list")
-    alive = [e for e in pool.entries() if getattr(e, "last_status", None) != "dead"]
+    parked = _read_parked()
+    if any(p["_provider"] == provider and p["id"] == matched.id for p in parked):
+        raise SystemExit(f"{matched.label} is already parked. Undo: hermes account {provider} unpark {matched.label}")
+    alive = [e for e in _rotation(provider, pool) if getattr(e, "last_status", None) != "dead"]
     if len(alive) <= 1 and any(e.id == matched.id for e in alive):
         raise SystemExit(f"Refused: this is the last working {provider} account. Sessions would lose access.")
-    payload = matched.to_dict()
-    payload.update(_provider=provider, _parked_at=time.time(), _parked_at_h=time.strftime("%Y-%m-%d %H:%M"))
+    item = {"_provider": provider, "id": matched.id, "label": matched.label,
+            "_parked_at": time.time(), "_parked_at_h": time.strftime("%Y-%m-%d %H:%M")}
     if until:
-        payload.update(_until=until, _until_h=time.strftime("%Y-%m-%d %H:%M", time.localtime(until)))
+        item.update(_until=until, _until_h=time.strftime("%Y-%m-%d %H:%M", time.localtime(until)))
     if getattr(args, "by", None):
-        payload["_by"] = args.by
-    parked = [p for p in _read_parked() if not (p["_provider"] == provider and p.get("id") == matched.id)]
-    parked.append(payload)
-    _write_parked(parked)                       # save first, then remove from the pool
-    removed = pool.remove_index(index)
-    if removed is None:
-        _write_parked([p for p in parked if p is not payload])
-        raise SystemExit("Could not remove the account from the pool; nothing changed.")
+        item["_by"] = args.by
+    _write_parked(parked + [item])               # list first: balance re-applies any park it lists
+    if not _hold(pool, matched.id, _hold_until(item)):
+        _write_parked(parked)
+        raise SystemExit("Hermes did not take the park (the account was not marked out of rotation); nothing changed.")
     if until:
-        _p(f"Parked [{provider}]: {removed.label} (id={removed.id}) until {payload['_until_h']}.")
+        _p(f"Parked [{provider}]: {matched.label} (id={matched.id}) until {item['_until_h']}.")
         _p("It returns to rotation on the first balance run after that time (timer runs every 5 minutes).")
         if not _timer_active():
             _p("WARNING: the balance timer is not active, so it will NOT come back by itself.")
     else:
-        _p(f"Parked [{provider}]: {removed.label} (id={removed.id}). Out of rotation until unparked.")
-    _p(f"Undo: hermes account {provider} unpark {removed.label}")
+        _p(f"Parked [{provider}]: {matched.label} (id={matched.id}). Out of rotation until unparked.")
+    _p(f"Undo: hermes account {provider} unpark {matched.label}")
     return 0
 
 
 def _cmd_unpark(args) -> int:
-    from agent.credential_pool import PooledCredential
     provider = _norm(args.provider)
     raw = str(args.target).strip().lower()
     parked = _read_parked()
     hits = [p for p in parked if p["_provider"] == provider
-            and (p.get("id", "").lower() == raw or (p.get("label") or "").lower() == raw)]
+            and (str(p.get("id", "")).lower() == raw or (p.get("label") or "").lower() == raw)]
     if len(hits) != 1:
         names = ", ".join(p.get("label", "?") for p in parked if p["_provider"] == provider) or "(none)"
         raise SystemExit(f'No parked {provider} account named "{args.target}". Parked: {names}')
     hit = hits[0]
-    payload = {k: v for k, v in hit.items() if not k.startswith("_")}
-    rest = [p for p in parked if p is not hit]
     pool = _pool(provider)
-    if any(e.id == payload.get("id") for e in pool.entries()):
-        _write_parked(rest)
-        _p(f"{payload.get('label')} is already in rotation; parked record cleared.")
-        return 0
-    entry = pool.add_entry(PooledCredential.from_dict(provider, payload))
-    _write_parked(rest)
+    entry = _find_entry(pool, hit["id"])
+    _write_parked([p for p in parked if p is not hit])
+    if entry is None:
+        _p(f"{hit.get('label')} is no longer in the {provider} pool (removed while parked); its park was cleared.")
+        _p(f"Add it again: hermes account {provider} add {hit.get('label')}")
+        return 1
+    if _park_mark(entry):
+        entry = pool.reset_status(entry.id) or entry
     _p(f"Unparked [{provider}]: {entry.label} (id={entry.id}), back in rotation.")
+    if getattr(entry, "last_status", None) == "dead":
+        _p(f"Its sign-in is dead, so Hermes skips it. Sign in again: hermes account {provider} relogin {entry.label}")
+        return 0
     ident = _identity(provider, entry)
     if ident is None:
         _p("Login check not available for this provider.")
@@ -1441,7 +1633,7 @@ def _log_actions(provider: str, actions: list, dry: bool) -> None:
 
 def _cmd_balance(args) -> int:
     provider = _norm(args.provider)
-    if not _entries(provider) and not any(p["_provider"] == provider for p in _read_parked()):
+    if not _pool(provider).entries() and not any(p["_provider"] == provider for p in _read_parked()):
         _p(f"{time.strftime('%Y-%m-%d %H:%M:%S')} [{provider}] balance: no accounts, nothing to do.")
         return 0
     threshold = float(args.threshold)
@@ -1469,8 +1661,15 @@ def _cmd_balance(args) -> int:
 
     pool = _pool(provider)
 
+    # 1c. parks Hermes let go of early, open-ended parks to renew, parks of removed accounts
+    try:
+        actions += _hold_parks(provider, pool, dry)
+    except Exception as x:
+        actions.append(f"park check failed: {type(x).__name__}: {x}")
+    rotation = _rotation(provider, pool)
+
     # 2. accounts cooling down after a failed token refresh: retry the refresh
-    for e in list(pool.entries()):
+    for e in rotation:
         if _is_cooling(e):
             if dry:
                 actions.append(f"retry token refresh for {e.label} (cooling down)")
@@ -1501,7 +1700,7 @@ def _cmd_balance(args) -> int:
         return 0
 
     rows = []
-    for e in sorted(pool.entries(), key=lambda x: x.priority):
+    for e in _rotation(provider, pool):
         if getattr(e, "last_status", None) == "dead":
             rows.append((e, None, "dead"))
             continue
@@ -1513,7 +1712,7 @@ def _cmd_balance(args) -> int:
     parked_known = []
     if not dry:
         try:
-            parked_known = _parked_usage(provider)
+            parked_known = _parked_usage(provider, pool)
         except Exception as x:
             actions.append(f"parked usage not read: {type(x).__name__}: {x}")
 
@@ -1839,16 +2038,15 @@ def _cmd_strategy(args) -> int:
 
 # ── running processes with an older session tracker ─────────────────────────
 
-TRACKER_DIR = Path(__file__).resolve().parent.parent / "account-pool-tracker"
 MESSAGING_KIND = "gateway"
+PLUGIN_DIR = Path(__file__).resolve().parent
 
 
 def _tracker_installed() -> tuple:
-    """(version, time it was installed) of the session tracker next to this plugin; (None, None) without it."""
+    """(version, time it was installed) of this plugin's session tracking hook; (None, None) without it."""
     try:
-        m = re.search(r"^version:\s*['\"]?([\w.]+)", (TRACKER_DIR / "plugin.yaml").read_text(encoding="utf-8"), re.M)
-        return (m[1] if m else None), (TRACKER_DIR / "__init__.py").stat().st_mtime
-    except OSError:
+        return tracker.VERSION, Path(tracker.__file__).stat().st_mtime
+    except (OSError, AttributeError):
         return None, None
 
 
@@ -1963,25 +2161,35 @@ def _doctor_checks(provider: str) -> list:
         add("warn", f"unknown strategy value: {', '.join(odd)} (Hermes uses fill_first). "
                     f"Fix: hermes account {provider} strategy fill_first")
 
-    # profile-local pools shadowing the shared pool
+    # profile-local pools shadowing the shared pool (read through Hermes: a profile without entries of
+    # its own sees the shared ones)
     local = []
-    for name, home in profiles[1:]:
-        d = _load_json(home / "auth.json", {})
-        if (d.get("credential_pool") or {}).get(provider):
-            local.append(name)
+    try:
+        shared = {r.get("id") for r in _pool_slice(_root(), provider) or [] if isinstance(r, dict)}
+        for name, home in profiles[1:]:
+            ids = {r.get("id") for r in _pool_slice(home, provider) or [] if isinstance(r, dict)}
+            if ids and ids != shared:
+                local.append(name)
+    except Exception as x:  # noqa: BLE001 - an unreadable profile must not stop doctor
+        add("warn", f"could not read the profiles' pools: {type(x).__name__}: {x}")
     add("ok" if not local else "fail",
         "every profile uses the shared account pool" if not local else
         f"profiles with their OWN {provider} pool (they skip the shared accounts): {', '.join(local)}")
 
-    # tracker plugin per profile
-    missing = []
-    for name, home in profiles:
-        enabled = _plugin_lists(home)[0]
-        if "account-pool-tracker" not in enabled or not (home / "plugins" / "account-pool-tracker").exists():
-            missing.append(name)
+    # session tracking: account-pool's own hook, loaded in every profile (the default one runs this command)
+    lists = {name: _plugin_lists(home) for name, home in profiles[1:]}
+    off = [name for name in lists if "account-pool" in lists[name][1]]
+    missing = [name for name, home in profiles[1:] if name not in off
+               and ("account-pool" not in lists[name][0] or not (home / "plugins" / "account-pool").exists())]
+    skipped = f"; not in {', '.join(off)} (account-pool is in plugins.disabled there)" if off else ""
     add("ok" if not missing else "warn",
-        "session tracker active in every profile" if not missing else
-        f"session tracker missing in: {', '.join(missing)} (`who` will not show them). Fix: hermes account {provider} setup")
+        f"session tracking active in every profile{skipped}" if not missing else
+        f"session tracking missing in: {', '.join(missing)} (`who` will not show them). Fix: hermes account {provider} setup")
+    old = [name for name, home in profiles if (home / "plugins" / "account-pool-tracker").exists()
+           or "account-pool-tracker" in _plugin_lists(home)[0]]
+    if old:
+        add("warn", f"the retired account-pool-tracker plugin is still in: {', '.join(old)} (account-pool counts "
+                    f"sessions itself since 4.0). Fix: hermes account {provider} setup")
 
     # processes that loaded the tracker before its last update
     tr = _tracker_status(provider)
@@ -1997,7 +2205,7 @@ def _doctor_checks(provider: str) -> list:
                     f"or older was running then. Fix: hermes gateway restart, restart Hermes Desktop, or end long "
                     f"sessions (once it has ended, this line clears within 45 min)")
     if tr["version"] and not tr["stale"] and not tr["unnamed_since"]:
-        add("ok", f"running sessions count with tracker {tr['version']}")
+        add("ok", f"running sessions count with session tracking {tr['version']}")
 
     # Accounts page: Hermes Desktop mounts its backend only for profiles that list account-pool
     if (root / "desktop-plugins" / "account-pool").is_dir():
@@ -2012,7 +2220,7 @@ def _doctor_checks(provider: str) -> list:
             f"'backend did not answer' while it runs one of them). Fix: hermes account {provider} setup")
 
     # file permissions (Windows has no Unix modes: the files sit in the user's own profile folder)
-    for path in (() if WINDOWS else (root / "auth.json", root / "account-pool-parked.json")):
+    for path in (() if WINDOWS else (_parked_path(),)):
         if path.exists():
             mode = path.stat().st_mode & 0o777
             add("ok" if mode == 0o600 else "fail",
@@ -2058,7 +2266,7 @@ def _doctor_checks(provider: str) -> list:
 
     # pool health
     pool = _pool(provider)
-    entries = pool.entries()
+    entries = _rotation(provider, pool)
     dead = [e.label for e in entries if getattr(e, "last_status", None) == "dead"]
     cooling = [e.label for e in entries if _is_cooling(e)]
     parked = [p.get("label") for p in _read_parked() if p["_provider"] == provider]
@@ -2066,6 +2274,26 @@ def _doctor_checks(provider: str) -> list:
         f"{len(entries)} account{'' if len(entries) == 1 else 's'} in rotation, {len(parked)} parked" + (f"; DEAD: {', '.join(dead)}" if dead else ""))
     if cooling:
         add("warn", f"cooling down (auto-retried by balance): {', '.join(cooling)}")
+    now = time.time()
+    held = _parked_entries(provider, pool)
+    loose = [it.get("label") for it, e in held if e is not None and not _park_mark(e)
+             and getattr(e, "last_status", None) != "dead" and not (it.get("_until") and float(it["_until"]) <= now)]
+    gone = [it.get("label") for it, e in held if e is None]
+    listed = {it["id"] for it, _ in held}
+    stray = [e.label for e in pool.entries() if _park_mark(e) and e.id not in listed]
+    if loose:
+        add("warn", f"parked, but Hermes has them in rotation again: {', '.join(loose)}. "
+                    f"Fix: hermes account {provider} balance (it parks them again)")
+    if gone:
+        add("warn", f"parked accounts that are no longer in the pool: {', '.join(gone)} (the next balance run forgets them)")
+    if stray:
+        add("warn", f"held as parked in Hermes, but not parked here: {', '.join(stray)}. "
+                    f"Fix: hermes account {provider} balance (it puts them back in rotation)")
+    open_ended = [it.get("label") for it, e in held if e is not None and not it.get("_until")]
+    if open_ended and not _timer_active():
+        add("warn", f"parked without an end time while the balance timer is off: {', '.join(open_ended)}. Hermes "
+                    f"holds a park {PARK_HOLD // 86400} days and each balance run renews it. "
+                    f"Fix: hermes account {provider} setup --timer")
 
     # usage endpoint
     if not _has_usage(provider):
@@ -2089,8 +2317,12 @@ def _doctor_checks(provider: str) -> list:
         ok, how = _desktop_channel()
         chans.append("desktop" if ok else f"desktop ({how} missing)")
     tgt = _telegram_target(cfg)
-    if tgt:
-        chans.append(f"telegram via {cfg['notify'].get('telegram_via') or 'default'}")
+    if tgt == "telegram" and _telegram_home_set(cfg) is False:
+        add("warn", "Telegram alerts go to the bot's home channel, but it has none, so they do not arrive. "
+                    "Fix: " + TELEGRAM_HOME_HINT.replace("<provider>", provider))
+    elif tgt:
+        chans.append(f"telegram via {cfg['notify'].get('telegram_via') or 'default'} to "
+                     + ("the bot's home channel" if tgt == "telegram" else f"chat {tgt.split(':', 1)[-1]}"))
     add("ok" if chans else "warn", f"alert channels: {', '.join(chans) or 'none'} "
         f"(delivery is tested with: hermes account {provider} notify test)")
     at = _daily_at(cfg)
@@ -2235,12 +2467,11 @@ def _relogin_target(provider: str, target: str):
     """(label, id, priority) of the OAuth account to sign in again; SystemExit with the reason otherwise."""
     pool = _pool(provider)
     index, matched, error = pool.resolve_target(target)
+    parked = _find_parked(provider, target) or (matched is not None and _find_parked(provider, matched.id))
+    if parked:
+        raise SystemExit(f"{parked.get('label')} is parked. Unpark it first: "
+                         f"hermes account {provider} unpark {parked.get('label')}")
     if matched is None or index is None:
-        parked = [p for p in _read_parked() if p["_provider"] == provider
-                  and str(target).lower() in (p.get("id", "").lower(), (p.get("label") or "").lower())]
-        if parked:
-            raise SystemExit(f"{parked[0].get('label')} is parked. Unpark it first: "
-                             f"hermes account {provider} unpark {parked[0].get('label')}")
         raise SystemExit(f"{error} See: hermes account {provider} list")
     label = matched.label
     if not _oauth(matched):
@@ -2669,7 +2900,7 @@ def _cmd_report(args) -> int:
                 share = g["total"] / tt["total"] * 100 if tt["total"] else 0
                 _p(f"    {name:30s} {_fmt_tokens(g['total']):>7s} {g['requests']:>9d} {_fmt_cost(g):>9s} {share:5.0f}%")
     else:
-        _p("  Tokens: none counted yet. The session tracker counts them from version 1.1.0 on.")
+        _p("  Tokens: none counted yet. The session tracker counts them from each session's first API call.")
     if data["busiest"]:
         _p("  Busiest hours: " + ", ".join(f"{h:02d}:00-{(h + 1) % 24:02d}:00 ({v:.0f})" for h, v in data["busiest"]))
     _p(f"  Time with EVERY account >= 90%: {data['full_min']:.0f} min")
@@ -2804,8 +3035,8 @@ def _cmd_sessions(args) -> int:
     hours = float(args.hours or 24)
     data = _sessions_data(provider, hours)
     if not data["since"]:
-        _p(f"[{provider}] no tokens per session yet. Session tracker 1.5.0 counts them from its first API call; "
-           f"running bots switch to it when they restart (doctor names them).")
+        _p(f"[{provider}] no tokens per session yet. They are counted from a session's first API call; "
+           f"running bots start counting when they restart (doctor names them).")
         return 0
     since = data["since"]
     _p(f"[{provider}] sessions by API price, last {hours:g} h ({data['count']} session{'' if data['count'] == 1 else 's'}"
@@ -2871,7 +3102,8 @@ def _cmd_notify(args) -> int:
         _p(f"  desktop  : {'on' if cfg['notify'].get('desktop') else 'off'}"
               + ("" if _desktop_channel()[0] else f" ({_desktop_channel()[1]} not available)"))
         via = cfg["notify"].get("telegram_via") or "default"
-        _p(f"  telegram : {'on (your private chat)' if tgt else 'off'}"
+        where = _telegram_where(tgt, _telegram_home_set(cfg) if tgt == "telegram" else None)
+        _p(f"  telegram : {where.replace('<provider>', _norm(args.provider))}"
               + (f", sent with the bot of profile '{via}'" if tgt else ""))
         _p(f"  alert when every account is above {cfg.get('alert_all_above', 80)}%, "
               f"and when an account needs sign-in (DEAD).")
@@ -2887,12 +3119,16 @@ def _cmd_notify(args) -> int:
         _p(f"Settings: {_config_path()}  (created with defaults on first change)")
         _p("Change: hermes account <provider> notify desktop-on|desktop-off|telegram-on|telegram-off")
         _p("        hermes account <provider> notify telegram-via=<profile>   (which bot sends)")
+        _p("        hermes account <provider> notify telegram-to=<chat id>|home   (which chat gets them)")
         _p("        hermes account <provider> notify daily=08:00|daily-off|summary   (summary: send it now)")
         _p("        hermes account <provider> notify bots-on|bots-off|bots=<USD per hour>")
         return 0
     if sub == "test":
         sent = _notify("Hermes account-pool: test", "Alerts from `hermes account` reach this channel.")
         _p(f"Test alert delivered to: {', '.join(sent) or 'no channel'}")
+        if "telegram" not in sent and _telegram_target(cfg) == "telegram" and _telegram_home_set(cfg) is False:
+            _p("Telegram: the bot has no home channel yet. Fix: "
+               + TELEGRAM_HOME_HINT.replace("<provider>", _norm(args.provider)))
         return 0 if sent else 1
     if sub == "summary":
         title, body = _summary(_norm(args.provider))
@@ -2943,6 +3179,18 @@ def _cmd_notify(args) -> int:
         _p(f"Bot alerts on: when a bot's last hour reaches ${float(cur['usd']):g} at API prices or {cur['requests']} requests, "
            f"and {float(cur['factor']):g}x its usual hour." if cur["on"] else "Bot alerts off.")
         return 0
+    if sub.startswith("telegram-to="):
+        to = sub.split("=", 1)[1].strip()
+        if to.lower().startswith("telegram:"):
+            to = to.split(":", 1)[1]
+        if to.lower() not in ("home", "auto") and not re.fullmatch(r"-?\d+(:\d+)?", to):
+            _p("telegram-to takes a Telegram chat id (a number; groups start with -) or home (the bot's home channel).")
+            return 2
+        user = _load_json(_config_path(), {})
+        user.setdefault("notify", {})["telegram"] = "auto" if to.lower() in ("home", "auto") else f"telegram:{to}"
+        _atomic_json(_config_path(), user)
+        _p(f"Telegram alerts go to {'the bot' + chr(39) + 's home channel' if to.lower() in ('home', 'auto') else 'chat ' + to}.")
+        return 0
     if sub.startswith("telegram-via="):
         via = sub.split("=", 1)[1].strip() or "default"
         if via != "default" and not (_root() / "profiles" / via).is_dir():
@@ -2957,7 +3205,8 @@ def _cmd_notify(args) -> int:
                "telegram-on": ("telegram", "auto"), "telegram-off": ("telegram", None)}
     if sub not in toggles:
         _p("notify accepts: status, test, summary, desktop-on, desktop-off, telegram-on, telegram-off, "
-           "telegram-via=<profile>, daily=<HH:MM>, daily-off, bots-on, bots-off, bots=<USD per hour>")
+           "telegram-to=<chat id>|home, telegram-via=<profile>, daily=<HH:MM>, daily-off, bots-on, bots-off, "
+           "bots=<USD per hour>")
         return 2
     user = _load_json(_config_path(), {})
     key, val = toggles[sub]
@@ -3141,11 +3390,11 @@ def _add_key_in_process(provider: str, label: str):
 
 def _add_check(provider: str, label: str) -> None:
     """SystemExit when the label is already in rotation or parked."""
+    if _find_parked(provider, label):
+        raise SystemExit(f"{label} is parked. Return it with: hermes account {provider} unpark {label}")
     if any((e.label or "").lower() == label.lower() for e in _pool(provider).entries()):
         raise SystemExit(f"{label} is already in rotation. To sign it in again: "
                          f"hermes account {provider} relogin {label}")
-    if _find_parked(provider, label):
-        raise SystemExit(f"{label} is parked. Return it with: hermes account {provider} unpark {label}")
 
 
 def _accept_added(provider: str, label: str, fresh, verify: bool) -> int:
@@ -3194,27 +3443,6 @@ def _accept_added(provider: str, label: str, fresh, verify: bool) -> int:
     return 0
 
 
-def _store_signin(provider: str, label: str, creds: dict):
-    """Save a finished sign-in as a new pool entry: the same steps `hermes auth add <provider> --type oauth`
-    takes after its login (un-suppress the provider, write the entry, mark the provider active if none is)."""
-    import uuid
-    from agent.credential_pool import PooledCredential
-    from hermes_cli import auth as auth_mod
-    from hermes_cli.auth_commands import _OAUTH_ADD_SPECS, _unsuppress_provider_sources
-    spec = _OAUTH_ADD_SPECS[provider]
-    _unsuppress_provider_sources(provider)
-    pool = _pool(provider)
-    existing = pool.entries()
-    entry = PooledCredential(
-        provider=provider, id=uuid.uuid4().hex[:6], label=label, auth_type=spec.auth_type, priority=0,
-        source=spec.source(creds) if callable(spec.source) else spec.source,
-        access_token=spec.token(creds), **spec.fields(creds, provider))
-    entry = pool.add_entry(entry)
-    if spec.activate_first and not existing:
-        auth_mod.mark_provider_active_if_unset(provider)
-    return entry
-
-
 def _cmd_add(args) -> int:
     provider = _norm(args.provider)
     label = str(args.target).strip()
@@ -3258,30 +3486,18 @@ def _cmd_remove(args) -> int:
     provider = _norm(args.provider)
     pool = _pool(provider)
     index, matched, error = pool.resolve_target(args.target)
-
     if matched is None or index is None:
-        item = _find_parked(provider, args.target)
-        if not item:
-            raise SystemExit(f"{error} See: hermes account {provider} list")
-        label = item.get("label", "?")
-        _p(f"Remove PARKED account {label} (id={item.get('id')}) from {provider}.")
-        _p("Its saved login is deleted; to use it again you must sign in again (add).")
-        if not _confirm("Delete it?", args.yes):
-            _p("Cancelled. Nothing changed.")
-            return 1
-        items = [p for p in _read_parked() if not (p["_provider"] == provider and p.get("id") == item.get("id"))]
-        _write_parked(items)
-        _p(f"Removed {label}.")
-        return 0
-
+        raise SystemExit(f"{error} See: hermes account {provider} list")
+    parked = _find_parked(provider, matched.id)
     label = matched.label
-    others = [e for e in pool.entries() if e.id != matched.id and getattr(e, "last_status", None) != "dead"]
-    if not others:
+    others = [e for e in _rotation(provider, pool) if e.id != matched.id and getattr(e, "last_status", None) != "dead"]
+    if not others and not parked:
         raise SystemExit(f"Refused: {label} is the last working {provider} account. "
                          f"Add another one first: hermes account {provider} add <email>")
-    _p(f"Remove {label} (id={matched.id}) from {provider}.")
+    _p(f"Remove {'PARKED account ' if parked else ''}{label} (id={matched.id}) from {provider}.")
     _p("Its login is deleted; to use it again you must sign in again (add).")
-    _p(f"To take it out of rotation for a while instead: hermes account {provider} park {label}")
+    if not parked:
+        _p(f"To take it out of rotation for a while instead: hermes account {provider} park {label}")
     if not _confirm("Delete it?", args.yes):
         _p("Cancelled. Nothing changed.")
         return 1
@@ -3299,6 +3515,7 @@ def _cmd_remove(args) -> int:
         except Exception as x:  # noqa: BLE001 - report it like the subprocess path would
             _p(f"hermes auth remove failed: {x}")
             return 1
+        _forget_park(provider, matched.id)
         _p(f"Removed {label}.")
         return 0
     r = subprocess.run([_hermes_bin(), "auth", "remove", provider, matched.id], capture_output=True, text=True,
@@ -3306,8 +3523,16 @@ def _cmd_remove(args) -> int:
     if r.returncode != 0:
         _p((r.stderr or r.stdout).strip() or "hermes auth remove failed.")
         return 1
+    _forget_park(provider, matched.id)
     _p(f"Removed {label}.")
     return 0
+
+
+def _forget_park(provider: str, entry_id: str) -> None:
+    items = _read_parked()
+    rest = [p for p in items if not (p["_provider"] == provider and p["id"] == entry_id)]
+    if len(rest) != len(items):
+        _write_parked(rest)
 
 
 # ── setup: what a plugin install leaves out ─────────────────────────────────
@@ -3492,6 +3717,19 @@ def _link_tracker(link: Path, target: Path) -> None:
         winsys.junction(link, target)
 
 
+def _retire_tracker(home: Path, remove_tree: bool) -> None:
+    """Take the retired account-pool-tracker plugin out of one profile. In a named profile it is a link to
+    the default profile's copy: drop the link and the plugins.enabled entry here (never follow the link).
+    In the default profile Hermes removes the plugin itself (`hermes plugins remove`)."""
+    path = home / "plugins" / "account-pool-tracker"
+    if remove_tree and path.exists() and not _is_dir_link(path):
+        _run_hermes("default", "plugins", "remove", "account-pool-tracker")
+    elif _is_dir_link(path):
+        _unlink_link(path)
+    if "account-pool-tracker" in _plugin_lists(home)[0]:
+        _set_enabled(home, "account-pool-tracker", False)
+
+
 def _unlink_link(link: Path) -> None:
     if WINDOWS:
         winsys.unlink_dir_link(link)
@@ -3518,7 +3756,7 @@ def _timer_log_hint() -> str:
 
 def _cmd_setup(args) -> int:
     """Set up what `hermes plugins install` leaves out (install.sh does the same after copying the plugins):
-    the Accounts page backend and the session tracker in every profile; with --timer the balance timer,
+    the Accounts page backend and account-pool's session tracker in every profile; with --timer the balance timer,
     with --strategy fill_first. --undo takes the profile and timer parts back. Shows the plan first."""
     provider = _norm(args.provider)
     undo, want_timer, want_strategy = (bool(getattr(args, k, False)) for k in ("undo", "timer", "strategy"))
@@ -3530,18 +3768,22 @@ def _cmd_setup(args) -> int:
     named = homes[1:]
     home_of = dict(homes)
     lists = {name: _plugin_lists(home) for name, home in homes}
-    tracker = root / "plugins" / "account-pool-tracker"
+    old_tracker = root / "plugins" / "account-pool-tracker"
     status, changes = [], []
 
     def change(text, fn):
         changes.append((text, fn))
 
     if undo:
-        linked = [n for n, h in named if _is_dir_link(h / "plugins" / "account-pool-tracker")
-                  and (h / "plugins" / "account-pool-tracker").resolve() == tracker.resolve()]
+        linked = [n for n, h in named if _is_dir_link(h / "plugins" / "account-pool")
+                  and (h / "plugins" / "account-pool").resolve() == PLUGIN_DIR]
         for n in linked:
+            link = home_of[n] / "plugins" / "account-pool"
+            change(f"remove account-pool's session tracking from {n} (the link {link})",
+                   lambda link=link: _unlink_link(link))
+        for n in [n for n, h in named if _is_dir_link(h / "plugins" / "account-pool-tracker")]:
             link = home_of[n] / "plugins" / "account-pool-tracker"
-            change(f"remove the session tracker from {n} (plugins.enabled and the link {link})",
+            change(f"remove the retired account-pool-tracker from {n} (plugins.enabled and the link {link})",
                    lambda n=n, link=link: (_set_enabled(home_of[n], "account-pool-tracker", False), _unlink_link(link)))
         listed = [n for n, _ in named if "account-pool" in lists[n][0]]
         for n in listed:
@@ -3560,7 +3802,7 @@ def _cmd_setup(args) -> int:
             else:
                 change(f"take {provider} out of the balance timer (it keeps running {', '.join(rest)})" if rest else gone,
                        lambda: _timer_drop(provider, provs))
-        status.append(("Session tracker", f"linked into {len(linked)} profile(s)"))
+        status.append(("Session tracking", f"linked into {len(linked)} profile(s)"))
         status.append(("Accounts page", f"listed in {len(listed)} profile(s)"))
         status.append(("Balance timer", (f"runs every provider with accounts ({', '.join(provs) or 'none yet'})" if follows else
                                          f"runs {', '.join(provs)}") if (follows or provs) else "not installed"))
@@ -3574,30 +3816,28 @@ def _cmd_setup(args) -> int:
         for n in unlisted:
             change(f"list account-pool in plugins.enabled of {n} (Hermes Desktop serves the page's backend from there; "
                    f"the profile gets no command and no tools)", lambda n=n: _set_enabled(home_of[n], "account-pool", True))
-        # session tracker: one copy in the default profile, linked into every other profile
-        if not (tracker / "plugin.yaml").is_file():
-            status.append(("Session tracker", "not installed, so `who`, tokens and sessions stay empty. Install it, "
-                           "then run setup again: hermes plugins install account-pool-tracker"))
-        else:
-            ver = (re.search(r"^version:\s*['\"]?([\w.]+)", (tracker / "plugin.yaml").read_text(encoding="utf-8"), re.M) or [None, "?"])[1]
-            todo = 0
-            if "account-pool-tracker" not in lists["default"][0]:
-                todo += 1
-                change("enable the session tracker in the default profile (hermes plugins enable account-pool-tracker)",
-                       lambda: _run_hermes("default", "plugins", "enable", "account-pool-tracker"))
-            for n, h in named:
-                link = h / "plugins" / "account-pool-tracker"
-                need_link = not link.exists()
-                need_on = "account-pool-tracker" not in lists[n][0]
-                if need_link:
-                    change(f"link the session tracker into {n} ({link} -> {tracker})",
-                           lambda link=link: _link_tracker(link, tracker))
-                if need_on:
-                    note = " (it is in plugins.disabled there now)" if "account-pool-tracker" in lists[n][1] else ""
-                    change(f"enable the session tracker in {n}{note} (hermes -p {n} plugins enable account-pool-tracker)",
-                           lambda n=n: _run_hermes(n, "plugins", "enable", "account-pool-tracker"))
-                todo += bool(need_link or need_on)
-            status.append(("Session tracker", f"{ver}, active in {len(homes) - todo} of {len(homes)} profile(s)"))
+        # session tracking: account-pool's own hook. A profile loads plugins from its own plugins folder,
+        # so the one copy in the default profile is linked into every other profile.
+        todo = 0
+        for n, h in named:
+            link = h / "plugins" / "account-pool"
+            need_link = not link.exists() and n not in off     # a profile that disabled it is left alone
+            if need_link:
+                change(f"link account-pool into {n} ({link} -> {PLUGIN_DIR}), so its session tracking runs there",
+                       lambda link=link: _link_tracker(link, PLUGIN_DIR))
+            todo += bool(need_link or n in unlisted or n in off)
+        status.append(("Session tracking", f"{tracker.VERSION}, active in {len(homes) - todo} of {len(homes)} profile(s)"
+                       + (f"; not in {', '.join(off)} (account-pool is in plugins.disabled there)" if off else "")))
+        # the retired account-pool-tracker plugin (before 4.0): its hook would count every call twice
+        stale = [n for n, h in named if _is_dir_link(h / "plugins" / "account-pool-tracker")
+                 or (h / "plugins" / "account-pool-tracker").exists() or "account-pool-tracker" in lists[n][0]]
+        for n in stale:
+            change(f"remove the retired account-pool-tracker from {n} (its link and plugins.enabled entry)",
+                   lambda n=n: _retire_tracker(home_of[n], False))
+        if (old_tracker / "plugin.yaml").is_file() or "account-pool-tracker" in lists["default"][0]:
+            change("remove the retired account-pool-tracker plugin from the default profile "
+                   "(hermes plugins remove account-pool-tracker): account-pool counts sessions itself now",
+                   lambda: _retire_tracker(root, True))
         # balance timer (opt-in: a background job every 5 minutes)
         lines, active = _timer_lines(), _timer_active()
         follows, provs = ALL in lines, _timer_providers()
@@ -3654,16 +3894,17 @@ def _cmd_setup(args) -> int:
             failed += 1
             _p(f"  FAILED: {text}: {x}")
     if undo:
-        _p("Kept: account-pool and account-pool-tracker in the default profile (remove them with "
-           "`hermes plugins remove <name>`), the accounts, parked accounts, settings and data files, "
-           "and credential_pool_strategies.")
+        _p("Kept: account-pool in the default profile (remove it with `hermes plugins remove account-pool`), "
+           "the accounts, parked accounts, settings and data files, and credential_pool_strategies.")
         parked = [it.get("label") or it.get("id") for it in _read_parked() if it.get("_provider") == provider]
         if parked:
             _p(f"{len(parked)} {provider} account(s) are parked and stay out of rotation: {', '.join(map(str, parked))}. "
-               f"Unpark them before you remove the plugin, or their logins stay in account-pool-parked.json only.")
+               f"Unpark them before you remove the plugin: without it, Hermes keeps an open-ended park up to "
+               f"{PARK_HOLD // 86400} days.")
     else:
-        _p("Running sessions load the tracker after /reset; the gateway after `hermes gateway restart`; "
-           "Hermes Desktop after a restart (also needed for the Accounts page in newly listed profiles).")
+        _p("Running sessions pick up the session tracking when they start again (/reset); the gateway after "
+           "`hermes gateway restart`; Hermes Desktop after a restart (also needed for the Accounts page in newly "
+           "listed profiles).")
     return 1 if failed else 0
 
 
@@ -3724,7 +3965,7 @@ def _wake_models(provider: str, max_age: float = 0) -> dict:
         error = f"the plugin cannot read {provider}'s model list"
     else:
         pool = _pool(provider)
-        cands = [e for e in sorted(pool.entries(), key=lambda e: e.priority)
+        cands = [e for e in _rotation(provider, pool)
                  if _entry_state(e) == "active" and (_oauth(e) or not ad.oauth_only)]
         if not cands:
             error = "no signed-in account in rotation to read it with"
@@ -3844,7 +4085,7 @@ def _wake_status(provider: str) -> int:
         _p("  WARNING: the balance timer is not active, so nothing wakes automatically.")
     _p(f"  model    : {_wake_model_text(provider)}")
     snap, last = _window_snapshot(provider), _wake_last(provider)
-    entries = sorted(_pool(provider).entries(), key=lambda e: e.priority)
+    entries = _rotation(provider)
     if entries:
         newest = max((v["ts"] for v in snap.values() if v.get("ts")), default=None)
         _p("  in rotation" + (f" (windows from the balance run at {_hhmm(newest)}):" if newest else
@@ -3945,14 +4186,15 @@ def _cmd_wake(args) -> int:
         picked = []
         for t in [x.strip() for x in raw.split(",") if x.strip()]:
             _, matched, error = pool.resolve_target(t)
+            item = _find_parked(provider, t) or (matched is not None and _find_parked(provider, matched.id))
+            if item:
+                raise SystemExit(f"{item.get('label', t)} is parked: wake works on accounts in rotation. Unpark it first.")
             if matched is None:
-                item = _find_parked(provider, t)
-                raise SystemExit(f"{item.get('label', t)} is parked: wake works on accounts in rotation. Unpark it first."
-                                 if item else f"{error} See: hermes account {provider} list")
+                raise SystemExit(f"{error} See: hermes account {provider} list")
             if all(x.id != matched.id for x in picked):
                 picked.append(matched)
     else:
-        picked = sorted(pool.entries(), key=lambda e: e.priority)
+        picked = _rotation(provider, pool)
     dry = bool(args.dry_run)
     lines = _wake(provider, pool, picked, dry=dry, forced=bool(raw))
     woke = sum(1 for x in lines if x.startswith(("woke ", "would wake ")))
@@ -4008,7 +4250,7 @@ ACTIONS = [
     ("balance", "[--dry-run] [--threshold N]", "Order by usage, bench >= N% (90), auto-recover, alerts"),
     ("strategy", "[<name>] [--only P,...]", "Hermes' rotation strategy per profile; set it (balance needs fill_first)"),
     ("doctor", "", "Check the whole setup: strategy, timer, files, pools, alerts"),
-    ("setup", "[--timer] [--strategy] [--undo]", "Profiles, tracker and (--timer) the balance timer; shows the plan first"),
+    ("setup", "[--timer] [--strategy] [--undo]", "Profiles, session tracker and (--timer) the balance timer; shows the plan first"),
     ("notify", "[status|test|summary|...]", "Alert channels (desktop, Telegram) and the daily summary"),
     ("wake", "[<target>|status|models|...]", "Start the 5-hour window of idle accounts now (one tiny request)"),
     ("privacy", "[on|off|status]", "Mask emails in the page, alerts and output (al•••e@e•••.com)"),
@@ -4172,9 +4414,10 @@ def _in_profile() -> bool:
 
 
 def register(ctx) -> None:
-    # The command lives in the default profile only. `setup` (and install.sh) also lists account-pool
-    # in every profile's plugins.enabled, so Hermes Desktop mounts the Accounts page backend whichever
-    # profile it runs; if a profile ever loads this plugin, it registers nothing there.
+    # Session tracking runs in every profile that loads the plugin: `setup` (and install.sh) link it into
+    # each profile and list it in plugins.enabled, which also lets Hermes Desktop mount the Accounts page
+    # backend whichever profile it runs. The `account` command lives in the default profile only.
+    ctx.register_hook("post_api_request", tracker.on_api_request)
     if _in_profile():
         return
     ctx.register_cli_command(

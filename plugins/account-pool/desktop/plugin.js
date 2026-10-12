@@ -277,6 +277,7 @@ const CSS = `
 .hap-pre{white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.6875rem;line-height:1.45;background:var(--ui-bg-quaternary);border-radius:6px;padding:8px 10px;max-height:340px;overflow:auto;color:var(--ui-text-secondary);margin:0}
 .hap-muted{color:var(--ui-text-tertiary)}
 .hap-small{font-size:.6875rem}
+.hap-warn{color:var(--ui-orange)}
 .hap-field{display:flex;flex-direction:column;gap:6px;margin-top:10px;font-size:.75rem}
 .hap-steps{margin:0;padding-left:18px;font-size:.75rem;line-height:1.5;color:var(--ui-text-secondary);list-style:decimal}
 .hap-steps li{margin:3px 0;padding-left:2px}
@@ -811,11 +812,7 @@ function SignInDialog({ provider, mode, row, verify, methods, onClose }) {
     body = h(Fragment, null,
       h('div', { className: 'hap-field' }, steps),
       linkRow('Copy link'),
-      flow.listening === false
-        ? h('div', { className: 'hap-banner', style: { marginBottom: 10 } }, h(Codicon, { name: 'info' }),
-          h('span', null, 'Port 1455 on this computer is taken (another Codex sign-in is waiting, maybe in a terminal), ',
-            'so this window cannot hear the browser. Paste the address the browser ends on.'))
-        : h('div', { className: 'hap-row hap-muted' }, h(Loader, { type: 'lemniscate-bloom' }), 'Waiting for the browser…'),
+      h('div', { className: 'hap-row hap-muted' }, h(Loader, { type: 'lemniscate-bloom' }), 'Waiting for the browser…'),
       h('div', { className: 'hap-field' },
         h('span', null, 'Address the browser ended on (only when it is on another computer)'),
         h(Input, {
@@ -846,6 +843,7 @@ function SignInDialog({ provider, mode, row, verify, methods, onClose }) {
           h(Button, { size: 'sm', variant: 'ghost', onClick: () => openExternal(flow.url) },
             h(Codicon, { name: 'link-external', size: '0.8rem' }), 'Open in default browser')),
         h('div', { className: 'hap-row hap-muted' }, h(Loader, { type: 'lemniscate-bloom' }), 'Waiting for you to confirm…')),
+      flow.notice ? h('p', { className: 'hap-small', 'data-notice': 'signin' }, flow.notice) : null,
       choices.includes('browser')
         ? h('p', { className: 'hap-small hap-muted' },
           '"Contact your workspace admin to enable device code authentication"? The workspace turned device codes off: ',
@@ -1004,9 +1002,11 @@ function AccountsView({ data, provider, openDialog }) {
           h('tbody', null, data.parked.map(p => h('tr', { key: p.id },
             h('td', null, ''),
             h('td', null, h('div', { className: 'hap-acc' },
-              h(StatusDot, { tone: p.dead ? 'bad' : 'muted' }), h('span', null, p.label),
+              h(StatusDot, { tone: p.dead || p.gone ? 'bad' : 'muted' }), h('span', null, p.label),
               p.dead ? h(MTip, { label: 'Its sign-in expired while parked: remove it, then add it again.' },
                 h(Badge, { variant: 'destructive' }, 'sign-in expired')) : null,
+              p.gone ? h(MTip, { label: 'Removed from the pool outside account-pool. The next balance run forgets this park.' },
+                h(Badge, { variant: 'destructive' }, 'not in the pool')) : null,
               h(SchedChip, { s: schedOf(p.label) }))),
             h('td', null, h(UsageCell, { usage: p.usage, parked: true, now })),
             h('td', null, h(SparkCell, { points: p.spark, peak: p.peak, now })),
@@ -1115,7 +1115,7 @@ function GroupTable({ title, kind, rows, total, extra }) {
 function SessionTable({ data }) {
   if (!data.since) {
     return h(Fragment, null, h('div', { className: 'hap-section' }, 'By session'),
-      h('p', { className: 'hap-small hap-muted' }, 'Session tracker 1.5.0 counts tokens per session from its first API call. Running bots switch to it when they restart.'))
+      h('p', { className: 'hap-small hap-muted' }, 'Tokens per session are counted from a session\'s first API call. Running bots start counting when they restart.'))
   }
   const rows = data.sessions || []
   const tip = r => [
@@ -1330,7 +1330,10 @@ function AlertsView({ provider, data, openResult }) {
     h('div', { className: 'hap-setting' },
       h('div', { className: 'hap-grow' },
         h('div', { className: 'hap-setting-t' }, 'Telegram'),
-        h('div', { className: 'hap-small hap-muted' }, 'To your private chat (the first TELEGRAM_ALLOWED_USERS entry), sent by the bot of:')),
+        h('div', { className: 'hap-small hap-muted' }, (n.telegram_chat ? `To chat ${n.telegram_chat}` : 'To the bot\'s home channel (send /sethome to the bot in the chat you want)') + ', sent by the bot of:'),
+        n.telegram && n.telegram_home === false
+          ? h('div', { className: 'hap-small hap-warn', 'data-telegram-home': 'missing' }, 'This bot has no home channel yet, so alerts do not arrive. Send /sethome to it in the chat that should get them.')
+          : null),
       h(ProfileSelect, {
         value: n.via, profiles: n.profiles, disabled: busy || !n.telegram,
         onChange: v => { if (v && v !== n.via) act(`telegram-via=${v}`) }

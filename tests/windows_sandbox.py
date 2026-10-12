@@ -1,5 +1,5 @@
 """The Windows code paths, run on any system: the balance timer as a Task Scheduler task, Windows
-notifications, junctions for the session tracker, the hermes command, process detection, doctor.
+notifications, junctions that link account-pool into a profile (session tracking), the hermes command, process detection, doctor.
 
     SB=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" hap-sandbox.XXXX)
     HERMES_HOME=$SB ~/.hermes/hermes-agent/venv/bin/python tests/windows_sandbox.py
@@ -112,9 +112,7 @@ def write_cfg(home, data):
 
 
 def fake_hermes(profile, *args):
-    assert args[:2] == ("plugins", "enable"), args
-    home = SB if profile == "default" else SB / "profiles" / profile
-    core._set_enabled(home, args[2], True)
+    raise AssertionError(f"setup started a second Hermes: {profile} {args}")
 
 
 core._run_hermes = fake_hermes
@@ -235,11 +233,10 @@ BIN = core._hermes_bin()
 # ── setup --timer on Windows ─────────────────────────────────────────────────
 write_cfg(SB, {"plugins": {"enabled": ["account-pool"]}})
 write_cfg(SB / "profiles" / "w1", {"model": {"default": "x"}})
-TRACKER = SB / "plugins" / "account-pool-tracker"
-shutil.copytree(PLUGINS / "account-pool-tracker", TRACKER, ignore=shutil.ignore_patterns("__pycache__"))
+TARGET = core.PLUGIN_DIR
 if REAL:   # the real task runs the real hermes.exe in this home: it needs the plugin there
     shutil.copytree(PLUGINS / "account-pool", SB / "plugins" / "account-pool", ignore=shutil.ignore_patterns("__pycache__"))
-LINK = SB / "profiles" / "w1" / "plugins" / "account-pool-tracker"
+LINK = SB / "profiles" / "w1" / "plugins" / "account-pool"
 JUNCTIONS = []
 if not REAL:
     # A symlink needs Developer Mode on Windows: refuse it as Windows does and take the junction.
@@ -263,8 +260,8 @@ if rc != 0 or "FAILED" in text:
 check(rc == 0 and "FAILED" not in text, "setup --timer --yes on Windows")
 check('a Task Scheduler task "Hermes Account Balance"' in text and str(root_dir) in text and "systemd" not in text,
       "the plan names the Task Scheduler task and its folder, not systemd")
-check(LINK.exists() and LINK.resolve() == TRACKER.resolve() and (REAL or JUNCTIONS == [(LINK, TRACKER)]),
-      "the tracker is linked into the profile; without symlink rights through a junction")
+check(LINK.exists() and LINK.resolve() == TARGET.resolve() and (REAL or JUNCTIONS == [(LINK, TARGET)]),
+      "account-pool is linked into the profile; without symlink rights through a junction")
 lines = core._timer_lines()
 check(list(lines) == ["all"] and lines["all"] == f'"{ws.cmd_path(BIN)}" account all balance',
       "balance.cmd runs `hermes account all balance` with the published hermes.exe")
@@ -401,8 +398,8 @@ check(rc == 0 and 'the Task Scheduler task "Hermes Account Balance"' in text and
       "setup --undo names the task it removes")
 check(not core._timer_active() and not (root_dir / "balance.cmd").exists() and not (root_dir / "balance.vbs").exists(),
       "the task and its files are gone")
-check(not LINK.exists() and not os.path.lexists(LINK) and TRACKER.is_dir() and (REAL or not JUNCTIONS),
-      "the tracker link is removed, the tracker itself stays")
+check(not LINK.exists() and not os.path.lexists(LINK) and TARGET.is_dir() and (REAL or not JUNCTIONS),
+      "the link is removed, the plugin it points at stays")
 if not REAL:
     check([c[1] for c in SCHT].count("/Delete") == 1, "the task was deleted with schtasks /Delete")
     ws.delete_task()                               # deleting a task that is not there is not an error

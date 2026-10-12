@@ -6,7 +6,8 @@ Checks, in a throwaway Hermes home with one profile `worker`:
    mount the page's routes (404), which is the "backend did not answer" case.
 2. account-pool also listed in `worker` (what install.sh does): the routes mount and serve the
    shared pool of the default home, not the profile's.
-3. register() adds the `hermes account` command in the default home and nothing in a profile.
+3. register() adds the session tracking hook everywhere and the `hermes account` command in the default
+   home only.
 
     SB=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" hap-sandbox.XXXX)
     HERMES_HOME=$SB ~/.hermes/hermes-agent/venv/bin/python tests/profile_backend.py
@@ -36,9 +37,13 @@ def load_core():
 class Ctx:
     def __init__(self):
         self.commands = []
+        self.hooks = []
 
     def register_cli_command(self, **kw):
         self.commands.append(kw["name"])
+
+    def register_hook(self, name, fn):
+        self.hooks.append(name)
 
 
 if len(sys.argv) > 1 and sys.argv[1] == "--child":
@@ -52,7 +57,7 @@ if len(sys.argv) > 1 and sys.argv[1] == "--child":
     r = c.get("/api/plugins/account-pool/summary", headers={ws._SESSION_HEADER_NAME: ws._SESSION_TOKEN})
     ctx = Ctx()
     load_core().register(ctx)
-    print(json.dumps({"status": r.status_code, "body": r.json(), "commands": ctx.commands}))
+    print(json.dumps({"status": r.status_code, "body": r.json(), "commands": ctx.commands, "hooks": ctx.hooks}))
     sys.exit(0)
 
 HOME = os.environ.get("HERMES_HOME", "")
@@ -98,12 +103,20 @@ check(r.get("status") == 404, "listed only in default: backend under a profile d
 r = child()
 check(r.get("status") == 200, "listed in the profile too: backend under the profile serves the page")
 check((r.get("body") or {}).get("rotation") == 1, "it reads the shared pool of the default home")
-check(r.get("commands") == [], "register() adds nothing in a profile")
+check(r.get("commands") == [] and r.get("hooks") == ["post_api_request"],
+      "register() in a profile: the session tracking hook, no command")
 check("fake-key" not in json.dumps(r), "no token in the response")
+
+# what `setup` does since 4.0: link the default copy into the profile, so its session tracking runs there
+(worker / "plugins" / "account-pool").symlink_to(root / "plugins" / "account-pool", target_is_directory=True)
+r = child()
+check(r.get("status") == 200 and (r.get("body") or {}).get("rotation") == 1,
+      "linked into the profile as well: the page backend still serves the shared pool")
 
 ctx = Ctx()
 load_core().register(ctx)
-check(ctx.commands == ["account"], "register() adds `hermes account` in the default home")
+check(ctx.commands == ["account"] and ctx.hooks == ["post_api_request"],
+      "register() in the default home: `hermes account` and the session tracking hook")
 
 print(f"\n{len(failures)} failure(s)")
 sys.exit(1 if failures else 0)

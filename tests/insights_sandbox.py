@@ -42,7 +42,7 @@ def load(name, path):
     return mod
 
 
-tracker = load("hap_tracker", PLUGINS / "account-pool-tracker" / "__init__.py")
+tracker = load("hap_tracker", PLUGINS / "account-pool" / "tracker.py")
 api = load("hap_api", PLUGINS / "account-pool" / "dashboard" / "plugin_api.py")
 core = api.core
 app = FastAPI()
@@ -103,10 +103,11 @@ class FakeAgent:
 
 
 def call(label, usage, profile, model, session, platform="cli"):
-    agent = FakeAgent(label, session, model)  # noqa: F841  (the tracker finds it on this frame)
+    agent = FakeAgent(label, session, model)  # the tracker finds it on this frame
     tracker._root_and_profile = lambda: (Path(HOME), profile)
     tracker._last.clear()
-    tracker._on_api_request(session_id=session, platform=platform, model=model, provider="anthropic", usage=usage)
+    tracker.on_api_request(session_id=session, platform=platform, model=model, provider="anthropic", usage=usage)
+    return agent
 
 
 U = {"input_tokens": 100, "output_tokens": 50, "cache_read_tokens": 1000, "cache_write_tokens": 10}
@@ -125,7 +126,7 @@ check(w1["tracker"] == tracker.VERSION and w1["pid"] == os.getpid() and w1["task
       "session record: tracker version, process id, Kanban task when there is one")
 version, installed = core._tracker_installed()
 check(version == tracker.VERSION and installed and installed <= time.time(), "installed tracker version read from plugin.yaml")
-check(f'version: {tracker.VERSION}' in (PLUGINS / "account-pool-tracker" / "plugin.yaml").read_text(),
+check(f'version: {tracker.VERSION}' in (PLUGINS / "account-pool" / "plugin.yaml").read_text(),
       "tracker VERSION matches its plugin.yaml")
 
 # ── processes that still run an older tracker ────────────────────────────────
@@ -186,7 +187,7 @@ TOK.write_text(json.dumps(data))
 SESS.write_text(json.dumps({"version": 1, "sessions": {"d": rec("worker-3", "cli", now - 30, tracker=tracker.VERSION, pid=os.getpid())}}))
 tr = core._tracker_status("anthropic")
 check(tr["unnamed_since"] == int(slot) and not tr["stale"], "unnamed tokens of the last half hour found")
-doc = [(lvl, t) for lvl, t in core._doctor_checks("anthropic") if "tracker" in t]
+doc = [(lvl, t) for lvl, t in core._doctor_checks("anthropic") if "track" in t]
 check(any(lvl == "warn" and t.startswith("tokens without a bot name until") for lvl, t in doc), "doctor: unnamed tokens warn")
 with (Path(HOME) / "account-pool-history.jsonl").open("w") as fh:
     for k, u in enumerate((10, 20)):
@@ -198,9 +199,9 @@ check("(older tracker, no name)" in text, "report names the unnamed tokens")
 old = str(int((now - 7200) // 900 * 900))
 data["counts"]["anthropic"]["alice@example.com"]["?"] = {"?": {old: [10, 10, 10, 10, 1]}}
 TOK.write_text(json.dumps(data))
-doc = [(lvl, t) for lvl, t in core._doctor_checks("anthropic") if "tracker" in t]
+doc = [(lvl, t) for lvl, t in core._doctor_checks("anthropic") if "track" in t]
 check(core._tracker_status("anthropic")["unnamed_since"] is None
-      and ("ok", f"running sessions count with tracker {tracker.VERSION}") in doc, "older unnamed tokens: no warning, all current")
+      and ("ok", f"running sessions count with session tracking {tracker.VERSION}") in doc, "older unnamed tokens: no warning, all current")
 
 blob = json.dumps([c.get("/x/status").json(), json.loads(SESS.read_text())])
 check("fake-key" not in blob and "access_token" not in blob, "no credential in status or session records")

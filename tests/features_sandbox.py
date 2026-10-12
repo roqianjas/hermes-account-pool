@@ -40,7 +40,7 @@ def load(name, path):
     return mod
 
 
-tracker = load("hap_tracker", PLUGINS / "account-pool-tracker" / "__init__.py")
+tracker = load("hap_tracker", PLUGINS / "account-pool" / "tracker.py")
 api = load("hap_api", PLUGINS / "account-pool" / "dashboard" / "plugin_api.py")
 core = api.core
 app = FastAPI()
@@ -99,9 +99,10 @@ class FakeAgent:
 
 
 def call(label, usage, profile, model, session):
-    agent = FakeAgent(label, session, model)  # noqa: F841  (the tracker finds it on this frame)
+    agent = FakeAgent(label, session, model)  # the tracker finds it on this frame
     tracker._root_and_profile = lambda: (Path(HOME), profile)
-    tracker._on_api_request(session_id=session, platform="cli", model=model, provider="anthropic", usage=usage)
+    tracker.on_api_request(session_id=session, platform="cli", model=model, provider="anthropic", usage=usage)
+    return agent
 
 
 U = {"input_tokens": 100, "output_tokens": 50, "cache_read_tokens": 1000, "cache_write_tokens": 10}

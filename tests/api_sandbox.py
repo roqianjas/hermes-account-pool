@@ -4,8 +4,9 @@
     HERMES_HOME=$SB ~/.hermes/hermes-agent/venv/bin/python tests/api_sandbox.py
     rm -rf "$SB"
 
-Uses fake API-key accounts and a fake sign-in, so no request reaches a provider. Refuses to run
-against a Hermes home under ~/.hermes (see CONTRIBUTING.md: such a home can read the real pool).
+Uses fake API-key accounts, and for the page's sign-in Hermes' own `hermes auth add` code with its network
+edges faked (tests/hermes_auth_add.py), so no request reaches a provider and port 1455 is never bound.
+Refuses to run against a Hermes home under ~/.hermes (see CONTRIBUTING.md: such a home can read the real pool).
 """
 import importlib.util
 import json
@@ -83,28 +84,73 @@ check(first["ok"] and not second["ok"] and second["retry_after"] > 100, "live us
 check(any(ch["level"] == "ok" for ch in post("/doctor", {"provider": "anthropic"})[1]["checks"]), "doctor answers")
 check(c.get("/x/report?hours=0").status_code == 400, "report hours validated")
 
-# ── sign-in start guards (real start: builds a URL, no request) ──────────────
+# ── sign-in from the page: a relay to `hermes auth add` ─────────────────────
+# The backend runs Hermes' own `hermes auth add` and relays it; tests/hermes_auth_add.py is that code with
+# the token exchange, OpenAI's device-code service and the fixed callback port faked.
+import socket  # noqa: E402
+import time  # noqa: E402
+import urllib.error  # noqa: E402
+import urllib.parse  # noqa: E402
+import urllib.request  # noqa: E402
+
+CHILD = Path(__file__).resolve().parent / "hermes_auth_add.py"
+CMDS = []
+
+
+def fake_cmd(provider, label, method):
+    cmd = [sys.executable, str(CHILD), "auth", "add", provider, "--type", "oauth", "--label", label]
+    cmd += ["--browser", "--no-browser"] if method == "browser" else []
+    CMDS.append(cmd[2:])
+    return cmd
+
+
+real_cmd = core._signin_cmd
+core._signin_cmd = fake_cmd
+DEVICE_OK = Path(HOME) / "device-ok"
+os.environ["FAKE_DEVICE_OK"] = str(DEVICE_OK)
+TOK = {}
+core._identity = lambda provider, entry: TOK.get(entry.access_token)
+core._has_usage = lambda provider: False
+
+
+def step(flow, code=""):
+    return post("/signin/step", {"flow": flow, "code": code})[1]
+
+
+def wait_done(flow, seconds=30):
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        r = step(flow)
+        if r["status"] != "pending":
+            return r
+        time.sleep(0.3)
+    return {"status": "timeout"}
+
+
+def entries(provider="anthropic"):
+    return [(e.label, e.id) for e in sorted(core._pool(provider).entries(), key=lambda e: e.priority)]
+
+
+check(real_cmd("anthropic", "x@example.com", "code")[1:] == ["auth", "add", "anthropic", "--type", "oauth",
+                                                             "--label", "x@example.com"]
+      and real_cmd("openai-codex", "x@example.com", "browser")[-2:] == ["--browser", "--no-browser"],
+      "the page runs `hermes auth add <provider> --type oauth --label <email>` (Codex browser: --browser --no-browser)")
+
 code, s = post("/signin/start", {"provider": "anthropic", "mode": "add", "target": "dave@example.com"})
-check(code == 200 and s["kind"] == "code" and s["url"].startswith("https://claude.ai/oauth/authorize?"), "sign-in link")
-check("verifier" not in json.dumps(s), "PKCE verifier stays on the server")
-check(post("/signin/step", {"flow": s["flow"], "code": ""})[1]["status"] == "error", "empty code refused")
-check("another sign-in" in post("/signin/step", {"flow": s["flow"], "code": "abc#x"})[1]["message"], "state checked")
+check(code == 200 and s["kind"] == "code" and s["url"].startswith("https://claude.ai/oauth/authorize?"),
+      "sign-in link: the one Hermes printed")
+check("verifier" not in json.dumps(s) and s["notice"] is None, "PKCE verifier stays with Hermes")
+STATE = urllib.parse.parse_qs(urllib.parse.urlsplit(s["url"]).query)["state"][0]
+r = step(s["flow"], "")
+check(r["status"] == "error" and not r["final"], "empty code refused, the sign-in keeps waiting")
+check("another sign-in" in step(s["flow"], "abc#x")["message"], "a code for another sign-in is refused before Hermes")
 post("/signin/cancel", {"flow": s["flow"]})
-check("expired" in post("/signin/step", {"flow": s["flow"], "code": "abc#x"})[1]["message"], "cancel drops the flow")
+check("expired" in step(s["flow"], "abc#x")["message"], "cancel drops the flow (and stops hermes auth add)")
 check(post("/signin/start", {"provider": "anthropic", "mode": "add", "target": "bob@example.com"})[0] == 400,
       "add of an account in rotation refused")
 check(post("/signin/start", {"provider": "anthropic", "mode": "add", "target": "dave"})[0] == 400, "add needs an email")
 check("API key" in post("/signin/start", {"provider": "anthropic", "mode": "relogin",
                                           "target": "bob@example.com"})[1]["detail"], "relogin of an API key refused")
-
-# ── save path with a fake sign-in: verification, duplicates, relogin swap ────
-TOK = {}
-cls = type(core.providers.get("anthropic"))
-cls.signin_start = lambda self, method=None: {"kind": "code", "url": "https://example.invalid/", "state": {}}
-cls.signin_step = lambda self, state, code="": {"access_token": f"fake-at-{code}", "refresh_token": "fake-rt",
-                                                  "expires_at_ms": 4102444800000}
-core._identity = lambda provider, entry: TOK.get(entry.access_token)
-core._has_usage = lambda provider: False
 
 
 def signin(mode, target, ident, code):
@@ -112,15 +158,12 @@ def signin(mode, target, ident, code):
     r = c.post("/x/signin/start", json={"provider": "anthropic", "mode": mode, "target": target})
     if r.status_code != 200:
         return "refused", r.json()["detail"]
-    flow = r.json()["flow"]
-    out = c.post("/x/signin/step", json={"flow": flow, "code": code}).json()
-    again = c.post("/x/signin/step", json={"flow": flow, "code": code}).json()
+    s = r.json()
+    state = urllib.parse.parse_qs(urllib.parse.urlsplit(s["url"]).query)["state"][0]
+    out = step(s["flow"], f"{code}#{state}")
+    again = step(s["flow"], f"{code}#{state}")
     check(again["status"] == "error", f"flow {code} cannot be finished twice")
-    return out["status"], out.get("output", "")
-
-
-def entries():
-    return [(e.label, e.id) for e in sorted(core._pool("anthropic").entries(), key=lambda e: e.priority)]
+    return out["status"], out.get("output", out.get("message", ""))
 
 
 check(signin("add", "dave@example.com", "dave@example.com", "a1")[0] == "done", "add verified account")
@@ -133,22 +176,18 @@ check(signin("relogin", "dave@example.com", "erin@example.com", "r1")[0] == "rej
 check(signin("relogin", "dave@example.com", "dave@example.com", "r2")[0] == "done", "relogin")
 after = entries()
 check([l for l, _ in after] == [l for l, _ in before] and after != before, "relogin keeps label and position, new id")
+status, msg = signin("add", "hana@example.com", "hana@example.com", "bad1")
+check(status == "error" and "invalid_grant" in msg and "hana@example.com" not in [l for l, _ in entries()],
+      "a code Anthropic refuses: Hermes' reason is shown, nothing saved")
 auth = json.loads((Path(HOME) / "auth.json").read_text())
 toks = [e.get("access_token") for e in auth["credential_pool"]["anthropic"]]
 check("fake-at-r2" in toks and "fake-at-r1" not in toks and "fake-at-a2" not in toks, "only accepted sign-ins saved")
+added = [e for e in core._pool("anthropic").entries() if e.label == "dave@example.com"]
+check(added and added[0].source == "manual:hermes_pkce", "saved by Hermes like its own `hermes auth add anthropic`")
 
 # ── openai-codex sign-in from the page: browser (loopback) and device code ──
-import socket  # noqa: E402
-import urllib.error  # noqa: E402
-import urllib.parse  # noqa: E402
-import urllib.request  # noqa: E402
-
 from hermes_cli import auth_codex  # noqa: E402
 
-cx = core.providers.get("openai-codex")
-CX = type(cx)
-CX.callback_port = 0                      # a free port: the real 1455 stays out of the test
-CX._exchange = lambda self, code, redirect_uri, verifier: {"access_token": f"cx-at-{code}", "refresh_token": "cx-rt"}
 st = c.get("/x/status?provider=openai-codex").json()
 check(st["web_signin"] and st["signin_methods"] == ["browser", "device"], "codex: page sign-in, browser first")
 check(c.get("/x/status").json()["signin_methods"] == ["code"], "anthropic: pasted code only")
@@ -162,32 +201,37 @@ def cx_start(mode, target, method="browser"):
     return s
 
 
+def redirect_of(url):
+    return urllib.parse.parse_qs(urllib.parse.urlparse(url).query)["redirect_uri"][0]
+
+
 def callback(url, **q):
-    redirect = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)["redirect_uri"][0]
     try:
-        with urllib.request.urlopen(redirect + "?" + urllib.parse.urlencode(q), timeout=5) as r:
+        with urllib.request.urlopen(redirect_of(url) + "?" + urllib.parse.urlencode(q), timeout=5) as r:
             return r.status, r.read().decode()
     except urllib.error.HTTPError as x:
         return x.code, x.read().decode()
+    except OSError as x:
+        return 0, str(x)
 
 
 def cx_state(url):
     return urllib.parse.parse_qs(urllib.parse.urlparse(url).query)["state"][0]
 
 
-def step(flow, code=""):
-    return post("/signin/step", {"flow": flow, "code": code})[1]
-
-
-def port_free(url):
-    port = urllib.parse.urlparse(urllib.parse.parse_qs(urllib.parse.urlparse(url).query)["redirect_uri"][0]).port
-    with socket.socket() as so:
-        so.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)      # as the listener itself binds
-        try:
-            so.bind(("127.0.0.1", port))
-            return True
-        except OSError:
-            return False
+def port_free(url, seconds=10):
+    port = urllib.parse.urlparse(redirect_of(url)).port
+    deadline = time.time() + seconds
+    while True:
+        with socket.socket() as so:
+            so.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)      # as the listener itself binds
+            try:
+                so.bind(("127.0.0.1", port))
+                return True
+            except OSError:
+                if time.time() > deadline:
+                    return False
+        time.sleep(0.2)
 
 
 s = cx_start("add", "cara@example.com")
@@ -195,35 +239,41 @@ q = urllib.parse.parse_qs(urllib.parse.urlparse(s["url"]).query)
 check(s["kind"] == "browser" and s["listening"] and s["url"].startswith("https://auth.openai.com/oauth/authorize?")
       and q["client_id"] == [auth_codex.CODEX_OAUTH_CLIENT_ID] and q["code_challenge_method"] == ["S256"]
       and q["redirect_uri"][0].startswith("http://localhost:") and q["redirect_uri"][0].endswith("/auth/callback")
-      and "offline_access" in q["scope"][0], "codex browser: authorize link with PKCE and the loopback redirect")
-check("verifier" not in json.dumps(s), "codex browser: PKCE verifier stays on the server")
+      and urllib.parse.urlparse(q["redirect_uri"][0]).port != 1455,
+      "codex browser: Hermes' authorize link with PKCE and its loopback listener (not port 1455 in the test)")
+check(CMDS[-1][-2:] == ["--browser", "--no-browser"], "codex browser: hermes auth add --browser --no-browser")
 check(step(s["flow"]) == {"status": "pending"}, "codex browser: pending until the browser comes back")
-code, page = callback(s["url"], code="zz", state="forged")
-check(code == 400 and "Not this sign-in" in page and step(s["flow"])["status"] == "pending",
-      "codex browser: a callback with another state is refused and ignored")
 TOK["cx-at-c1"] = "cara@example.com"
 code, page = callback(s["url"], code="c1", state=cx_state(s["url"]))
-check(code == 200 and "Signed in to OpenAI Codex" in page, "codex browser: the callback page says signed in")
-out = step(s["flow"])
+check(code == 200, "codex browser: Hermes' listener takes the browser's callback")
+out = wait_done(s["flow"])
 pool_cx = core._pool("openai-codex").entries()
 check(out["status"] == "done" and [e.label for e in pool_cx] == ["cara@example.com"]
       and pool_cx[0].source.endswith("loopback_pkce") and pool_cx[0].access_token == "cx-at-c1",
-      "codex browser: added, verified, saved like Hermes' own browser sign-in")
+      "codex browser: added and verified, saved by Hermes' own browser sign-in")
 check(step(s["flow"])["final"] and port_free(s["url"]), "codex browser: flow gone, listener closed")
 
 s = cx_start("add", "dan@example.com")
 TOK["cx-at-c2"] = "eve@example.com"
 callback(s["url"], code="c2", state=cx_state(s["url"]))
-out = step(s["flow"])
+out = wait_done(s["flow"])
 check(out["status"] == "rejected" and [e.label for e in core._pool("openai-codex").entries()] == ["cara@example.com"],
       "codex browser: a sign-in as another account is discarded")
 
+s = cx_start("add", "dot@example.com")
+code, page = callback(s["url"], code="zz", state="forged")
+out = wait_done(s["flow"])
+check(out["status"] == "error" and out["final"] and "state mismatch" in out["message"]
+      and "dot@example.com" not in [l for l, _ in entries("openai-codex")],
+      "codex browser: a callback from another login is refused by Hermes and ends the sign-in")
+
 s = cx_start("relogin", "cara@example.com")
-redirect = urllib.parse.parse_qs(urllib.parse.urlparse(s["url"]).query)["redirect_uri"][0]
+redirect = redirect_of(s["url"])
 r = step(s["flow"], "https://example.invalid/whatever")
 check(r["status"] == "error" and not r["final"] and "whole address" in r["message"], "codex paste: not an address")
 r = step(s["flow"], f"{redirect}?code=c3&state=forged")
-check(r["status"] == "error" and not r["final"] and "another sign-in" in r["message"], "codex paste: state checked")
+check(r["status"] == "error" and not r["final"] and "another sign-in" in r["message"],
+      "codex paste: an address of another sign-in is refused before it reaches Hermes")
 TOK["cx-at-c3"] = "cara@example.com"
 old_id = core._pool("openai-codex").entries()[0].id
 r = step(s["flow"], f"{redirect}?code=c3&scope=openid&state={cx_state(s['url'])}")
@@ -233,70 +283,50 @@ check(r["status"] == "done" and [e.label for e in new] == ["cara@example.com"] a
 
 s = cx_start("add", "fay@example.com")
 callback(s["url"], error="access_denied", error_description="User cancelled", state=cx_state(s["url"]))
-r = step(s["flow"])
+r = wait_done(s["flow"])
 check(r["status"] == "error" and r["final"] and "User cancelled" in r["message"] and port_free(s["url"]),
       "codex browser: a refused sign-in ends the flow and frees the port")
 
 s = cx_start("add", "fay@example.com")
 post("/signin/cancel", {"flow": s["flow"]})
-check(port_free(s["url"]) and step(s["flow"])["final"], "codex browser: cancel frees the port")
+check(port_free(s["url"]) and step(s["flow"])["final"], "codex browser: cancel stops hermes auth add and frees the port")
 s1 = cx_start("add", "fay@example.com")
 s2 = cx_start("add", "gus@example.com")
 check(step(s1["flow"])["final"] and port_free(s1["url"]) and step(s2["flow"])["status"] == "pending",
-      "codex browser: a new browser sign-in replaces an older one (one listener)")
+      "codex browser: a new browser sign-in replaces an older one (one callback port)")
 post("/signin/cancel", {"flow": s2["flow"]})
 
 with socket.socket() as busy:
+    busy.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     busy.bind(("127.0.0.1", 0))
     busy.listen()
-    CX.callback_port = busy.getsockname()[1]
+    os.environ["FAKE_CODEX_PORT"] = str(busy.getsockname()[1])
     s = cx_start("add", "hal@example.com")
-    check(s["listening"] is False and f"localhost%3A{CX.callback_port}" in s["url"],
-          "codex browser: port taken, the page falls back to the pasted address")
-    TOK["cx-at-c4"] = "hal@example.com"
-    r = step(s["flow"], f"http://localhost:{CX.callback_port}/auth/callback?code=c4&state={cx_state(s['url'])}")
-    check(r["status"] == "done", "codex browser: pasted address works without a listener")
-    CX.callback_port = 0
+    os.environ.pop("FAKE_CODEX_PORT")
+    check(s["kind"] == "device" and s["user_code"] == "WXYZ-1234" and "taken" in (s["notice"] or ""),
+          "codex browser: callback port taken, Hermes falls back to a device code and the page says why")
+    TOK["cx-at-dev"] = "hal@example.com"
+    DEVICE_OK.write_text("ok")
+    r = wait_done(s["flow"])
+    DEVICE_OK.unlink()
+    check(r["status"] == "done" and "hal@example.com" in [l for l, _ in entries("openai-codex")],
+          "codex: the device code sign-in finishes")
 
-answers = []
-auth_codex._codex_request_device_code = lambda issuer, client_id: {
-    "device_auth_id": "dev-1", "user_code": "WXYZ-1234", "interval": 5}
-
-
-class FakeClient:
-    def __init__(self, *a, **k):
-        pass
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *a):
-        return False
-
-    def post(self, url, **k):
-        answers.append(url)
-        status = 403 if len(answers) == 1 else 200
-        return type("R", (), {"status_code": status, "json": lambda self: {"authorization_code": "ac", "code_verifier": "cv"}})()
-
-
-auth_codex._codex_http_client = FakeClient
-auth_codex._codex_exchange_authorization_code = lambda issuer, client_id, body: {
-    "access_token": "cx-at-dev", "refresh_token": "cx-rt-dev"}
 TOK["cx-at-dev"] = "ivy@example.com"
 s = cx_start("add", "ivy@example.com", "device")
-check(s["kind"] == "device" and s["user_code"] == "WXYZ-1234" and s["url"] == "https://auth.openai.com/codex/device",
-      "codex device: code and page")
-flow_state = api._FLOWS[s["flow"]]["state"]
+check(s["kind"] == "device" and s["user_code"] == "WXYZ-1234" and s["url"] == "https://auth.openai.com/codex/device"
+      and "--browser" not in CMDS[-1], "codex device: code and page from hermes auth add")
 check(step(s["flow"]) == {"status": "pending"}, "codex device: pending while not confirmed")
-check(step(s["flow"]) == {"status": "pending"} and len(answers) == 1, "codex device: no check before the interval")
-flow_state["last"] = 0
-r = step(s["flow"])
+DEVICE_OK.write_text("ok")
+r = wait_done(s["flow"])
 dev = [e for e in core._pool("openai-codex").entries() if e.label == "ivy@example.com"]
 check(r["status"] == "done" and dev and dev[0].source.endswith("device_code"), "codex device: confirmed, added")
 auth = json.loads((Path(HOME) / "auth.json").read_text())
 check(sorted(e["label"] for e in auth["credential_pool"]["openai-codex"]) == ["cara@example.com", "hal@example.com",
                                                                             "ivy@example.com"],
       "codex: only the accepted sign-ins saved")
+check(not api._FLOWS, "no sign-in left running")
+core._signin_cmd = real_cmd
 
 # ── rotation mode: Hermes' credential_pool_strategies per profile ──────────
 mode = c.get("/x/status").json()["rotation_mode"]
