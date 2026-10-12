@@ -158,3 +158,25 @@ def signin_step():
 @router.post("/signin/cancel")
 def signin_cancel():
     return {"ok": True}
+
+
+@router.post("/wake")
+async def wake(request: Request):
+    body = await request.json()
+    return {"ok": True, "rc": 0, "output": f"wake: {len(body.get('targets') or [])} woken"}
+
+
+@router.post("/wake/settings")
+async def wake_settings(request: Request):
+    body = await request.json()
+    return {"ok": True, "output": "saved", "wake": {"auto": bool(body.get("auto")), "model": body.get("model") or ""}}
+
+
+@router.post("/privacy")
+async def privacy(request: Request):
+    """Masking for the privacy screenshot: flips the flag the page reads from /status and /summary."""
+    on = bool((await request.json()).get("on"))
+    for key, value in FX.items():
+        if key.startswith(("/status?", "/summary?")):
+            value["privacy"] = on
+    return {"ok": True, "rc": 0, "output": "Email masking " + ("on" if on else "off"), "privacy": on}

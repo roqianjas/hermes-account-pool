@@ -82,7 +82,9 @@ fs.mkdirSync(OUT, { recursive: true })
 await send('Emulation.setDeviceMetricsOverride', { width: WIDTH, height: HEIGHT, deviceScaleFactor: 2, mobile: false })
 await js(`(() => { document.activeElement && document.activeElement.blur(); return true })()`)
 await click('aside a, aside button, nav a, button', 'Accounts')
-await waitFor(hasText('alice@example.com'), 'the Accounts page')
+await waitFor(hasText('Shared pool'), 'the Accounts page')
+await click('.hap-head button', 'anthropic')          // the page remembers the provider of the last run
+await waitFor(hasText('alice@example.com'), 'the anthropic accounts')
 await click('.hap-sub button', 'Accounts')
 await waitFor(hasText('In rotation'), 'the rotation table')
 await shot('accounts')
@@ -118,6 +120,27 @@ await click('[role=dialog] button', 'Start sign-in')
 await waitFor(hasText('Copy link'), 'the sign-in step')
 await shot('add-account')
 await click('[role=dialog] button', 'Cancel').catch(() => {})
+
+// Wake: the idle accounts ticked, the others with their reset time
+await click('button', 'Wake')
+await waitFor(hasText('Wake accounts') + ' && ' + hasText('Keep windows running'), 'the Wake dialog')
+await shot('wake')
+await click('[role=dialog] button', 'Close')
+
+// Email masking: the eye button masks every email on the page; a second click shows them again
+const eye = label => js(`(() => {
+  const el = [...document.querySelectorAll('button[aria-label]')].filter(${visible})
+    .find(e => e.getAttribute('aria-label').startsWith(${JSON.stringify(label)}))
+  if (!el) throw new Error('no eye button: ' + ${JSON.stringify(label)})
+  el.click(); return true })()`)
+await eye('Mask emails')
+await waitFor('!' + hasText('alice@example.com') + ' && ' + hasText('al•••e@e•••.com'), 'masked emails')
+await waitFor('!' + hasText('Emails are masked: on this page'), 'the toast to close', 20000)
+await js(`(() => { const b = document.querySelector('.hap-body'); if (b) b.scrollTop = 0; return true })()`)
+await shot('privacy')
+await eye('Emails are masked')
+await waitFor(hasText('alice@example.com'), 'emails shown again')
+await waitFor('!' + hasText('Emails are shown in full'), 'the toast to close', 20000)
 
 // Codex: the browser sign-in waiting for the browser to come back to localhost:1455
 await js(`(() => {

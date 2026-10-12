@@ -227,7 +227,7 @@ def _status(provider: str) -> dict:
     for rec in hist:                                   # oldest -> newest: the last write wins
         for label, pct in (rec.get("usage") or {}).items():
             snap[label] = {"pct": float(pct), "reset": (rec.get("reset") or {}).get(label), "ts": rec["ts"],
-                           "source": "timer"}
+                           "source": "timer", "win": (rec.get("win") or {}).get(label)}
             if rec["ts"] >= now - SPARK_HOURS * 3600:
                 spark.setdefault(label, []).append([rec["ts"], float(pct)])
     live = _LIVE.get(provider)
@@ -238,16 +238,25 @@ def _status(provider: str) -> dict:
                 continue                                # a cached value is never newer than the history
             if u and (row["label"] not in snap or snap[row["label"]]["ts"] < live["ts"]):
                 snap[row["label"]] = {"pct": u["pct"], "reset": u["reset"], "ts": live["ts"], "source": "live",
-                                      "detail": u.get("detail", "")}
+                                      "detail": u.get("detail", ""), "win": row.get("win")}
 
     def usage_for(label: str):
         u = snap.get(label)
         if not u:
             return None
         u = dict(u, age=max(0, int(now - u["ts"])))
+        u.pop("win", None)
         if u.get("reset") and u["reset"] <= now:      # its window has reset since: the old number is void
             u.update(pct=None, reset_passed=True)
         return u
+
+    def window_for(label: str):
+        """The 5-hour window: idle (not running, the next request starts it), running, or None (unknown)."""
+        u = snap.get(label)
+        if not u:
+            return None
+        w = u.get("win") or [u["pct"], u["reset"]]
+        return {"idle": core._window_idle((w[0], w[1], ad.short_window_seconds), ts=u["ts"]), "reset": w[1]}
 
     who = core._who_data(provider, WHO_MINUTES)
     by_label = {a["label"]: [_session_row(r) for r in a["sessions"]] for a in who["accounts"]}
@@ -266,6 +275,7 @@ def _status(provider: str) -> dict:
             start = usage["reset"] - ad.window_seconds - core.TOKEN_BUCKET + 1
             win = core._token_group(provider, rows, start, by="all").get("all") or core._empty_tokens()
         return {"day": day, "window": win}
+    woke = core._wake_last(provider) if ad.has_wake else {}
     rotation = []
     for pos, e in enumerate(entries, 1):
         state = core._entry_state(e)
@@ -274,6 +284,7 @@ def _status(provider: str) -> dict:
             "problems": core._problems(provider, e, None),
             "back_at": getattr(e, "last_error_reset_at", None) if state in ("BENCHED", "LIMITED") else None,
             "usage": usage_for(e.label), "spark": spark.get(e.label, []), "sessions": by_label.get(e.label, []),
+            "window": window_for(e.label) if ad.has_usage else None, "woke": woke.get(e.id),
         })
         rotation[-1]["tokens"] = tokens_for(e.label, rotation[-1]["usage"])
     parked_rows = [{
@@ -308,6 +319,9 @@ def _status(provider: str) -> dict:
         "schedules": core._schedule_rows(provider),
         "tracker": core._tracker_status(provider),
         "forecast": core._forecast(provider) if ad.has_usage else None,
+        "wake": dict(core._wake_cfg(provider), available=ad.has_wake, model_text=core._wake_model_text(provider),
+                     model_name=core._wake_model_name(provider)),
+        "privacy": core._private(),
     }
 
 
@@ -341,7 +355,7 @@ def summary(provider: str = "anthropic"):
         "next": {"label": nxt["label"], "pct": (nxt["usage"] or {}).get("pct")} if nxt else None,
         "max": max((r["usage"]["pct"] for r in known), default=None),
         "min": min((r["usage"]["pct"] for r in known), default=None),
-        "alerts": len(data["alerts"]), "sessions": data["sessions_active"],
+        "alerts": len(data["alerts"]), "sessions": data["sessions_active"], "privacy": data["privacy"],
     }
 
 
@@ -405,7 +419,8 @@ def live(body: dict):
                                f"(the usage endpoint rate-limits per account)."}
         rows = core._usage_rows(p)
         _LIVE[p] = {"ts": time.time(), "rows": [{"label": r["label"], "id": r["id"], "state": r["state"],
-                                                 "usage": _usage_dict(r["usage"]), "note": r["note"]} for r in rows]}
+                                                 "usage": _usage_dict(r["usage"]), "note": r["note"],
+                                                 "win": core._WINDOW.get((p, r["label"]))} for r in rows]}
     failed = [r for r in _LIVE[p]["rows"] if not r["usage"] and r["note"] and r["note"] != "dead"]
     return {"ok": True, "ts": _LIVE[p]["ts"], "rows": _LIVE[p]["rows"],
             "message": f"Usage n/a for {len(failed)} account(s): {failed[0]['note']}" if failed else ""}
@@ -446,6 +461,65 @@ def action(body: dict):
                 return {"ok": False, "rc": 2, "output": f"This ran less than a minute ago. Try again in {wait}s."}
             _NET[p] = time.time()
         return _run(core._dispatch, **kw)
+
+
+@router.post("/wake")
+def wake(body: dict):
+    """Start the 5-hour window of accounts whose window is not running: one tiny request each.
+    targets: account ids (default: every account in rotation). Reads live usage first, so it shares
+    the one-run-a-minute limit of balance and check."""
+    p = _provider(body.get("provider"))
+    if not providers.get(p).has_wake:
+        return {"ok": False, "rc": 2, "output": f"Wake is not available for {p}."}
+    targets = body.get("targets")
+    if targets is not None and (not isinstance(targets, list) or not targets
+                                or not all(isinstance(t, str) and t.strip() and "," not in t for t in targets)):
+        raise HTTPException(400, "targets must be a list of account ids.")
+    with _exclusive():
+        wait = _wait(_NET.get(p), NET_MIN_GAP)
+        if wait:
+            return {"ok": False, "rc": 2, "output": f"Usage was read less than a minute ago. Try again in {wait}s."}
+        _NET[p] = time.time()
+        return _run(core._dispatch, provider=p, action="wake", target=",".join(targets) if targets else None,
+                    dry_run=bool(body.get("dry_run")))
+
+
+@router.post("/wake/settings")
+def wake_settings(body: dict):
+    """auto: the balance timer wakes idle accounts; model: the wake model ("" = default). No provider call."""
+    p = _provider(body.get("provider"))
+    subs = []
+    if "auto" in body:
+        if not isinstance(body["auto"], bool):
+            raise HTTPException(400, "auto must be true or false.")
+        subs.append("auto-on" if body["auto"] else "auto-off")
+    if "model" in body:
+        subs.append(f"model={str(body['model'] or '').strip() or 'default'}")
+    if not subs:
+        raise HTTPException(400, "Nothing to change: send auto and/or model.")
+    out, ok = [], True
+    with _exclusive():
+        for sub in subs:
+            r = _run(core._dispatch, provider=p, action="wake", target=sub)
+            out.append(r["output"])
+            ok = ok and r["ok"]
+            if not r["ok"]:
+                break
+        cfg = core._wake_cfg(p)
+    return {"ok": ok, "output": "\n".join(out), "wake": cfg}
+
+
+@router.post("/privacy")
+def privacy(body: dict):
+    """Email masking for every provider: the page, alerts and the output of `hermes account`."""
+    on = body.get("on")
+    if not isinstance(on, bool):
+        raise HTTPException(400, "on must be true or false.")
+    p = _provider(body.get("provider"))
+    with _exclusive():
+        r = _run(core._dispatch, provider=p, action="privacy", target="on" if on else "off")
+        r["privacy"] = core._private()
+    return r
 
 
 @router.post("/doctor")

@@ -16,7 +16,7 @@ from reportlab.platypus import (CondPageBreak, Image, KeepTogether, PageBreak, P
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 from reportlab.platypus.tableofcontents import TableOfContents
 
-VERSION = "3.10.4"
+VERSION = "3.11.0"
 REPO = "github.com/roqianjas/hermes-account-pool"
 FOOTER = f"Hermes plugin account-pool {VERSION} · {REPO}"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hermes-account-pool.pdf")
@@ -121,8 +121,8 @@ class Doc(SimpleDocTemplate):
 st += [Paragraph("Plugin account-pool untuk Hermes Agent", s_title),
        Paragraph("Panduan lengkap perintah <font name='Mono'>hermes account</font> dan halaman Accounts di Hermes "
                  "Desktop: jalankan beberapa akun dari satu provider, tambah akun dengan email terverifikasi, pantau "
-                 "pemakaian, bagi beban sebelum akun habis, parkir akun sementara, lihat bot mana memakai akun apa, "
-                 "dan terima peringatan.", s_sub)]
+                 "pemakaian, bagi beban sebelum akun habis, mulai jendela 5 jam akun yang menganggur lebih awal, parkir "
+                 "akun sementara, lihat bot mana memakai akun apa, sensor email untuk screenshot, dan terima peringatan.", s_sub)]
 table([["Versi", "Repo", "Butuh", "Lisensi"],
        [VERSION, REPO, "Hermes Agent ≥ 0.21.5, Linux + systemd", "MIT"]], [0.12, 0.46, 0.30, 0.12])
 st.append(Paragraph("Daftar isi", s_h2))
@@ -149,9 +149,14 @@ table([
     ["Tahu ada login mati atau pool penuh", "Tidak dilaporkan", "Peringatan desktop dan Telegram, plus ringkasan harian opsional"],
     ["Akun macet setelah refresh token gagal saat jaringan putus", "Menunggu cooldown",
      "Dicoba ulang otomatis tiap 5 menit"],
+    ["Jendela 5 jam akun yang menganggur reset lebih cepat", "Jendela baru mulai saat request pertama akun itu",
+     C("wake") + " memulainya sekarang; " + C("wake auto-on") + " menjaga semua jendela tetap berjalan"],
+    ["Screenshot atau berbagi layar tanpa email akun", "Tidak bisa",
+     C("privacy on") + ", atau tombol mata di halaman: " + C("al•••e@e•••.com")],
     ["Melihat semuanya di satu tempat", "Tidak ada", "Halaman Accounts di Hermes Desktop (bagian 8)"],
 ], [0.28, 0.32, 0.40])
-P("Plugin mengubah pool hanya lewat API " + C("CredentialPool") + " milik Hermes sendiri, dan tidak memakai token AI.")
+P("Plugin mengubah pool hanya lewat API " + C("CredentialPool") + " milik Hermes sendiri. Plugin tidak memakai token "
+  "AI, kecuali untuk " + C("wake") + " yang Anda jalankan atau nyalakan sendiri: satu request kecil per wake (bagian 7.16).")
 P("Semua perintah memakai pola yang sama, <b>provider dulu, baru aksi</b>:")
 code("hermes account <provider> <action> [target] [options]")
 
@@ -383,6 +388,11 @@ table([
     [C("DEAD"), "Hermes, saat provider menolak refresh token", "Tidak", "Anda menjalankan " + C("relogin")],
     [C("PARKED"), "Anda, dengan " + C("park"), "Tidak, login tetap disimpan", C("unpark") + ", atau waktu " + C("--until") + " lewat"],
 ], [0.20, 0.32, 0.16, 0.32])
+H2("Jendela 5 jam")
+P("Claude dan ChatGPT membatasi akun per jendela 5 jam. Jendela itu tidak berjalan menurut jam sendiri: ia mulai saat "
+  "request pertama akun itu setelah jendela sebelumnya selesai, lalu reset 5 jam kemudian. Akun yang menganggur tidak "
+  "punya jendela yang berjalan; halaman menampilkannya sebagai " + C("not started") + " di kolom <b>Resets</b>. "
+  + C("wake") + " memulainya dengan satu request kecil, sehingga reset datang lebih cepat (bagian 7.16).")
 H2("Park, bench, remove")
 P("<b>Park</b> adalah keputusan Anda dan login tetap disimpan. <b>Bench</b> otomatis dan sementara. <b>Remove</b> "
   "menghapus login; untuk memakai akun itu lagi harus login baru.")
@@ -535,6 +545,10 @@ hermes account <provider> <action> [target] [options]
   log      [--hours N]                  apa yang diubah timer, perintah, dan halaman
   doctor                                periksa strategi, timer, file, pool, peringatan
   notify   [status|test|summary|...]    peringatan (desktop, Telegram), ringkasan harian
+  wake     [<target>[,...]] [--dry-run] mulai jendela 5 jam akun yang menganggur sekarang
+           status|auto-on|auto-off|model=<id>
+                                        pengaturan dan jendela tiap akun; otomatis lewat timer
+  privacy  [on|off|status]              sensor email di output, peringatan, dan halaman
   help                                  bantuan
 
 hermes account all balance [--dry-run] [--threshold N]   semua provider berakun (timer)
@@ -548,7 +562,8 @@ table([
      "Tidak", C("add") + ", " + C("remove") + ", " + C("park") + ", " + C("unpark") + ", " + C("relogin") + ", "
      + C("balance"), "Ya"],
     ["", "", C("schedule") + ", " + C("unschedule") + ", " + C("strategy &lt;nama&gt;"), "Pengaturan"],
-    [C("usage"), "Tidak*", C("notify"), "Pengaturan"],
+    [C("usage"), "Tidak*", C("notify") + ", " + C("privacy") + ", " + C("wake auto-on/model="), "Pengaturan"],
+    ["", "", C("wake"), "Request model kecil"],
 ], [0.36, 0.14, 0.36, 0.14])
 P("* " + C("usage") + " memperbarui access token yang kedaluwarsa, sama seperti yang Hermes lakukan saat akun dipakai.")
 
@@ -884,7 +899,86 @@ P("Mengerjakan yang tidak dikerjakan instalasi plugin: backend halaman Accounts 
   "timer, dan strategi. Penjelasan lengkap di bagian 4.3. Pertanyaan " + C("[y/N]") + " di semua perintah dijawab "
   "<b>tidak</b> jika tidak ada terminal (" + C("no terminal to answer, so no") + ", exit 1); " + C("--yes")
   + " tetap melewatinya.")
-H2("7.16 help, pesan salah, dan exit code")
+H2("7.16 wake", need=90)
+code("""
+$ hermes account anthropic wake --dry-run
+2026-10-12 07:04:56 [anthropic] wake (dry run): 3 to wake, 0 failed, 5 left alone.
+  - would wake carol@example.com
+  - would wake erin@example.com
+  - would wake heidi@example.com
+  - skip frank@example.com: window running, resets 08:34
+  ...
+
+$ hermes account anthropic wake
+2026-10-12 07:04:56 [anthropic] wake: 3 woken, 0 failed, 5 left alone.
+  - woke carol@example.com (claude-haiku-4-5): its 5-hour window starts now,
+    resets about 12:04
+  ...
+The next balance run (within 5 minutes) reads the new reset times.
+
+$ hermes account anthropic wake auto-on
+Automatic wake on [anthropic]: the balance timer wakes an account in rotation whose
+5-hour window is not running, with one tiny request to claude-haiku-4-5.
+""")
+P("Jendela 5 jam sebuah akun mulai saat request pertamanya (bagian 5). Akun yang menganggur sampai 10:00 lalu dipakai "
+  "berat bisa penuh pukul 11:00 dan tetap penuh sampai 15:00. Bila dibangunkan pukul 07:00, jendelanya reset pukul "
+  "12:00, bukan 15:00: pekerjaan yang kena limit pukul 11:00 menunggu satu jam, bukan empat. " + C("wake")
+  + " mengirim request pertama itu sekarang: satu request lewat akun tersebut yang meminta jawaban satu kata.")
+table([
+    ["Provider", "Request wake", "Tanda jendela tidak berjalan"],
+    [C("anthropic"), C("claude-haiku-4-5") + ", satu token output, lewat klien Anthropic milik Hermes sendiri (header "
+     "dan identitas Claude Code sama dengan sesi Hermes)", "Jawaban pemakaian tidak punya jam reset"],
+    [C("openai-codex"), "Model terkecil yang tersedia untuk akun itu (dari daftar modelnya, seperti dibaca Hermes), "
+     "reasoning rendah, jawaban satu kata lewat endpoint Responses Codex", "0% dengan reset tepat 5 jam lagi yang ikut "
+     "bergeser setiap dibaca. Jendela 5 jam yang dipakai, walau jendela mingguan lebih penuh"],
+], [0.16, 0.50, 0.34])
+LI(["<b>Akun mana.</b> Akun dalam rotasi yang jendelanya tidak berjalan. Jendela yang sedang berjalan tidak mendapat "
+    "apa-apa dari wake, jadi dibiarkan; begitu juga akun yang diistirahatkan, kena limit, mati, API key, dan diparkir.",
+    "<b>Tanpa target</b>, wake membaca pemakaian tiap akun dulu (satu request pemakaian per akun, seperti "
+    + C("usage") + ") lalu membangunkan yang menganggur. <b>Dengan target</b> (label, nomor urut, atau id; beberapa "
+    "dipisah koma) akun itu dibangunkan kecuali jendelanya diketahui sedang berjalan, juga bila pemakaiannya tidak "
+    "terbaca. " + C("--dry-run") + " menampilkan rencananya saja.",
+    C("wake status") + " menampilkan pengaturan, model, jendela tiap akun dari putaran balance terakhir, dan wake "
+    "terakhirnya. Tanpa request apa pun.",
+    C("wake auto-on") + " membuat timer balance membangunkan akun begitu jendelanya tidak berjalan. Selama jendela "
+    "berjalan tidak ada yang dikirim, jadi paling banyak sekitar 5 request per akun per hari. Akun yang dibangunkan "
+    "dalam satu jam terakhir tidak dibangunkan lagi, jadi wake yang tidak memulai jendela hanya memakan satu request per "
+    "jam, bukan tiap 5 menit. " + C("wake auto-off") + " mematikannya. Butuh timer; " + C("doctor")
+    + " memperingatkan bila timer mati atau ada wake yang gagal dalam 6 jam terakhir.",
+    C("wake model=&lt;id&gt;") + " memakai model lain; " + C("model=default") + " kembali ke pilihan adapter.",
+    "Wake yang gagal menyebut alasannya (" + C("rate-limited") + ", " + C("sign-in rejected (401)") + ", "
+    + C("model ... not accepted") + ") dan perintah keluar dengan exit 1. Setiap wake, berhasil atau gagal, masuk log "
+    "aktivitas.",
+    "<b>Yang tidak dilakukan.</b> Wake tidak menambah kuota. Limitnya tetap; hanya awal jendela yang maju. Pool yang "
+    "akunnya sibuk sepanjang hari jendelanya sudah berjalan, jadi tidak ada yang perlu dibangunkan."])
+H2("7.17 privacy (sensor email)", need=70)
+code("""
+$ hermes account anthropic privacy on
+Email masking on: the Accounts page, alerts and the output of hermes account show emails
+as al•••e@e•••.com, for every provider. Targets still take the full email, the list number
+or the id.
+
+$ hermes account anthropic list
+[anthropic] in rotation (8):
+  #1  ca•••l@e•••.com                    id=2a1b2c  status=ok
+  #2  e•••@e•••.com                      id=4a1b2c  status=ok
+  #3  he•••i@e•••.com                    id=7a1b2c  status=ok
+  ...
+""")
+P("Untuk screenshot, berbagi layar, dan menempel output ke chat.")
+LI(["<b>Aturannya.</b> Dua huruf pertama dan huruf terakhir nama (hanya huruf pertama untuk nama empat huruf atau "
+    "kurang), huruf pertama domain, dan akhiran domain: " + C("alice@example.com") + " menjadi "
+    + C("al•••e@e•••.com") + ". Cukup untuk membedakan akun Anda sendiri, tidak cukup untuk dibaca orang lain.",
+    "<b>Di mana.</b> Semua baris yang dicetak " + C("hermes account") + " (kolom tetap rata), peringatan desktop dan "
+    "Telegram, ringkasan harian, dan seluruh halaman Accounts: tabel, kartu, dialog, tooltip, pesan, dan chip status "
+    "bar. Tombol mata di header halaman mengubah pengaturan yang sama.",
+    "<b>Hanya tampilan.</b> " + C("auth.json") + ", log aktivitas, riwayat, dan file pengaturan tetap menyimpan "
+    "email asli, jadi " + C("privacy off") + " langsung menampilkannya lagi, dan " + C("park alice@example.com")
+    + " tetap jalan selama email disensor. Backend halaman mengirim label asli ke halaman, dan halaman menyensor yang "
+    "ditampilkannya.",
+    C("privacy") + " (atau " + C("privacy status") + ") menampilkan pengaturannya. Satu pengaturan untuk semua "
+    "provider (" + C("mask_emails") + " di file pengaturan)."])
+H2("7.18 help, pesan salah, dan exit code")
 code("""
 hermes account                 # semua cara ini menampilkan bantuan yang sama
 hermes account help
@@ -904,7 +998,7 @@ table([
     ["Exit code", "Arti"],
     ["0", "Selesai"],
     ["1", "Perintah jalan dan menemukan masalah: " + C("check") + "/" + C("doctor") + " gagal, login dibuang atau "
-     "gagal, remove ditolak, konfirmasi dijawab tidak (atau Ctrl+D, atau tanpa terminal), " + C("add") + "/" + C("relogin") + " tanpa terminal, " + C("notify test") + " atau " + C("notify summary") + " tidak sampai ke saluran mana pun, " + C("unschedule") + " untuk akun tanpa jadwal, " + C("strategy") + " atau langkah " + C("setup") + " yang gagal ditulis"],
+     "gagal, remove ditolak, konfirmasi dijawab tidak (atau Ctrl+D, atau tanpa terminal), " + C("add") + "/" + C("relogin") + " tanpa terminal, " + C("notify test") + " atau " + C("notify summary") + " tidak sampai ke saluran mana pun, " + C("unschedule") + " untuk akun tanpa jadwal, " + C("strategy") + " atau langkah " + C("setup") + " yang gagal ditulis, " + C("wake") + " yang gagal untuk suatu akun"],
     ["2", "Cara pakai salah: aksi, provider, target, atau opsi tidak ada atau tidak dikenal"],
     ["130", "Dibatalkan dengan Ctrl+C"],
 ], [0.14, 0.86], keep=True)
@@ -942,7 +1036,7 @@ P(C("doctor") + " memeriksa hal ini jika Hermes Desktop punya halamannya: " + C(
 H2("8.3 Isi halaman", need=120)
 shot("accounts", "Tab Accounts: delapan akun dalam rotasi beserta pemakaian 5 jam dan bot di tiap akun, satu akun "
      "parkir, dua jadwal parkir, dan perkiraan. Semua akun di gambar adalah data contoh dari tes.")
-P("Header berisi pilihan provider, tombol <b>Live usage</b>, <b>Balance now</b>, dan <b>Add account</b>. Baris di "
+P("Header berisi pilihan provider, tombol mata untuk sensor email, tombol <b>Live usage</b>, <b>Wake</b>, <b>Balance now</b>, dan <b>Add account</b>. Baris di "
   "bawahnya menunjukkan umur angka pemakaian dan kapan timer jalan berikutnya.")
 table([
     ["Tab", "Isi"],
@@ -951,7 +1045,7 @@ table([
      "tombol <b>Use fill_first</b>. Lima kartu: akun dalam rotasi, akun parkir, akun tempat sesi berikutnya mulai beserta pemakaiannya, "
      "jumlah sesi 30 menit terakhir, dan token 24 jam terakhir beserta harga API-nya. Kartu keenam adalah perkiraan "
      "(bagian 9): kapan semua akun ≥ 90% dengan laju satu jam terakhir. Lalu tabel rotasi sesuai urutan pool: status, bar "
-     "pemakaian 5 jam, garis tren 5 jam terakhir, jam reset (atau " + C("back HH:MM") + " saat diistirahatkan), "
+     "pemakaian 5 jam, garis tren 5 jam terakhir, jam reset (" + C("back HH:MM") + " saat diistirahatkan, " + C("not started") + " selama jendela tidak berjalan), "
      "token 24 jam terakhir (arahkan kursor untuk rincian input, output, cache, jumlah request, harga API, model utama, dan "
      "jendela 5 jam yang sedang berjalan), profil yang memakai akun itu "
      "(arahkan kursor untuk melihat sesi, platform, model, sejak kapan sesi itu di akun ini, dan akun asalnya bila pindah), serta tombol <b>Sign in again</b>, <b>Park</b>, "
@@ -981,6 +1075,18 @@ P("<b>Park</b> menanyakan kapan akun kembali: saat di-unpark, 1 jam lagi, 2 jam 
   + "). <b>Park on a schedule</b> menanyakan hari dan jamnya (" + C("09:00") + " sampai " + C("17:00")
   + "), sama dengan " + C("schedule --every") + ". <b>Remove</b> dan <b>Balance now</b> minta konfirmasi dulu. Setiap aksi menampilkan pesan yang sama dengan "
   "perintahnya.")
+P("<b>Wake</b> membuka dialog wake: setiap akun dalam rotasi beserta jendela 5 jamnya (" + C("not running") + ", "
+  + C("running, resets 11:02") + ") dan wake terakhirnya. Akun yang jendelanya tidak berjalan sudah dicentang; <b>Wake "
+  "N accounts</b> membangunkan yang dicentang (sama dengan " + C("wake &lt;id&gt;,&lt;id&gt;") + ") lalu menampilkan "
+  "hasilnya. Akun dengan jendela yang berjalan tidak bisa dicentang. <b>Keep windows running</b> sama dengan "
+  + C("wake auto-on") + ", dan kolom model sama dengan " + C("wake model=") + " (kosong untuk default); <b>Save "
+  "settings</b> muncul setelah salah satunya diubah. Tombolnya bertuliskan <b>Wake: auto</b> selama wake otomatis menyala.")
+shot("wake", "Dialog Wake: dua akun tanpa jendela berjalan sudah dicentang, akun lain dengan jam resetnya, dan sakelar "
+     "yang menjaga jendela tetap berjalan.", width=0.85)
+P("<b>Tombol mata</b> menyensor semua email di halaman (" + C("al•••e@e•••.com") + "). Ini pengaturan yang sama "
+  "dengan " + C("privacy on") + ", jadi peringatan dan output perintah ikut tersensor. Klik lagi untuk menampilkannya. "
+  "Halaman mengingat pilihan ini, jadi email asli tidak sempat terlihat saat halaman dimuat ulang.")
+shot("privacy", "Tab Accounts dengan sensor email menyala: tabel, kartu, dan jadwal hanya menampilkan email yang disamarkan.")
 P("<b>rotation: ...</b> di header membuka dialog rotasi: satu pilihan per profil dengan strateginya sekarang, baris "
   "<b>Every profile</b> untuk mengubah semuanya, dan penjelasan tiap strategi. Selama ada profil yang tidak memakai "
   + C("fill_first") + ", dialog menjelaskan kenapa itu bentrok dengan " + C("balance") + ". <b>Save</b> hanya menulis "
@@ -1028,6 +1134,9 @@ table([
      "provider; tombolnya menghitung mundur."],
     ["Balance now", "Sama dengan " + C("balance") + ". Paling sering sekali per menit, bersama Check accounts."],
     ["Check accounts", "Satu permintaan profil per akun."],
+    ["Wake", "Satu permintaan pemakaian per akun yang dicentang, lalu satu request model kecil per akun yang jendelanya "
+     "tidak berjalan. Paling sering sekali per menit, bersama Balance now dan Check accounts."],
+    ["Tombol mata, pengaturan wake", "Tidak ada."],
     ["Run doctor", "Satu permintaan pemakaian."],
     ["Add account, Sign in again", "Proses login, lalu satu permintaan profil untuk verifikasi email."],
 ], [0.34, 0.66])
@@ -1105,13 +1214,16 @@ P("Pengaturan disimpan di " + C("$HERMES_HOME/account-pool.json") + " (dibuat sa
   "juga boleh diedit; ambang peringatan ada di " + C("alert_all_above") + ", jam ringkasan harian di "
   + C("notify.daily") + ", peringatan bot di " + C("alert_bot") + " (" + C("usd") + " dan " + C("requests")
   + " per jam, " + C("factor") + " terhadap jam biasanya, " + C("cooldown_h") + " jeda antarpesan untuk bot yang sama), "
-  "dan jadwal parkir di " + C("schedules") + ":")
+  "jadwal parkir di " + C("schedules") + ", wake otomatis dan modelnya per provider di " + C("wake")
+  + ", dan sensor email di " + C("mask_emails") + ":")
 code("""
 {"notify": {"desktop": true, "telegram": "auto", "telegram_via": "default", "daily": "08:00"},
  "alert_all_above": 80,
  "alert_bot": {"on": true, "usd": 15, "requests": 300, "factor": 3, "cooldown_h": 6},
  "schedules": {"anthropic": [{"label": "dave@example.com", "id": "a3b2c3",
-                              "days": [0, 1, 2, 3, 4], "from": "09:00", "to": "17:00"}]}}
+                              "days": [0, 1, 2, 3, 4], "from": "09:00", "to": "17:00"}]},
+ "wake": {"anthropic": {"auto": true}, "openai-codex": {"auto": false, "model": "gpt-6-luna"}},
+ "mask_emails": true}
 """)
 H2("Perkiraan: kapan semua akun penuh", need=70)
 P(C("usage") + ", " + C("report") + ", ringkasan harian, dan halaman Accounts menyebut kapan semua akun ≥ 90% jika "
@@ -1141,11 +1253,13 @@ OL(["<b>Park bertanggal</b>: mengaktifkan lagi akun yang waktu " + C("--until") 
     + C("[account-pool]") + "); akun yang sudah turun dilepas. Limit asli dari provider tidak pernah disentuh.",
     "<b>Urutan</b>: pemakaian terendah dulu, lalu akun yang diistirahatkan, lalu akun yang pemakaiannya tidak "
     "terbaca, lalu akun DEAD.",
+    "<b>Wake</b> (hanya dengan " + C("wake auto-on") + "): satu request kecil lewat setiap akun dalam rotasi yang "
+    "jendela 5 jamnya tidak berjalan, dari pemakaian yang dibaca di langkah 4 (bagian 7.16).",
     "<b>Riwayat</b>: satu snapshot per putaran untuk " + C("report") + " dan cadangan \"last known\". Nilai yang "
     "berasal dari cadangan itu tidak pernah ditulis ulang.",
     "<b>Peringatan</b> untuk masalah baru (akun perlu login ulang, semua akun tinggi, bot jauh di atas biasanya), "
     "dan ringkasan harian bila sudah waktunya.",
-    "<b>Log aktivitas</b>: setiap perubahan dari langkah 1 sampai 8 dicatat di " + C("account-pool-activity.jsonl")
+    "<b>Log aktivitas</b>: setiap perubahan dari langkah 1 sampai 9 dicatat di " + C("account-pool-activity.jsonl")
     + " (lihat " + C("log") + ", 7.14)."])
 note("<b>Pengaman.</b> Jika <b>semua</b> akun ≥ ambang, hanya akun yang 100% yang diistirahatkan, jadi pool tidak "
      "pernah dikosongkan karena \"hampir penuh\". Jika pemakaian tidak terbaca sama sekali, urutan tidak diubah; "
@@ -1188,8 +1302,9 @@ LI(["<b>Interval</b>: " + C("systemctl --user edit --full hermes-account-balance
     + " untuk provider yang mau dikeluarkan.",
     "Timer hanya dipasang jika Anda minta (" + C("setup --timer") + ", atau " + C("install.sh") + " tanpa "
     + C("--no-timer") + "). File unit ditulis oleh " + C("setup") + ", bukan diambil dari template.",
-    "Timer tidak memakai token AI; ia hanya memanggil endpoint pemakaian (dan saluran notifikasi Anda untuk "
-    "peringatan dan ringkasan harian)."])
+    "Timer tidak memakai token AI kecuali wake otomatis dinyalakan (" + C("wake auto-on") + "): ia memanggil endpoint "
+    "pemakaian dan, untuk peringatan dan ringkasan harian, saluran notifikasi Anda. Dengan wake otomatis, ia juga "
+    "mengirim satu request model kecil saat jendela suatu akun tidak berjalan."])
 
 H1("12. Provider dan Codex")
 table([
@@ -1199,7 +1314,7 @@ table([
      + ", peringatan login, ringkasan harian, pemulihan cooling down",
      "<b>Semua provider</b> di credential pool (OAuth dan API key)"],
     [C("relogin"), "Provider dengan login OAuth. Verifikasi email butuh adapter identity."],
-    [C("usage") + ", " + C("report") + ", urutan " + C("balance") + ", peringatan \"semua akun tinggi\", email asli",
+    [C("usage") + ", " + C("report") + ", urutan " + C("balance") + ", " + C("wake") + ", peringatan \"semua akun tinggi\", email asli",
      "Provider yang punya <b>adapter</b>. Bawaan: <b>anthropic</b> (5 jam) dan <b>openai-codex</b> (5 jam + mingguan)."],
 ], [0.55, 0.45])
 LI(["Tanpa adapter, " + C("usage") + " dan " + C("report") + " menampilkan pesan jelas, dan " + C("balance")
@@ -1233,15 +1348,18 @@ table([
     [C("~/.hermes/account-pool-history.jsonl"), "Riwayat pemakaian, satu snapshot per putaran timer. Dipangkas ke "
      "14 hari terakhir saat file melewati 3 MB."],
     [C("~/.hermes/account-pool-alerts.json"), "Peringatan yang sudah terkirim (satu pesan per kejadian)"],
-    [C("~/.hermes/account-pool-state.json"), "Kapan ringkasan harian terakhir dikirim, dan jendela jadwal yang sudah dijalankan"],
-    [C("~/.hermes/account-pool.json"), "Pengaturan: saluran peringatan, ringkasan harian, peringatan bot, jadwal parkir"],
+    [C("~/.hermes/account-pool-state.json"), "Kapan ringkasan harian terakhir dikirim, jendela jadwal yang sudah "
+     "dijalankan, dan wake terakhir tiap akun (waktu, model, atau alasan gagal)"],
+    [C("~/.hermes/account-pool.json"), "Pengaturan: saluran peringatan, ringkasan harian, peringatan bot, jadwal "
+     "parkir, wake, sensor email"],
     [C("~/.config/systemd/user/") + "<br/>" + C("hermes-account-balance.{service,timer}"), "Timer 5 menit, ditulis "
      + C("setup --timer")],
 ], [0.48, 0.52])
 P("Cara token diperlakukan:")
 LI(["Semua file data berizin 600. Token tidak pernah dicetak atau dicatat di log; token hanya masuk ke header "
     "permintaan ke endpoint provider itu sendiri.",
-    "Plugin hanya menghubungi API provider (pemakaian, profil, refresh token, login) dan, untuk peringatan dan "
+    "Plugin hanya menghubungi API provider (pemakaian, profil, refresh token, login, dan request wake bila Anda "
+    "memakai " + C("wake") + ") dan, untuk peringatan dan "
     "ringkasan harian, Telegram lewat " + C("hermes send") + " milik Hermes. Tidak ada tujuan lain. Harga API "
     "diambil dari file yang sudah dimiliki Hermes.",
     "Halaman Accounts tidak menerima token: backend-nya hanya mengirim label, id, status, dan angka.",
@@ -1260,17 +1378,25 @@ table([
      "Hermes atau " + C("hermes auth add/remove") + ". " + C("park") + " memindahkan entri beserta token OAuth-nya ke "
      + C("account-pool-parked.json") + " (600, file lock); " + C("balance") + " me-refresh token akun parkir dengan "
      "fungsi refresh Hermes sendiri. Login dari halaman memakai client id dan fungsi token Hermes."],
+    ["Request model", "Hanya untuk " + C("wake") + ": satu request dengan jawaban satu kata per wake. Anthropic "
+     "lewat klien Hermes sendiri (" + C("build_anthropic_client") + ", identitas Claude Code yang dikirim Hermes di "
+     "setiap request langganan); Codex lewat endpoint Responses dengan header " + C("codex_cli_rs") + ". Jalan saat "
+     "Anda menjalankan " + C("wake") + ", menekan <b>Wake</b>, atau dari timer setelah " + C("wake auto-on")
+     + ". Tidak ada bagian lain dari kedua plugin yang memanggil model."],
     ["Listener lokal", "Hanya selama login Codex lewat browser dari halaman Accounts: backend halaman mendengarkan di "
      + C("127.0.0.1:1455") + " (loopback, tidak bisa dijangkau komputer lain), hanya untuk login itu, dan ditutup saat "
      "login selesai, dibatalkan, atau setelah 15 menit. Di terminal, listener itu milik " + C("hermes auth add") + "."],
     ["Jaringan", C("api.anthropic.com") + " (usage, profile), endpoint token OAuth Anthropic lewat Hermes, "
      + C("claude.ai/oauth/authorize") + " (link yang Anda buka sendiri), " + C("chatgpt.com/backend-api/wham/usage")
-     + ", " + C("auth.openai.com") + " (link login yang Anda buka sendiri, kode perangkat, token), dan Telegram "
+     + ", " + C("auth.openai.com") + " (link login yang Anda buka sendiri, kode perangkat, token), untuk wake "
+     + C("api.anthropic.com/v1/messages") + " dan " + C("chatgpt.com/backend-api/codex/responses") + " (serta "
+     "daftar model Codex), dan Telegram "
      "lewat " + C("hermes send") + ". Header klien sama dengan "
      "pembaca pemakaian Hermes (" + C("claude-code/2.1.0") + ", " + C("codex_cli_rs") + "). Tanpa telemetri, tanpa "
      "cek update."],
     ["Kerja di latar belakang", "Hanya timer, jika dipasang: " + C("all balance") + " tiap 5 menit, untuk semua "
-     "provider yang punya akun. Pelacak berjalan "
+     "provider yang punya akun; dengan " + C("wake auto-on") + " juga wake untuk akun yang jendelanya tidak berjalan "
+     "(paling banyak sekitar 5 request kecil per akun per hari). Pelacak berjalan "
      "di dalam setiap proses Hermes sebagai hook " + C("post_api_request") + "."],
     ["Perintah yang dijalankan", C("systemctl --user") + ", " + C("notify-send") + ", " + C("hermes config set")
      + ", " + C("hermes plugins enable account-pool-tracker") + ", " + C("hermes auth add/remove") + ", "
@@ -1368,6 +1494,17 @@ table([
      "halaman OpenAI, atau link sudah lebih dari beberapa menit", "Mulai login lagi"],
     ["Codex: " + C("This address belongs to another sign-in"), "Alamat yang ditempel berasal dari link login yang "
      "lebih lama", "Buka lagi link dari dialog ini dan tempel alamat tujuannya"],
+    [C("wake failed ...: model ... not accepted"), "Paket akun itu tidak menyediakan model wake",
+     C("hermes account &lt;provider&gt;") + "<br/>" + C("wake model=&lt;id&gt;") + " dengan model yang tersedia, atau "
+     + C("model=default")],
+    [C("wake failed ...: rate-limited"), "Akun sedang kena limit, jadi jendelanya memang sudah berjalan",
+     "Tidak perlu diperbaiki; putaran berikutnya melihat jendelanya berjalan"],
+    ["<b>Resets</b> menampilkan " + C("not started"), "Tidak ada jendela 5 jam yang berjalan di akun itu",
+     "Normal untuk akun yang menganggur. <b>Wake</b> memulainya bila Anda ingin reset lebih cepat"],
+    ["Wake otomatis tidak melakukan apa-apa", "Timer mati, atau semua jendela sudah berjalan",
+     C("wake status") + "; " + C("doctor")],
+    ["Email tampil sebagai " + C("al•••e@e•••.com"), "Sensor email menyala",
+     C("hermes account &lt;provider&gt; privacy off") + ", atau tombol mata di halaman"],
 ], [0.24, 0.34, 0.42])
 
 H1("16. Tanya jawab")
@@ -1376,7 +1513,17 @@ qa = [
      "Itu dua batas yang berbeda. Kuota model adalah yang dipakai bot. Endpoint yang dibaca aplikasi untuk "
      "<i>menampilkan</i> kuota itu punya batas permintaan sendiri. Saat batas itu tercapai, hanya tampilannya yang "
      "terdampak: bot tetap jalan, dan plugin menampilkan nilai terakhir yang diketahui."),
-    ("Apakah plugin memakai token AI?", "Tidak. Plugin hanya membaca pemakaian dan mengurutkan pool. Tidak ada model yang dipanggil."),
+    ("Apakah plugin memakai token AI?", "Hanya untuk " + C("wake") + ", dan hanya bila Anda menjalankannya atau "
+     "menyalakan " + C("wake auto-on") + ": satu request dengan jawaban satu kata per wake, yang membuat jendela tetap di "
+     "0%. Selebihnya plugin hanya membaca pemakaian dan mengurutkan pool tanpa memanggil model."),
+    ("Perlukah wake otomatis dinyalakan?",
+     "Berguna untuk pool yang punya jam menganggur: akun yang menunggu pekerjaan sudah punya jendela berjalan, jadi reset "
+     "datang lebih cepat begitu pekerjaan tiba. Biayanya paling banyak sekitar 5 request kecil per akun per hari. Pool "
+     "yang sibuk sepanjang hari hampir tidak mendapat apa-apa, karena jendelanya sudah berjalan. Wake tidak menambah "
+     "kuota."),
+    ("Apakah sensor email juga menyembunyikan email di file?",
+     "Tidak. Yang disensor adalah yang ditampilkan: output perintah, peringatan, dan halaman. File tetap menyimpan email "
+     "asli, supaya target dan " + C("privacy off") + " tetap berfungsi."),
     ("Apakah balance memindahkan sesi yang sedang berjalan ke akun yang lebih longgar?",
      "Tidak. Sesi yang berjalan tetap di akunnya sampai kena limit, karena pindah akun membuang prompt cache. Sesi baru "
      "mengambil akun paling longgar."),
@@ -1424,6 +1571,13 @@ LI(["Pemakaian berasal dari <b>endpoint yang tidak didokumentasikan resmi</b>: "
     "Endpoint ini bisa berubah atau membatasi permintaan tanpa pemberitahuan. Plugin mengirim header klien yang sama "
     "dengan pembaca pemakaian milik Hermes.",
     "Kuota mingguan Anthropic tidak tersedia untuk akun Team, jadi balance untuk " + C("anthropic") + " memakai jendela 5 jam.",
+    C("wake") + " bergantung pada yang ditampilkan endpoint pemakaian saat ini: Anthropic tidak memberi jam reset "
+    "selama tidak ada jendela berjalan, Codex menampilkan jendela utuh yang bergeser setiap dibaca. Jika provider "
+    "mengubahnya, wake tidak bisa mengenali jendela yang menganggur dan membiarkan akunnya (akun yang disebut namanya "
+    "tetap dibangunkan). Wake adalah request yang dibuat dengan akun itu seperti sesi Hermes, jadi tunduk pada "
+    "ketentuan paket yang sama.",
+    "Sensor email mencakup yang ditampilkan plugin ini. Tempat lain yang menampilkan label akun, seperti "
+    + C("hermes auth list") + " atau log Hermes sendiri, tidak disensor.",
     "Codex diuji dengan akun ChatGPT Business asli: login lewat browser, " + C("check") + ", " + C("usage") + ", "
     + C("who") + ", " + C("report") + ", " + C("sessions") + ", " + C("log") + ", " + C("doctor") + ", dan "
     + C("balance --dry-run") + ". Park, unpark, refresh token akun parkir, balance, dan login dari halaman diuji di "
@@ -1478,6 +1632,9 @@ table([
     ["Ringkasan harian jam 08:00", C("hermes account anthropic notify daily=08:00")],
     ["Batas peringatan bot", C("hermes account anthropic notify bots=25")],
     ["Strategi rotasi tiap profil", C("hermes account anthropic strategy")],
+    ["Mulai jendela 5 jam yang menganggur", C("hermes account anthropic wake")],
+    ["Jaga jendela tetap berjalan", C("hermes account anthropic wake auto-on")],
+    ["Sensor email", C("hermes account anthropic privacy on") + " / " + C("off")],
     ["Log timer", C("journalctl --user -u hermes-account-balance.service -n 20 -o cat")],
     ["Halaman di Desktop", "Sidebar <b>Accounts</b>, atau Ctrl+K " + C("Accounts: open the account pool")],
     ["Setup profil, pelacak, timer", C("hermes account anthropic setup --timer")],
@@ -1487,6 +1644,12 @@ table([
 H1("19. Riwayat versi")
 table([
     ["Versi", "Perubahan"],
+    ["3.11.0", C("wake") + " memulai jendela 5 jam akun yang menganggur dengan satu request kecil (Anthropic: "
+     + C("claude-haiku-4-5") + ", satu token output; Codex: model terkecil akun itu), dengan target, " + C("--dry-run")
+     + ", " + C("status") + ", dan " + C("model=") + ". " + C("wake auto-on") + ": timer menjaga jendela tetap "
+     "berjalan. " + C("privacy on|off") + " menyensor email di output, peringatan, dan seluruh halaman Accounts. "
+     "Halaman: tombol mata, dialog Wake, " + C("not started") + " di kolom Resets. Tes baru "
+     + C("tests/wake_privacy_sandbox.py") + "."],
     ["3.10.4", "Unit timer dan perintah yang dijalankan plugin memakai " + C("hermes") + " yang Anda pasang ("
      + C("~/.local/bin/hermes") + "), bukan launcher internal di dalam " + C("~/.hermes") + "."],
     ["3.10.3", "Timer menyeimbangkan semua provider yang punya akun (" + C("hermes account all balance") + "), jadi "

@@ -12,6 +12,8 @@ Every command follows one pattern:
     hermes account <provider> balance          order accounts by live usage, bench nearly-full ones
     hermes account <provider> who|report|relogin|doctor|notify   (see `hermes account help`)
     hermes account <provider> setup            profiles, tracker and timer after hermes plugins install
+    hermes account <provider> wake             start the 5-hour window of idle accounts (one tiny request)
+    hermes account <provider> privacy on|off   mask emails in the output, alerts and the Accounts page
     hermes account help | hermes account <provider> help
 
 `balance` is meant to run on a timer with `credential_pool_strategies.<provider>:
@@ -50,15 +52,64 @@ _OUT = threading.local()
 
 
 def _p(*args, sep: str = " ", end: str = "\n") -> None:
-    """print() that the desktop backend can capture per thread (redirect_stdout is process-wide)."""
+    """print() that the desktop backend can capture per thread (redirect_stdout is process-wide).
+
+    With email masking on (`privacy on`) emails are masked in what is shown; the activity log
+    gets the real text, so turning masking off later shows the real emails again."""
+    text = sep.join(str(a) for a in args)
+    shown = _mask(text) if _private() else text
     stream = getattr(_OUT, "buf", None)
     if stream is None:
-        builtins.print(*args, sep=sep, end=end)
+        builtins.print(shown, end=end)
     else:
-        stream.write(sep.join(str(a) for a in args) + end)
+        stream.write(shown + end)
     rec = getattr(_OUT, "rec", None)
     if rec is not None:
-        rec.append(sep.join(str(a) for a in args))
+        rec.append(text)
+
+
+_EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
+_PRIVATE: dict = {}           # settings file -> (mtime, masking on)
+
+
+def _mask_email(addr: str) -> str:
+    """alice@example.com -> al•••e@e•••.com: enough to tell accounts apart, not enough to read them.
+    The page masks with the same rule (maskEmail in desktop/plugin.js)."""
+    local, _, domain = addr.partition("@")
+    host, _, tld = domain.rpartition(".")
+    return f"{_mask_local(local)}@{host[:1]}•••.{tld}"
+
+
+def _mask_local(name: str) -> str:
+    """The name part: first two letters and the last one, or only the first for four letters or fewer."""
+    return f"{name[:2]}•••{name[-1]}" if len(name) > 4 else f"{name[:1]}•••"
+
+
+_EMAIL_COL = re.compile(_EMAIL.pattern + r"( {2,})?")
+
+
+def _mask(text) -> str:
+    """Mask every email in a text. An email followed by two or more spaces is a table column: the
+    padding is adjusted so the next column stays where it was."""
+    def one(m):
+        addr, pad = m.group(0).rstrip(" "), m.group(1) or ""
+        masked = _mask_email(addr)
+        return masked + (" " * max(1, len(addr) + len(pad) - len(masked)) if pad else "")
+    return _EMAIL_COL.sub(one, str(text))
+
+
+def _private() -> bool:
+    """True when email masking is on (account-pool.json "mask_emails"). Re-read only when the file changes."""
+    try:
+        path = _config_path()
+        mtime = path.stat().st_mtime_ns
+    except Exception:
+        return False
+    hit = _PRIVATE.get(str(path))
+    if hit is None or hit[0] != mtime:
+        hit = (mtime, bool(_load_json(path, {}).get("mask_emails")))
+        _PRIVATE[str(path)] = hit
+    return hit[1]
 
 
 @contextmanager
@@ -230,9 +281,17 @@ def _record_history(provider: str, known) -> None:
     known = [(e, u) for e, u in known if e.label not in _CACHED]     # never re-record a cached value
     if not known:
         return
-    line = json.dumps({"ts": round(time.time()), "provider": provider,
-                       "usage": {e.label: u[0] for e, u in known},
-                       "reset": {e.label: u[1] for e, u in known}})
+    rec = {"ts": round(time.time()), "provider": provider,
+           "usage": {e.label: u[0] for e, u in known},
+           "reset": {e.label: u[1] for e, u in known}}
+    win = {}
+    for e, u in known:
+        w = _WINDOW.get((provider, e.label))
+        if w and (w[0], w[1]) != (u[0], u[1]):
+            win[e.label] = [w[0], w[1]]
+    if win:
+        rec["win"] = win                     # the 5-hour window, when the headline value is another one
+    line = json.dumps(rec)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     with os.fdopen(fd, "a") as fh:
         fh.write(line + "\n")
@@ -358,6 +417,8 @@ LOG_LINES = {
     "unschedule": r"^Schedule removed",
     "strategy": r"^(Rotation strategy \[|FAILED )",
     "notify": r"^(desktop alerts|telegram alerts|Telegram alerts are now|Daily summary (on|off)|Bot alerts)",
+    "wake": r"^(Automatic wake (on|off)|Wake model)",
+    "privacy": r"^Email masking (on|off)",
 }
 
 
@@ -384,6 +445,8 @@ def _notify(title: str, body: str, icon: str = "dialog-warning") -> list[str]:
     """Send to every configured channel; return the channels that succeeded."""
     cfg = _config()
     sent = []
+    if _private():
+        title, body = _mask(title), _mask(body)
     if cfg["notify"].get("desktop") and shutil.which("notify-send"):
         try:
             r = subprocess.run(["notify-send", "-a", "Hermes", "-i", icon, title, body],
@@ -544,7 +607,10 @@ def _state_path() -> Path:
 
 
 def _short(label: str) -> str:
-    return str(label or "?").split("@")[0]
+    """The name before @ (alice), masked like the email when masking is on (al•••e)."""
+    text = str(label or "?")
+    name = text.split("@")[0]
+    return _mask_local(name) if "@" in text and _private() else name
 
 
 def _summary(provider: str, hours: float = 24) -> tuple:
@@ -788,17 +854,25 @@ def _usage_full(provider, entry):
     except Exception as x:
         ad.last_error = f"adapter error: {type(x).__name__}"
         u = None
+    label = getattr(entry, "label", None)
     if not u:
+        _WINDOW.pop((provider, label), None)
         transient = ad.last_error.startswith(("usage endpoint rate-limited", "usage endpoint unreachable",
                                               "usage endpoint HTTP 5"))
-        label = getattr(entry, "label", None)
         return (_cached_usage(provider, label) if transient and label else None)
-    _CACHED.discard(getattr(entry, "label", None))
+    _CACHED.discard(label)
+    if label:
+        win = getattr(ad, "last_window", None)
+        if win:
+            _WINDOW[(provider, label)] = tuple(win)
+        else:
+            _WINDOW.pop((provider, label), None)
     return float(u[0]), u[1], (u[2] if len(u) > 2 else "")
 
 
 _CACHED: set = set()          # labels whose usage came from history this run (never re-recorded)
 _SNAP: dict = {}
+_WINDOW: dict = {}            # (provider, label) -> (percent, reset, seconds) of the 5-hour window, read this run
 
 
 def _recent_snapshots(provider: str) -> list:
@@ -849,6 +923,7 @@ def _reset_run_state() -> None:
     """Forget per-run caches. A CLI run is one process; the desktop backend calls this per request."""
     _CACHED.clear()
     _SNAP.clear()
+    _WINDOW.clear()
 
 
 def _usage_reason(provider) -> str:
@@ -1233,7 +1308,8 @@ def _log_actions(provider: str, actions: list, dry: bool) -> None:
         if a.startswith("order:"):
             continue
         kind = ("alert" if a.startswith("alert") else "schedule" if a.startswith("schedule") else
-                "unpark" if a.startswith("unpark ") else "summary" if a.startswith("daily") else "balance")
+                "unpark" if a.startswith("unpark ") else "summary" if a.startswith("daily") else
+                "wake" if a.startswith(("woke ", "wake failed")) else "balance")
         _log(provider, kind, a)
 
 
@@ -1362,11 +1438,17 @@ def _cmd_balance(args) -> int:
     target = [e.id for e, _, _ in order]
     if current != target:
         actions.append("order: " + " > ".join(
-            f"{e.label.split('@')[0]}({u[0]:.0f}%)" if u else f"{e.label.split('@')[0]}(n/a)"
+            f"{_short(e.label)}({u[0]:.0f}%)" if u else f"{_short(e.label)}(n/a)"
             for e, u, _ in order))
         if not dry:
             for pos, cid in enumerate(target):
                 pool.move_entry(cid, pos)
+
+    if _wake_cfg(provider)["auto"] and providers.get(provider).has_wake:
+        try:
+            actions += _wake(provider, pool, [e for e, _, flag in rows if flag != "dead"], dry=dry, auto=True)
+        except Exception as x:
+            actions.append(f"wake failed: {type(x).__name__}: {x}")
 
     if not dry:
         try:
@@ -1817,6 +1899,18 @@ def _doctor_checks(provider: str) -> list:
                     f"Fix: hermes account {provider} unschedule <account>")
     elif rows:
         add("ok", f"park schedules: {', '.join(r['label'] + ' ' + r['every'] for r in rows)}")
+
+    wake = _wake_cfg(provider)
+    if wake["auto"]:
+        if not providers.get(provider).has_wake:
+            add("warn", f"automatic wake is on, but {provider} has no wake support. Fix: hermes account {provider} wake auto-off")
+        elif not _timer_active():
+            add("warn", f"automatic wake is on, but the balance timer is off, so nothing wakes. "
+                        f"Fix: hermes account {provider} setup --timer")
+        else:
+            failed = [v for v in _wake_last(provider).values() if not v.get("ok") and time.time() - v["ts"] < 6 * 3600]
+            add("ok" if not failed else "warn", f"automatic wake on, model {_wake_model_text(provider)}"
+                + (f"; {len(failed)} wake(s) failed in the last 6 h, e.g. {failed[0].get('note', '')}" if failed else ""))
     return checks
 
 
@@ -3292,6 +3386,246 @@ def _cmd_setup(args) -> int:
     return 1 if failed else 0
 
 
+# ── wake: start an account's 5-hour window, email masking ───────────────────
+
+WAKE_GUARD = 3600   # the timer wakes an account at most once an hour (a wake whose window has not shown yet)
+WAKE_SLACK = 150    # Codex reports an idle window as a full one that resets 5 h after the reading
+
+
+def _wake_cfg(provider: str) -> dict:
+    """{"auto": the balance timer wakes idle accounts, "model": "" = the adapter's choice}."""
+    w = ((_config().get("wake") or {}).get(provider)) or {}
+    return {"auto": bool(w.get("auto")), "model": str(w.get("model") or "")}
+
+
+def _window_idle(win, ts=None):
+    """True when the short (5-hour) window is not running, so the next request starts it.
+    win = (percent, reset, seconds); ts = when it was read. None when unknown."""
+    if not win:
+        return None
+    pct, reset, length = (tuple(win) + (None, None, None))[:3]
+    now = time.time()
+    if not reset or reset <= now:
+        return True                       # Anthropic: no reset time; or the window has ended since
+    return bool(length and float(pct or 0) <= 0 and reset - (ts or now) >= float(length) - WAKE_SLACK)
+
+
+def _wake_model_name(provider: str) -> str:
+    """The model `wake` sends to: the one set with model=<id>, or the adapter's default."""
+    return _wake_cfg(provider)["model"] or providers.get(provider).wake_model or "the smallest model the account offers"
+
+
+def _wake_model_text(provider: str) -> str:
+    return _wake_model_name(provider) + ("" if _wake_cfg(provider)["model"] else " (default)")
+
+
+def _wake(provider: str, pool, entries, *, dry=False, auto=False, forced=False) -> list:
+    """Send one tiny request through each account in `entries` whose 5-hour window is not running.
+
+    auto: the balance timer; it uses the usage this run read, says nothing about accounts it leaves
+    alone and wakes an account at most once per WAKE_GUARD. Otherwise the usage is read live first.
+    forced: named accounts, woken when their usage is unknown too (a running window is still left alone).
+    Returns one line per account."""
+    ad = providers.get(provider)
+    model = _wake_cfg(provider)["model"] or None
+    state = _load_json(_state_path(), {}) or {}
+    out, done = [], {}
+    for e in entries:
+        label, st = e.label, _entry_state(e)
+        if st != "active":
+            if not auto:
+                out.append(f"skip {label}: " + ("needs a new sign-in" if st == "DEAD"
+                                                 else f"{st.lower()}, its window is running"))
+            continue
+        if ad.oauth_only and not _oauth(e):
+            if not auto:
+                out.append(f"skip {label}: an API key has no usage window")
+            continue
+        if not auto:
+            if not dry:
+                e = _refresh_if_expired(provider, pool, e)
+            _usage_full(provider, e)
+        win = _WINDOW.get((provider, label))
+        idle = _window_idle(win)
+        if idle is False:
+            if not auto:
+                out.append(f"skip {label}: window running, resets {_hhmm(win[1])}")
+            continue
+        if idle is None and not forced:
+            if not auto:
+                out.append(f"skip {label}: usage unknown ({_usage_reason(provider) or 'no reading'}), not woken")
+            continue
+        key = f"wake:{provider}:{e.id}"
+        if auto and time.time() - float((state.get(key) or {}).get("ts", 0) or 0) < WAKE_GUARD:
+            continue
+        if dry:
+            out.append(f"would wake {label}")
+            continue
+        length = float((win[2] if win and len(win) > 2 and win[2] else 0) or ad.short_window_seconds or 18000)
+        try:
+            used = ad.wake(e, model) or model or ad.wake_model
+            done[key] = {"ts": round(time.time()), "ok": True, "model": used}
+            out.append(f"woke {label} ({used}): its {length / 3600:g}-hour window starts now, "
+                       f"resets about {_hhmm(time.time() + length)}")
+        except Exception as x:  # noqa: BLE001  (one account must not stop the others)
+            done[key] = {"ts": round(time.time()), "ok": False, "note": str(x)[:160]}
+            out.append(f"wake failed for {label}: {str(x)[:200] or type(x).__name__}")
+    if done:
+        cur = _load_json(_state_path(), {}) or {}        # re-read: the daily summary writes here too
+        cur.update(done)
+        _atomic_json(_state_path(), cur)
+    return out
+
+
+def _window_snapshot(provider: str) -> dict:
+    """label -> {"ts", "pct", "reset", "idle"} of the 5-hour window, from the newest history (no network)."""
+    length = providers.get(provider).short_window_seconds
+    out = {}
+    for rec in _recent_snapshots(provider):              # newest first
+        for label, pct in (rec.get("usage") or {}).items():
+            if label in out:
+                continue
+            w = (rec.get("win") or {}).get(label) or [pct, (rec.get("reset") or {}).get(label)]
+            out[label] = {"ts": rec.get("ts"), "pct": w[0], "reset": w[1],
+                          "idle": _window_idle((w[0], w[1], length), ts=rec.get("ts"))}
+    return out
+
+
+def _wake_last(provider: str) -> dict:
+    """account id -> {"ts", "ok", "model"|"note"} of its last wake."""
+    pre = f"wake:{provider}:"
+    return {k[len(pre):]: v for k, v in (_load_json(_state_path(), {}) or {}).items()
+            if k.startswith(pre) and isinstance(v, dict)}
+
+
+def _wake_status(provider: str) -> int:
+    ad = providers.get(provider)
+    cfg = _wake_cfg(provider)
+    _p(f"[{provider}] wake: one tiny request starts an account's 5-hour window now, so it resets 5 hours later")
+    if not ad.has_wake:
+        _p(f"  not available for {provider}. Providers with wake: {', '.join(providers.with_wake())}.")
+        return 0
+    _p(f"  automatic: {'on' if cfg['auto'] else 'off'}"
+       + (" (the balance timer wakes an account in rotation whose window is not running)" if cfg["auto"] else ""))
+    if cfg["auto"] and not _timer_active():
+        _p("  WARNING: the balance timer is not active, so nothing wakes automatically.")
+    _p(f"  model    : {_wake_model_text(provider)}")
+    snap, last = _window_snapshot(provider), _wake_last(provider)
+    entries = sorted(_pool(provider).entries(), key=lambda e: e.priority)
+    if entries:
+        newest = max((v["ts"] for v in snap.values() if v.get("ts")), default=None)
+        _p("  in rotation" + (f" (windows from the balance run at {_hhmm(newest)}):" if newest else
+                               " (no usage history yet: the balance timer writes it):"))
+        for pos, e in enumerate(entries, 1):
+            w = snap.get(e.label)
+            text = ("unknown" if not w or w["idle"] is None else "not running" if w["idle"]
+                    else f"running, resets {_hhmm(w['reset'])}")
+            lw = last.get(e.id)
+            note = (f"woken {_hhmm(lw['ts'])}" if lw.get("ok") else f"wake failed {_hhmm(lw['ts'])}: {lw.get('note', '')}"
+                    ) if lw else ""
+            _p(f"  {pos:>3} {e.label:34s} {text:24s} {note}".rstrip())
+    _p(f"Wake now: hermes account {provider} wake [<target>[,<target>...]] [--dry-run]")
+    _p(f"Change:   hermes account {provider} wake auto-on|auto-off|model=<id>|model=default")
+    return 0
+
+
+def _wake_setting(provider: str, raw: str) -> int:
+    ad = providers.get(provider)
+    sub = raw.lower()
+    if not ad.has_wake:
+        raise SystemExit(f"[{provider}] wake is not available for {provider}. "
+                         f"Providers with wake: {', '.join(providers.with_wake())}.")
+    user = _load_json(_config_path(), {})
+    w = user.setdefault("wake", {}).setdefault(provider, {})
+    if sub in ("auto-on", "auto-off"):
+        w["auto"] = sub == "auto-on"
+        _atomic_json(_config_path(), user)
+        if w["auto"]:
+            _p(f"Automatic wake on [{provider}]: the balance timer wakes an account in rotation whose 5-hour window "
+               f"is not running, with one tiny request to {_wake_model_name(provider)}. At most about 5 a day per account.")
+            if not _timer_active():
+                _p(f"WARNING: the balance timer is not active, so nothing wakes yet. Fix: hermes account {provider} setup --timer")
+        else:
+            _p(f"Automatic wake off [{provider}]. Wake by hand: hermes account {provider} wake")
+        return 0
+    value = raw.split("=", 1)[1].strip()
+    if not value or value.lower() == "default":
+        w.pop("model", None)
+    elif not re.fullmatch(r"[A-Za-z0-9._:/-]{2,80}", value):
+        _p("model= takes a model id, e.g. model=claude-haiku-4-5, or model=default")
+        return 2
+    else:
+        w["model"] = value
+    _atomic_json(_config_path(), user)
+    _p(f"Wake model [{provider}]: {_wake_model_text(provider)}.")
+    return 0
+
+
+def _cmd_wake(args) -> int:
+    provider = _norm(args.provider)
+    ad = providers.get(provider)
+    raw = (args.target or "").strip()
+    sub = raw.lower()
+    if sub == "status":
+        return _wake_status(provider)
+    if sub in ("auto-on", "auto-off") or sub.startswith("model="):
+        if args.dry_run:
+            _p("--dry-run applies to waking, not to settings.")
+            return 2
+        return _wake_setting(provider, raw)
+    if not ad.has_wake:
+        raise SystemExit(f"[{provider}] wake is not available for {provider}: the plugin cannot send a request "
+                         f"for it. Providers with wake: {', '.join(providers.with_wake())}.")
+    if _no_accounts(provider):
+        return 0
+    pool = _pool(provider)
+    if raw:
+        picked = []
+        for t in [x.strip() for x in raw.split(",") if x.strip()]:
+            _, matched, error = pool.resolve_target(t)
+            if matched is None:
+                item = _find_parked(provider, t)
+                raise SystemExit(f"{item.get('label', t)} is parked: wake works on accounts in rotation. Unpark it first."
+                                 if item else f"{error} See: hermes account {provider} list")
+            if all(x.id != matched.id for x in picked):
+                picked.append(matched)
+    else:
+        picked = sorted(pool.entries(), key=lambda e: e.priority)
+    dry = bool(args.dry_run)
+    lines = _wake(provider, pool, picked, dry=dry, forced=bool(raw))
+    woke = sum(1 for x in lines if x.startswith(("woke ", "would wake ")))
+    failed = sum(1 for x in lines if x.startswith("wake failed"))
+    _p(f"{time.strftime('%Y-%m-%d %H:%M:%S')} [{provider}] wake{' (dry run)' if dry else ''}: "
+       f"{woke} {'to wake' if dry else 'woken'}, {failed} failed, {len(lines) - woke - failed} left alone.")
+    for line in lines:
+        _p("  - " + line)
+        if not dry and line.startswith(("woke ", "wake failed")):
+            _log(provider, "wake", line)
+    if not dry and woke:
+        _p("The next balance run (within 5 minutes) reads the new reset times.")
+    return 1 if failed else 0
+
+
+def _cmd_privacy(args) -> int:
+    sub = (args.target or "status").strip().lower()
+    if sub in ("on", "off"):
+        user = _load_json(_config_path(), {})
+        user["mask_emails"] = sub == "on"
+        _atomic_json(_config_path(), user)
+        if sub == "on":
+            _p("Email masking on: the Accounts page, alerts and the output of hermes account show emails as "
+               "al•••e@e•••.com, for every provider. Targets still take the full email, the list number or the id.")
+        else:
+            _p("Email masking off: emails are shown in full.")
+        return 0
+    if sub != "status":
+        _p("privacy accepts: status, on, off")
+        return 2
+    _p(f"Email masking: {'on' if _private() else 'off'} (every provider: the Accounts page, alerts and this command)")
+    _p(f"Change: hermes account {_norm(args.provider)} privacy on|off")
+    return 0
+
+
 # ── registration ─────────────────────────────────────────────────────────────
 
 ACTIONS = [
@@ -3314,6 +3648,8 @@ ACTIONS = [
     ("doctor", "", "Check the whole setup: strategy, timer, files, pools, alerts"),
     ("setup", "[--timer] [--strategy] [--undo]", "Profiles, tracker and (--timer) the balance timer; shows the plan first"),
     ("notify", "[status|test|summary|...]", "Alert channels (desktop, Telegram) and the daily summary"),
+    ("wake", "[<target>|status|auto-on]", "Start the 5-hour window of idle accounts now (one tiny request)"),
+    ("privacy", "[on|off|status]", "Mask emails in the page, alerts and output (al•••e@e•••.com)"),
     ("help", "", "Show this help"),
 ]
 
@@ -3328,6 +3664,8 @@ HELP = "\n".join([
     "",
     "Targets: account label (email), list number, or id. unpark accepts label or id.",
     "openai-codex add/relogin sign in through the browser on this computer; --device: with a device code.",
+    "wake: an idle account's 5-hour window starts with its first request; wake sends that request now, so the",
+    "  window resets sooner. wake auto-on: the balance timer does it whenever a window is not running.",
     "hermes account all balance: balance every provider with accounts (what the timer runs).",
     "",
     "Examples:",
@@ -3345,6 +3683,9 @@ HELP = "\n".join([
     "  hermes account anthropic doctor",
     "  hermes account anthropic setup --timer",
     "  hermes account anthropic notify test",
+    "  hermes account anthropic wake",
+    "  hermes account anthropic wake auto-on",
+    "  hermes account anthropic privacy on",
     "",
     "Every provider in the credential pool: list, check, add, remove, park, unpark, schedule, relogin, who, sessions,",
     "  log, doctor, alerts, timed parks and refresh recovery.",
@@ -3361,10 +3702,10 @@ HANDLERS = {"add": _cmd_add, "remove": _cmd_remove, "list": _cmd_list, "check": 
             "report": _cmd_report, "park": _cmd_park, "unpark": _cmd_unpark, "relogin": _cmd_relogin,
             "balance": _cmd_balance, "doctor": _cmd_doctor, "notify": _cmd_notify, "schedule": _cmd_schedule,
             "unschedule": _cmd_unschedule, "strategy": _cmd_strategy, "sessions": _cmd_sessions, "log": _cmd_log,
-            "setup": _cmd_setup}
+            "setup": _cmd_setup, "wake": _cmd_wake, "privacy": _cmd_privacy}
 NEEDS_TARGET = {"park", "unpark", "relogin", "add", "remove", "unschedule"}
-OPTIONAL_TARGET = {"notify", "schedule", "strategy"}
-OPTIONS = {"threshold": ("--threshold", {"balance"}), "dry_run": ("--dry-run", {"balance"}),
+OPTIONAL_TARGET = {"notify", "schedule", "strategy", "wake", "privacy"}
+OPTIONS = {"threshold": ("--threshold", {"balance"}), "dry_run": ("--dry-run", {"balance", "wake"}),
            "until": ("--until", {"park"}), "hours": ("--hours", {"report", "sessions", "log"}),
            "minutes": ("--minutes", {"who"}), "yes": ("--yes", {"relogin", "add", "remove", "strategy", "setup"}),
            "key": ("--key", {"add"}), "every": ("--every", {"schedule"}), "chart": ("--chart", {"report"}),
@@ -3446,7 +3787,7 @@ def _setup(parser) -> None:
     parser.add_argument("action", nargs="?", help=argparse.SUPPRESS)
     parser.add_argument("target", nargs="?", help=argparse.SUPPRESS)
     parser.add_argument("--threshold", type=float, default=None, help="balance: bench at/above this usage %%")
-    parser.add_argument("--dry-run", action="store_true", help="balance: show changes without applying them")
+    parser.add_argument("--dry-run", action="store_true", help="balance, wake: show changes without applying them")
     parser.add_argument("--until", default=None, help="park: return automatically (17:00, +2h, 90m)")
     parser.add_argument("--hours", type=float, default=None, help="report, sessions, log: period in hours (default 24)")
     parser.add_argument("--minutes", type=float, default=None, help="who: activity window (default 30)")

@@ -13,6 +13,12 @@ Hermes credential pool. Anything that needs a provider's own API lives here:
     refresh_parked(record) -> new token fields for a PARKED OAuth account whose
                               access token expired (pool accounts are refreshed
                               by Hermes itself)
+    wake(entry, model)     -> send one tiny request through the account so its
+                              short (5-hour) window starts now; returns the model
+                              used, raises with a readable message. Needs
+                              `last_window`: usage() sets it to (percent, reset,
+                              window seconds) of the short window, so the core can
+                              tell a window that is not running
     signin_start(method)   -> start a sign-in the desktop page can finish without
     signin_step(state, code)  a terminal: "code" (paste the code shown after
     signin_close(state)       authorizing), "device" (enter a code on the
@@ -53,6 +59,9 @@ class Adapter:
     oauth_only = True             # only OAuth entries carry account-level data
     last_error = ""               # why the last usage() returned None (shown next to "n/a")
     signin_methods = ()           # page sign-in methods, the first is the default
+    short_window_seconds = None   # length of the window `wake` starts (5 h)
+    wake_model = ""               # model `wake` uses when none is set
+    last_window = None            # (percent, reset, seconds) of the short window, set by usage()
 
     def identity(self, entry):
         return None
@@ -75,6 +84,10 @@ class Adapter:
     def refresh_parked(self, record: dict):
         return None
 
+    def wake(self, entry, model=None):
+        """Start the account's short window with one tiny request. Returns the model used."""
+        return None
+
     def signin_start(self, method=None):
         """{"kind": "code" | "device" | "browser", "url", "user_code"?, "listening"?,
         "state": private dict kept by the server}."""
@@ -94,6 +107,10 @@ class Adapter:
     @property
     def has_usage(self) -> bool:
         return type(self).usage is not Adapter.usage
+
+    @property
+    def has_wake(self) -> bool:
+        return type(self).wake is not Adapter.wake
 
     @property
     def has_web_signin(self) -> bool:
@@ -134,6 +151,8 @@ class Anthropic(Adapter):
     window = "5-hour"
     window_short = "5h"
     window_seconds = 5 * 3600
+    short_window_seconds = 5 * 3600
+    wake_model = "claude-haiku-4-5"
     base = "https://api.anthropic.com"
     signin_methods = ("code",)
 
@@ -165,6 +184,7 @@ class Anthropic(Adapter):
     def usage(self, entry):
         # Undocumented endpoint used by Claude Code's /usage. None on any change.
         self.last_error = ""
+        self.last_window = None
         try:
             five = self._get(entry, "/api/oauth/usage").get("five_hour") or {}
         except Exception as x:
@@ -179,7 +199,37 @@ class Anthropic(Adapter):
             reset = datetime.fromisoformat(reset).timestamp() if reset else None
         except Exception:
             reset = None
+        self.last_window = (float(util), reset, self.short_window_seconds)    # no window running: reset is None
         return float(util), reset
+
+    def wake(self, entry, model=None):
+        # Through Hermes' own Anthropic client: the same headers and Claude Code identity as a Hermes session.
+        from agent.anthropic_adapter import build_anthropic_client
+        try:
+            from agent.anthropic_adapter import _CLAUDE_CODE_SYSTEM_PREFIX as prefix
+        except ImportError:
+            prefix = "You are Claude Code, Anthropic's official CLI for Claude."
+        model = model or self.wake_model
+        client = build_anthropic_client(getattr(entry, "access_token", "") or "", timeout=60)
+        try:
+            client.messages.create(model=model, max_tokens=1, system=[{"type": "text", "text": prefix}],
+                                   messages=[{"role": "user", "content": "hi"}])
+        except Exception as x:
+            raise ValueError(self._wake_error(x, model)) from None
+        return model
+
+    @staticmethod
+    def _wake_error(x, model) -> str:
+        code = getattr(x, "status_code", None)
+        body = getattr(x, "body", None)
+        msg = ((body.get("error") or {}).get("message") if isinstance(body, dict) else None) or str(x)
+        if code == 429:
+            return "rate-limited: the account is at a limit, so its window is running already"
+        if code == 401:
+            return "sign-in rejected (401): sign in again"
+        if code in (400, 404) and "model" in msg.lower():
+            return f"model {model} not accepted ({msg[:120]}): set another with wake model=<id>"
+        return f"HTTP {code}: {msg[:160]}" if code else f"{type(x).__name__}: {msg[:160]}"
 
     def refresh_parked(self, record: dict):
         from agent.anthropic_credentials import refresh_anthropic_oauth_pure
@@ -229,7 +279,9 @@ class OpenAICodex(Adapter):
     name = "openai-codex"
     window = "5-hour + weekly"
     window_short = "codex"
+    short_window_seconds = 5 * 3600
     url = "https://chatgpt.com/backend-api/wham/usage"
+    responses_url = "https://chatgpt.com/backend-api/codex/responses"
 
     def _headers(self, entry) -> dict:
         token = getattr(entry, "access_token", "") or ""
@@ -252,6 +304,7 @@ class OpenAICodex(Adapter):
     def usage(self, entry):
         # Undocumented endpoint used by Codex CLI's /status. None on any change.
         self.last_error = ""
+        self.last_window = None
         try:
             req = urllib.request.Request(self.url, headers=self._headers(entry))
             with urllib.request.urlopen(req, timeout=20) as r:
@@ -271,6 +324,10 @@ class OpenAICodex(Adapter):
             if reset is None and w.get("reset_after_seconds") is not None:
                 reset = time.time() + float(w["reset_after_seconds"])
             windows.append((short, float(w["used_percent"]), float(reset) if reset else None))
+            if key == "primary_window":
+                # An idle window reads as a full one that resets `secs` from now, moving with every read.
+                self.last_window = (float(w["used_percent"]), float(reset) if reset else None,
+                                    float(secs or self.short_window_seconds))
         if not windows:
             self.last_error = "no limit data in the answer"
             return None
@@ -279,6 +336,66 @@ class OpenAICodex(Adapter):
             pct = 100.0
         detail = " · ".join(f"{n} {p:.0f}%" for n, p, _ in windows)
         return pct, reset, detail
+
+    def _pick_model(self, entry) -> str:
+        """The smallest model this account offers (its live model list, as Hermes reads it)."""
+        try:
+            from hermes_cli.codex_models import get_codex_model_ids
+            ids = [m for m in get_codex_model_ids(access_token=getattr(entry, "access_token", "") or "")
+                   if not str(m).endswith("-900k") and "spark" not in str(m)]
+        except Exception:
+            ids = []
+        for part in ("mini", "nano", "luna"):
+            hit = next((m for m in ids if part in m), None)
+            if hit:
+                return hit
+        return ids[-1] if ids else "gpt-5.4-mini"
+
+    def wake(self, entry, model=None):
+        model = model or self._pick_model(entry)
+        body = {"model": model, "instructions": "Answer with one word.", "store": False, "stream": True,
+                "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}],
+                "reasoning": {"effort": "low"}}
+        headers = dict(self._headers(entry), **{"Content-Type": "application/json", "Accept": "text/event-stream"})
+        for attempt in (1, 2):
+            req = urllib.request.Request(self.responses_url, data=json.dumps(body).encode(), headers=headers,
+                                         method="POST")
+            try:
+                with urllib.request.urlopen(req, timeout=60) as r:
+                    for raw in r:
+                        line = raw.decode("utf-8", "replace").strip()
+                        if not line.startswith("data:"):
+                            continue
+                        try:
+                            ev = json.loads(line[5:].strip())
+                        except ValueError:
+                            continue
+                        kind = ev.get("type", "")
+                        if kind == "response.completed":
+                            return model
+                        if kind in ("response.failed", "error", "response.incomplete"):
+                            err = (ev.get("response") or {}).get("error") or ev.get("error") or {}
+                            raise ValueError(f"the request failed: {(err.get('message') or kind)[:160]}")
+                raise ValueError("the answer ended before the request completed")
+            except urllib.error.HTTPError as x:
+                try:
+                    detail = json.loads(x.read() or b"{}")
+                except Exception:
+                    detail = {}
+                msg = str(detail.get("detail") or (detail.get("error") or {}).get("message") or "")
+                if x.code == 400 and attempt == 1 and "reasoning" in msg.lower():
+                    body.pop("reasoning")                  # a model without reasoning effort: ask again without
+                    continue
+                if x.code == 429:
+                    raise ValueError("rate-limited: the account is at a limit, so its window is running already") from None
+                if x.code == 401:
+                    raise ValueError("sign-in rejected (401): sign in again") from None
+                if x.code in (400, 404) and "model" in msg.lower():
+                    raise ValueError(f"model {model} not accepted ({msg[:120]}): set another with wake model=<id>") from None
+                raise ValueError(f"HTTP {x.code}: {msg[:160] or 'no detail'}") from None
+            except (urllib.error.URLError, TimeoutError, OSError) as x:
+                raise ValueError(f"unreachable ({type(x).__name__})") from None
+        raise ValueError("the request was refused twice")
 
     def refresh_parked(self, record: dict):
         from hermes_cli.auth_codex import refresh_codex_oauth_pure
@@ -479,3 +596,7 @@ def get(provider: str) -> Adapter:
 
 def with_usage() -> list[str]:
     return [n for n, a in ADAPTERS.items() if a.has_usage]
+
+
+def with_wake() -> list[str]:
+    return [n for n, a in ADAPTERS.items() if a.has_wake]

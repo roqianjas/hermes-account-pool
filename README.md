@@ -1,12 +1,12 @@
 # hermes-account-pool
 
-Run several accounts of one provider in [Hermes Agent](https://hermes-agent.nousresearch.com/docs) and manage them from one command, `hermes account`, or from an Accounts page in Hermes Desktop. Add accounts with a verified email, see live usage per account, spread the load before an account runs out, park accounts for a while or on a weekly schedule, see which bot is on which account and how many tokens each bot uses, and get an alert or a daily summary.
+Run several accounts of one provider in [Hermes Agent](https://hermes-agent.nousresearch.com/docs) and manage them from one command, `hermes account`, or from an Accounts page in Hermes Desktop. Add accounts with a verified email, see live usage per account, spread the load before an account runs out, start an idle account's 5-hour window early, park accounts for a while or on a weekly schedule, see which bot is on which account and how many tokens each bot uses, mask the emails for a screenshot, and get an alert or a daily summary.
 
-Version 3.10.4 · MIT · Hermes Agent ≥ 0.21.5 · Linux with systemd · Indonesian PDF guide in [`docs/`](docs/hermes-account-pool.pdf)
+Version 3.11.0 · MIT · Hermes Agent ≥ 0.21.5 · Linux with systemd · Indonesian PDF guide in [`docs/`](docs/hermes-account-pool.pdf)
 
 ![The Accounts page in Hermes Desktop: eight accounts in rotation with their 5-hour usage, the bots on each account, one parked account, two park schedules and the forecast](docs/screenshots/accounts.png)
 
-More of the page: [Report](docs/screenshots/report.png) · [tokens by session and load by hour](docs/screenshots/sessions.png) · [Activity](docs/screenshots/activity.png) · [Alerts](docs/screenshots/alerts.png) · [Add account](docs/screenshots/add-account.png) · [Add a Codex account](docs/screenshots/add-account-codex.png). All screenshots show made-up accounts from the test fixtures.
+More of the page: [Report](docs/screenshots/report.png) · [tokens by session and load by hour](docs/screenshots/sessions.png) · [Activity](docs/screenshots/activity.png) · [Alerts](docs/screenshots/alerts.png) · [Add account](docs/screenshots/add-account.png) · [Add a Codex account](docs/screenshots/add-account-codex.png) · [Wake](docs/screenshots/wake.png) · [emails masked](docs/screenshots/privacy.png). All screenshots show made-up accounts from the test fixtures.
 
 ## Contents
 
@@ -45,9 +45,11 @@ Hermes already keeps a pool of accounts per provider and moves a session to the 
 | Know how many tokens each bot uses, and what that would cost on the API | Not shown | `report`: tokens per account, bot and model, priced at API list prices, and the load per hour for the last 7 days |
 | Hear about a dead login or a full pool | Not reported | Desktop and Telegram alerts, and an optional daily summary |
 | Recover accounts stuck after a network drop during a token refresh | Waits for the cooldown | Retried automatically every 5 minutes |
+| Have an idle account's 5-hour window reset sooner | The window starts with the account's first request | `wake` starts it now; `wake auto-on` keeps every window running |
+| Share a screenshot or your screen without the account emails | Not possible | `privacy on`, or the eye button on the page: `al•••e@e•••.com` |
 | See all of it in one place | Not shown | The Accounts page in Hermes Desktop |
 
-The plugin changes the pool only through Hermes' own `CredentialPool` API and uses no AI tokens.
+The plugin changes the pool only through Hermes' own `CredentialPool` API. It uses no AI tokens, except for [`wake`](#wake), which you run or switch on yourself: one tiny request per wake.
 
 ## Quick start
 
@@ -238,6 +240,8 @@ Leaving these out would remove the reasons to use the plugin, so it stays outsid
 | `DEAD` | Hermes, when the provider rejects the refresh token | no | you run `relogin` |
 | `PARKED` | you, with `park` | no, but the login is kept | you run `unpark`, or the `--until` time passes |
 
+**The 5-hour window.** Claude and ChatGPT limit an account per 5-hour window. The window does not run on a clock of its own: it starts with the account's first request after the previous one ended, and resets 5 hours later. An idle account has no window running, which the page shows as `not started` under **Resets**. [`wake`](#wake) starts it with one tiny request, so it resets sooner.
+
 **Park, bench, remove.** Park is your decision and keeps the login. Bench is automatic and temporary. Remove deletes the login; using that account again needs a new sign-in.
 
 **Adapter.** Usage and real-email lookups need each provider's own API. That code lives in one adapter per provider in [`providers.py`](plugins/account-pool/providers.py). Without an adapter the generic commands still work.
@@ -380,6 +384,10 @@ hermes account <provider> <action> [target] [options]
   setup    [--timer] [--strategy] [--undo] [--yes]
                                         profiles, tracker and timer after an install
   notify   [status|test|summary|...]    alert channels (desktop, Telegram) and the daily summary
+  wake     [<target>[,...]] [--dry-run] start the 5-hour window of idle accounts now (one tiny request each)
+           status|auto-on|auto-off|model=<id>
+                                        the setting and every window; the timer keeps windows running
+  privacy  [on|off|status]              mask emails in the output, alerts and the page: al•••e@e•••.com
   help                                  show the help
 
 hermes account all balance [--dry-run] [--threshold N]   balance every provider with accounts (the timer)
@@ -552,7 +560,7 @@ $ hermes account anthropic log --hours 24
 
 What changed in the pool and its settings, and who did it: `timer` (the balance timer), `cli` (a `hermes account` command) or `page` (the Accounts page).
 
-- Logged: bench and release, timed unparks and schedule parks, token refresh recoveries, alerts sent, `park`, `unpark`, `remove`, `add`, `relogin`, `schedule`, `unschedule`, `strategy` and alert settings. Not logged: reading commands (`list`, `usage`, `report`, ...) and the new order after each balance, which changes on most runs.
+- Logged: bench and release, timed unparks and schedule parks, token refresh recoveries, alerts sent, wakes, `park`, `unpark`, `remove`, `add`, `relogin`, `schedule`, `unschedule`, `strategy`, alert, wake and masking settings. Not logged: reading commands (`list`, `usage`, `report`, ...) and the new order after each balance, which changes on most runs.
 - Stored in `account-pool-activity.jsonl`, mode 600, 30 days. Lines hold labels, times and the command's own message, never a credential.
 
 ### park and unpark
@@ -678,6 +686,67 @@ hermes account anthropic notify bots=15               # bot alert from $15 per h
 
 See [Alerts](#alerts).
 
+### wake
+
+```
+$ hermes account anthropic wake --dry-run
+2026-10-12 07:04:56 [anthropic] wake (dry run): 3 to wake, 0 failed, 5 left alone.
+  - would wake carol@example.com
+  - would wake erin@example.com
+  - would wake heidi@example.com
+  - skip frank@example.com: window running, resets 08:34
+  - skip dave@example.com: window running, resets 11:04
+  ...
+
+$ hermes account anthropic wake
+2026-10-12 07:04:56 [anthropic] wake: 3 woken, 0 failed, 5 left alone.
+  - woke carol@example.com (claude-haiku-4-5): its 5-hour window starts now, resets about 12:04
+  - woke erin@example.com (claude-haiku-4-5): its 5-hour window starts now, resets about 12:04
+  - woke heidi@example.com (claude-haiku-4-5): its 5-hour window starts now, resets about 12:04
+  - skip frank@example.com: window running, resets 08:34
+  ...
+The next balance run (within 5 minutes) reads the new reset times.
+
+$ hermes account anthropic wake auto-on
+Automatic wake on [anthropic]: the balance timer wakes an account in rotation whose 5-hour window is not running, with one tiny request to claude-haiku-4-5. At most about 5 a day per account.
+```
+
+An account's [5-hour window](#concepts) starts with its first request. An account that sits idle until 10:00 and is then used hard can be full by 11:00 and stays full until 15:00. Woken at 07:00, its window resets at 12:00 instead of 15:00: the work that hit the limit at 11:00 waits one hour, not four. `wake` sends that first request now: one request through the account that asks for a one-word answer.
+
+| Provider | The wake request | How the plugin sees a window that is not running |
+|---|---|---|
+| `anthropic` | `claude-haiku-4-5`, one output token, through Hermes' own Anthropic client (the same headers and Claude Code identity as a Hermes session) | the usage answer has no reset time |
+| `openai-codex` | the smallest model the account offers (from its model list, as Hermes reads it), low reasoning, a one-word answer on the Codex Responses endpoint | 0% with a reset a full 5 hours away, which moves with every reading. The 5-hour window counts, also when the weekly one is fuller |
+
+- **Which accounts.** Accounts in rotation whose window is not running. A running window gains nothing from a wake, so it is left alone, and so are benched, rate-limited, dead, API-key and parked accounts.
+- **Without a target** it reads each account's usage first (one usage request per account, as `usage` does) and wakes the idle ones. **With a target** (a label, list number or id, or several separated by commas) it wakes that account unless its window is known to be running, also when its usage cannot be read. `--dry-run` shows what it would do.
+- **`wake status`** shows the setting, the model, each account's window from the last balance run and its last wake. It sends nothing.
+- **`wake auto-on`** has the balance timer wake an account as soon as its window is not running. Once a window runs, nothing is sent until it ends: at most about 5 requests per account per day. An account woken in the last hour is not woken again, so a wake that did not start a window costs one request an hour, not one every 5 minutes. `wake auto-off` stops it. It needs the timer; `doctor` warns when the timer is off, and when wakes failed in the last 6 hours.
+- **`wake model=<id>`** sends the wake to another model; `model=default` goes back to the adapter's choice.
+- A failed wake says why (`rate-limited: the account is at a limit, so its window is running already`, `sign-in rejected (401): sign in again`, `model ... not accepted`) and the command exits with 1. Every wake, good or failed, goes into the [activity log](#log).
+- **What it does not do.** It adds no quota: the limits stay the same, only the start of the window moves. A pool whose accounts are busy all day has its windows running anyway, so there is nothing to wake.
+
+### privacy
+
+```
+$ hermes account anthropic privacy on
+Email masking on: the Accounts page, alerts and the output of hermes account show emails as al•••e@e•••.com, for every provider. Targets still take the full email, the list number or the id.
+
+$ hermes account anthropic list
+[anthropic] in rotation (8):
+  #1  ca•••l@e•••.com                    id=2a1b2c  status=ok
+  #2  e•••@e•••.com                      id=4a1b2c  status=ok
+  #3  he•••i@e•••.com                    id=7a1b2c  status=ok
+  ...
+```
+
+For screenshots, screen sharing and pasting output into a chat.
+
+- **The rule.** The first two letters and the last letter of the name (only the first letter for a name of four letters or fewer), the first letter of the domain, and the top-level domain: `alice@example.com` becomes `al•••e@e•••.com`. Enough to tell your own accounts apart, not enough to read them.
+- **Where.** Every line `hermes account` prints (columns stay aligned), desktop and Telegram alerts and the daily summary, and the whole Accounts page: tables, cards, dialogs, tooltips, messages and the status-bar chip. The eye button in the page header switches it as well.
+- **Display only.** `auth.json`, the activity log, the history and the settings file keep the real emails, so `privacy off` shows them again at once, and `park alice@example.com` still works while they are masked. The page's backend sends the real labels to the page, which masks what it shows.
+- `privacy` (or `privacy status`) shows the setting. One setting for every provider (`mask_emails` in the [settings file](#settings-file)).
+
 ### Errors and exit codes
 
 Wrong input is refused with a short message:
@@ -696,7 +765,7 @@ Unknown provider 'anthorpic'. Providers in your pool: anthropic. All providers: 
 | Exit code | Meaning |
 |---|---|
 | 0 | Done |
-| 1 | The command ran and found a problem: `check` or `doctor` failures, a discarded or failed sign-in, a refused remove, a confirmation answered with no (or Ctrl+D, or no terminal to answer), `add` or `relogin` without a terminal, `notify test` or `notify summary` reached no channel, `unschedule` of an account without a schedule, a `strategy` or `setup` step that could not be written |
+| 1 | The command ran and found a problem: `check` or `doctor` failures, a discarded or failed sign-in, a refused remove, a confirmation answered with no (or Ctrl+D, or no terminal to answer), `add` or `relogin` without a terminal, `notify test` or `notify summary` reached no channel, `unschedule` of an account without a schedule, a `strategy` or `setup` step that could not be written, a `wake` that failed for an account |
 | 2 | Wrong usage: missing or unknown action, provider, target or option |
 | 130 | Cancelled with Ctrl+C |
 
@@ -726,17 +795,23 @@ So `setup` (and `install.sh`, which runs it) adds `account-pool` to `plugins.ena
 
 ### What the page shows
 
-The header has a provider switch (providers with accounts in the pool, plus the two with built-in adapters), **Live usage**, **Balance now** and **Add account**. The line under it says how old the usage numbers are and when the timer runs next.
+The header has a provider switch (providers with accounts in the pool, plus the two with built-in adapters), the eye button that masks emails, **Live usage**, **Wake**, **Balance now** and **Add account**. The line under it says how old the usage numbers are and when the timer runs next.
 
 | Tab | Content |
 |---|---|
-| Accounts | The header line shows Hermes' rotation strategy (hover for what each one does, click to change it); a banner names any profile that does not use `fill_first`, with a **Use fill_first** button. Five cards: accounts in rotation, parked accounts, the account the next session starts on with its usage, sessions in the last 30 minutes, tokens in the last 24 hours with their API price. A sixth card is the [forecast](#forecast): when every account will be at 90% or more at the last hour's pace (hover for the details). Then the rotation table in pool order: status, 5-hour usage bar, trend over the last 5 hours, reset time (or `back HH:MM` while benched), tokens in the last 24 hours (hover for input, output, cache, requests, API price, the main model and the current 5-hour window), the profiles using the account (hover for session, platform, model, since when the session is on this account, and the account it moved from) and the row buttons **Sign in again**, **Park**, **Park on a schedule** and **Remove**. A calendar chip next to an account shows its schedule. Parked accounts follow with their last known usage, since when they are parked, when they return (`(schedule)` when a schedule parked them), and **Unpark**, **Park on a schedule** and **Remove**. Then the park schedules, with what each one does now (parked until, next window, or `not in the pool`) and buttons to change or remove it. Active alerts show as a banner on top, a dead account with a **Sign in again** button and a bot alert with **See sessions**. An info banner names any process that still runs an older session tracker, with its fix. |
+| Accounts | The header line shows Hermes' rotation strategy (hover for what each one does, click to change it); a banner names any profile that does not use `fill_first`, with a **Use fill_first** button. Five cards: accounts in rotation, parked accounts, the account the next session starts on with its usage, sessions in the last 30 minutes, tokens in the last 24 hours with their API price. A sixth card is the [forecast](#forecast): when every account will be at 90% or more at the last hour's pace (hover for the details). Then the rotation table in pool order: status, 5-hour usage bar, trend over the last 5 hours, reset time (`back HH:MM` while benched, `not started` while no window runs), tokens in the last 24 hours (hover for input, output, cache, requests, API price, the main model and the current 5-hour window), the profiles using the account (hover for session, platform, model, since when the session is on this account, and the account it moved from) and the row buttons **Sign in again**, **Park**, **Park on a schedule** and **Remove**. A calendar chip next to an account shows its schedule. Parked accounts follow with their last known usage, since when they are parked, when they return (`(schedule)` when a schedule parked them), and **Unpark**, **Park on a schedule** and **Remove**. Then the park schedules, with what each one does now (parked until, next window, or `not in the pool`) and buttons to change or remove it. Active alerts show as a banner on top, a dead account with a **Sign in again** button and a bot alert with **See sessions**. An info banner names any process that still runs an older session tracker, with its fix. |
 | Report | The `report` numbers for 24 hours, 3 days or 7 days: load per account, share, peak, time at 90% or more, tokens and their API price, busiest hours and the advice line. Then tokens by profile (bot), by model and by session (the `sessions` list: title, Kanban task, profile, source; hover a title for its accounts, models, times and token split), and a chart of the load per hour for the last 7 days (quota used or tokens; hover a cell for its numbers). |
 | Activity | The `log` for 24 hours, 3 days or 7 days, newest first: when, who (`timer`, `cli`, `page`) and what happened. |
 | Health | Timer state, age of the usage history, active alerts. **Run doctor** runs the `doctor` checks; **Check accounts** runs `check` and shows its output. |
 | Alerts | Desktop and Telegram switches, the profile whose bot sends Telegram alerts, the daily summary (switch and time), the bot alert (switch and dollars per hour), **Send a test alert**, **Send the summary now**, and the alerts active now. |
 
 **Park** asks when the account comes back: when you unpark it, in 1 hour, in 2 hours, or at a time you type (`17:00`, `+90m`, `2026-10-12 08:00`, the same formats as `--until`). **Park on a schedule** asks for the days and the hours (`09:00` to `17:00`), the same as `schedule --every`. **Remove** and **Balance now** ask before they act. Every action reports the same message as the command.
+
+**Wake** opens the wake dialog: every account in rotation with its 5-hour window (`not running`, `running, resets 11:02`) and its last wake. The accounts whose window is not running are ticked; **Wake N accounts** wakes the ticked ones, the same as `wake <id>,<id>`, and shows the result. Accounts with a running window cannot be ticked. **Keep windows running** is `wake auto-on`, and the model field is `wake model=` (empty for the default); **Save settings** appears once you change one. The button reads **Wake: auto** while automatic wake is on.
+
+![The wake dialog: two accounts without a running window ticked, the others with their reset time, and the switch that keeps windows running](docs/screenshots/wake.png)
+
+The **eye button** masks every email on the page (`al•••e@e•••.com`), the same setting as `privacy on`, so it also masks alerts and the command's output. Click it again to show them. The page remembers it, so a reload does not flash the real emails.
 
 **rotation: …** in the header opens the rotation dialog: one picker per profile with its current strategy, an **Every profile** row that sets them all, and what each strategy does. While any profile is off `fill_first` the dialog says why that fights `balance`. **Save** writes only the profiles you changed, the same as `strategy --only`. The banner's **Use fill_first** does the same for the profiles it names, after a confirmation.
 
@@ -765,6 +840,8 @@ While a Codex browser sign-in waits, the page's backend listens on `127.0.0.1:14
 | Live usage | One usage request per account, parked accounts included. At most once every 2 minutes per provider; the button counts down. |
 | Balance now | The same as `balance`. At most once a minute, shared with Check accounts. |
 | Check accounts | One profile request per account. |
+| Wake | One usage request per ticked account, then one tiny model request per account whose window is not running. At most once a minute, shared with Balance now and Check accounts. |
+| Eye button, wake settings | None. |
 | Run doctor | One usage request. |
 | Add account, Sign in again | The sign-in, then one profile request to verify the email. |
 
@@ -825,13 +902,15 @@ Accounts that need a new sign-in and the report's advice are added when there ar
 
 ### Settings file
 
-Settings are stored in `$HERMES_HOME/account-pool.json`, created on the first change. You can also edit it; the alert level is `alert_all_above`, the daily summary time `notify.daily`, the bot alert `alert_bot` (`usd` per hour, `requests` per hour, `factor` over the usual hour, `cooldown_h` between two messages for the same bot), and park schedules are under `schedules`:
+Settings are stored in `$HERMES_HOME/account-pool.json`, created on the first change. You can also edit it; the alert level is `alert_all_above`, the daily summary time `notify.daily`, the bot alert `alert_bot` (`usd` per hour, `requests` per hour, `factor` over the usual hour, `cooldown_h` between two messages for the same bot), park schedules are under `schedules`, automatic wake and the wake model per provider under `wake`, and email masking is `mask_emails`:
 
 ```json
 {"notify": {"desktop": true, "telegram": "auto", "telegram_via": "default", "daily": "08:00"},
  "alert_all_above": 80,
  "alert_bot": {"on": true, "usd": 15, "requests": 300, "factor": 3, "cooldown_h": 6},
- "schedules": {"anthropic": [{"label": "dave@example.com", "id": "a3b2c3", "days": [0, 1, 2, 3, 4], "from": "09:00", "to": "17:00"}]}}
+ "schedules": {"anthropic": [{"label": "dave@example.com", "id": "a3b2c3", "days": [0, 1, 2, 3, 4], "from": "09:00", "to": "17:00"}]},
+ "wake": {"anthropic": {"auto": true}, "openai-codex": {"auto": false, "model": "gpt-6-luna"}},
+ "mask_emails": true}
 ```
 
 ### Forecast
@@ -859,9 +938,10 @@ Each run, for one provider:
 4. **Usage** (adapter needed): reads every account's usage, refreshing expired access tokens first.
 5. **Bench and release**: accounts at or above the threshold are benched until their window resets; benched accounts that dropped below it are released. Benches are marked `[account-pool]`, and limits set by the provider itself are never touched.
 6. **Order**: least used first, then benched accounts, then accounts whose usage could not be read, then `DEAD` accounts.
-7. **History**: one snapshot per run for `report` and for the `last known` fallback. Values taken from that fallback are never written back.
-8. **Alerts** for new problems (an account that needs sign-in, every account high, a bot far above its usual use), and the daily summary when it is due.
-9. **Activity log**: every change from steps 1 to 8 goes to `account-pool-activity.jsonl` (see [`log`](#log)).
+7. **Wake** (only with `wake auto-on`): one tiny request through each account in rotation whose 5-hour window is not running, from the usage read in step 4. See [`wake`](#wake).
+8. **History**: one snapshot per run for `report` and for the `last known` fallback. Values taken from that fallback are never written back.
+9. **Alerts** for new problems (an account that needs sign-in, every account high, a bot far above its usual use), and the daily summary when it is due.
+10. **Activity log**: every change from steps 1 to 9 goes to `account-pool-activity.jsonl` (see [`log`](#log)).
 
 Safety rules:
 
@@ -887,7 +967,7 @@ systemctl --user enable --now hermes-account-balance.timer          # start agai
 - **Only some providers**: replace the `all` line with one line per provider (`ExecStart=... account anthropic balance`), or run `hermes account <provider> setup --undo` for the one to leave out.
 - **Remove**: `hermes account <provider> setup --undo` with only that provider left removes the timer; `systemctl --user disable --now hermes-account-balance.timer` stops it at once.
 
-The timer uses no AI tokens; it only calls the usage endpoints (and, for alerts and the daily summary, your notification channels).
+The timer uses no AI tokens unless you turn on automatic wake (`wake auto-on`): it calls the usage endpoints and, for alerts and the daily summary, your notification channels. With automatic wake it also sends one tiny model request when an account's window is not running.
 
 ## Providers
 
@@ -895,7 +975,7 @@ The timer uses no AI tokens; it only calls the usage endpoints (and, for alerts 
 |---|---|
 | `list`, `check`, `add`/`remove`, `park`/`unpark` (also `--until`), `schedule`, `who`, tokens and API price, `doctor`, sign-in alerts, daily summary, refresh-cooldown recovery | **Every provider in the credential pool** (OAuth and API-key entries) |
 | `relogin` | Every provider with OAuth sign-in. Email verification needs an identity adapter. |
-| `usage`, `report`, usage-based `balance`, "all accounts high" alert, real-email lookup | **Providers with an adapter.** Built in: **`anthropic`** (Claude Pro / Max / Team, 5-hour window) and **`openai-codex`** (ChatGPT Plus / Pro / Team, 5-hour **and** weekly window). |
+| `usage`, `report`, usage-based `balance`, `wake`, "all accounts high" alert, real-email lookup | **Providers with an adapter.** Built in: **`anthropic`** (Claude Pro / Max / Team, 5-hour window) and **`openai-codex`** (ChatGPT Plus / Pro / Team, 5-hour **and** weekly window). |
 
 Without an adapter, `usage` and `report` say so plainly, and `balance` still unparks timed parks, retries refresh cooldowns and sends sign-in alerts, but leaves the order unchanged.
 
@@ -927,13 +1007,13 @@ Data files, all mode `600`, in `$HERMES_HOME`:
 | `account-pool-activity.jsonl` | The activity log: what the timer, the command and the page changed. Last 30 days, mode 600. |
 | `account-pool-history.jsonl` | Usage snapshots, one per timer run. Trimmed to the last 14 days once the file passes 3 MB. |
 | `account-pool-alerts.json` | Alerts already sent, so each incident is reported once |
-| `account-pool-state.json` | When the daily summary was last sent, and which schedule windows were already applied |
-| `account-pool.json` | Settings: alert channels, daily summary, park schedules |
+| `account-pool-state.json` | When the daily summary was last sent, which schedule windows were already applied, and each account's last wake (time, model or the reason it failed) |
+| `account-pool.json` | Settings: alert channels, daily summary, park schedules, wake, email masking |
 
 How tokens are handled:
 
 - Tokens are never printed or logged. They only go into request headers to the provider's own endpoints.
-- The plugin talks to the provider's API (usage, profile, token refresh, sign-in) and, for alerts and the daily summary, to Telegram through Hermes' own `hermes send`. Nothing else. API prices come from files Hermes already has.
+- The plugin talks to the provider's API (usage, profile, token refresh, sign-in, and the wake request when you use `wake`) and, for alerts and the daily summary, to Telegram through Hermes' own `hermes send`. Nothing else. API prices come from files Hermes already has.
 - The Accounts page gets no tokens: its backend returns labels, ids, states and numbers only.
 - Refresh tokens can be single use. Every refresh is written back at once, under a file lock for parked accounts.
 - API keys for `add --key` are read without echo inside the plugin, never from the command line.
@@ -949,8 +1029,9 @@ What the plugins do outside their own files, in one place: what you should know 
 - `park` moves an account's pool entry, OAuth tokens included, into `account-pool-parked.json` (mode 600, written under a file lock) and `unpark` moves it back. While an account is parked, `balance` refreshes its access token when it expires, with Hermes' own refresh functions (`refresh_anthropic_oauth_pure`, `refresh_codex_oauth_pure`), and writes the new tokens back at once, because refresh tokens can be single use.
 - `add` and `relogin` in a terminal run `hermes auth add` (for Codex with `--browser --no-browser`, or without them for `--device`). **Add account** and **Sign in again** on the Accounts page run the same OAuth flows in the page's backend, with Hermes' own client ids and token functions: the PKCE code flow at `claude.ai` for Anthropic; for Codex the PKCE browser flow at `auth.openai.com` with its callback on `127.0.0.1:1455`, or the device code flow. The PKCE verifiers and the device id stay in the backend's memory for at most 15 minutes.
 - `add --key` reads an API key without echo and stores it through the pool API.
+- **It sends model requests only for `wake`.** Each wake is one request through the account, with a one-word answer: for Anthropic through Hermes' own client (`build_anthropic_client`: `claude-code/<version> (external, cli)`, `x-app: cli`, and the Claude Code system line Hermes sends with every subscription request); for Codex on the Codex Responses endpoint with the headers below. It runs when you run `wake`, click **Wake**, or, after `wake auto-on`, from the timer. Nothing else in either plugin calls a model.
 - Usage and profile requests send the same client headers as Hermes' own usage fetcher: `User-Agent: claude-code/2.1.0` with `anthropic-beta: oauth-2025-04-20` for Anthropic, `codex_cli_rs/0.0.0 (Hermes Agent)` with `originator: codex_cli_rs` for Codex. Without them Anthropic rate-limits the usage endpoint far sooner.
-- It uses these Hermes internals, checked against Hermes 0.21.5: `hermes_cli.auth_commands` (`_OAUTH_ADD_SPECS`, `_unsuppress_provider_sources`, `_normalize_provider`, `auth_add_command`, `auth_remove_command`), `agent.anthropic_credentials` (`_OAUTH_CLIENT_ID`, `_OAUTH_REDIRECT_URI`, `_OAUTH_SCOPES`, `_generate_pkce`, `_post_oauth_token`, `_oauth_token_state`, `refresh_anthropic_oauth_pure`), `hermes_cli.auth_codex` (`CODEX_OAUTH_CLIENT_ID`, `_codex_request_device_code`, `_codex_exchange_authorization_code`, `_codex_http_client`, `_codex_base_url`, `refresh_codex_oauth_pure`), `hermes_cli.auth_codex_browser._codex_browser_exchange_code` (Hermes 0.21.6 and newer; without it the plugin posts the same token request itself), `agent.codex_headers.codex_account_headers`, `hermes_cli.auth` (`PROVIDER_REGISTRY`, `_utc_now_z`, `mark_provider_active_if_unset`), `agent.credential_pool` (`load_pool`, `PooledCredential`), `hermes_constants` (the Hermes home and its per-profile override), `hermes_cli.secret_prompt.masked_secret_prompt`, `hermes_cli.config.set_config_value`, and `agent.usage_pricing` (`_lookup_official_docs_pricing`, `resolve_billing_route`) with `agent.models_dev._load_disk_cache` for API prices. A Hermes update that changes them breaks the affected command with an error; it cannot corrupt the pool, because every write still goes through the pool API.
+- It uses these Hermes internals, checked against Hermes 0.21.5: `hermes_cli.auth_commands` (`_OAUTH_ADD_SPECS`, `_unsuppress_provider_sources`, `_normalize_provider`, `auth_add_command`, `auth_remove_command`), `agent.anthropic_credentials` (`_OAUTH_CLIENT_ID`, `_OAUTH_REDIRECT_URI`, `_OAUTH_SCOPES`, `_generate_pkce`, `_post_oauth_token`, `_oauth_token_state`, `refresh_anthropic_oauth_pure`), `hermes_cli.auth_codex` (`CODEX_OAUTH_CLIENT_ID`, `_codex_request_device_code`, `_codex_exchange_authorization_code`, `_codex_http_client`, `_codex_base_url`, `refresh_codex_oauth_pure`), `hermes_cli.auth_codex_browser._codex_browser_exchange_code` (Hermes 0.21.6 and newer; without it the plugin posts the same token request itself), `agent.codex_headers.codex_account_headers`, `agent.anthropic_adapter` (`build_anthropic_client`, `_CLAUDE_CODE_SYSTEM_PREFIX`) and `hermes_cli.codex_models.get_codex_model_ids` for `wake`, `hermes_cli.auth` (`PROVIDER_REGISTRY`, `_utc_now_z`, `mark_provider_active_if_unset`), `agent.credential_pool` (`load_pool`, `PooledCredential`), `hermes_constants` (the Hermes home and its per-profile override), `hermes_cli.secret_prompt.masked_secret_prompt`, `hermes_cli.config.set_config_value`, and `agent.usage_pricing` (`_lookup_official_docs_pricing`, `resolve_billing_route`) with `agent.models_dev._load_disk_cache` for API prices. A Hermes update that changes them breaks the affected command with an error; it cannot corrupt the pool, because every write still goes through the pool API.
 - Tokens are never printed, logged, returned to the page, or sent anywhere but the provider's own endpoints.
 
 **Network.** Only these, and only when a command, the timer or a page button asks:
@@ -960,7 +1041,9 @@ What the plugins do outside their own files, in one place: what you should know 
 | `api.anthropic.com` | `/api/oauth/usage`, `/api/oauth/profile` | `usage`, `check`, `balance` (every 5 minutes with the timer), the email check after a sign-in, **Live usage**, **Run doctor** |
 | Anthropic's OAuth token endpoint, through Hermes' `_post_oauth_token` | code exchange, token refresh | page sign-in, refresh of parked accounts |
 | `claude.ai/oauth/authorize` | the sign-in link you open yourself | page sign-in |
+| `api.anthropic.com/v1/messages` | one tiny request per wake (`claude-haiku-4-5`, one output token) | `wake`, **Wake**, and the timer after `wake auto-on` |
 | `chatgpt.com/backend-api/wham/usage` | Codex usage | as for Anthropic usage |
+| `chatgpt.com/backend-api/codex/responses`, `.../codex/models` | one tiny request per wake; the account's model list, to pick the smallest model | as for the Anthropic wake |
 | `auth.openai.com` | the sign-in link you open yourself; device code, token exchange and refresh | Codex sign-in, refresh of parked Codex accounts |
 | Telegram, through `hermes send` | alerts and the daily summary | when an alert fires or the summary is due, if Telegram alerts are on |
 
@@ -968,7 +1051,7 @@ There is no telemetry, no update check and no other host. Opening the page or sw
 
 **Local listener.** Only during a Codex browser sign-in started on the Accounts page, the page's backend listens on `127.0.0.1:1455` (loopback only, not reachable from other computers) for the browser's return from OpenAI. It accepts only the sign-in it was started for and closes when that sign-in ends, is cancelled, or after 15 minutes. `add` and `relogin` in a terminal leave the listener to `hermes auth add`.
 
-**Background work.** Nothing runs on its own unless you install the timer (`setup --timer`, or `install.sh` without `--no-timer`). The timer is a systemd user unit that runs `hermes account all balance` every 5 minutes, for every provider with accounts: it reads every account's usage, reorders the pool, benches and releases accounts, applies timed parks and schedules, retries token refreshes and sends alerts. The tracker runs inside every Hermes process that loads it, as a `post_api_request` hook (see its [README](plugins/account-pool-tracker/README.md)).
+**Background work.** Nothing runs on its own unless you install the timer (`setup --timer`, or `install.sh` without `--no-timer`). The timer is a systemd user unit that runs `hermes account all balance` every 5 minutes, for every provider with accounts: it reads every account's usage, reorders the pool, benches and releases accounts, applies timed parks and schedules, retries token refreshes and sends alerts. After `wake auto-on` it also wakes accounts whose 5-hour window is not running (at most about 5 tiny requests per account per day). The tracker runs inside every Hermes process that loads it, as a `post_api_request` hook (see its [README](plugins/account-pool-tracker/README.md)).
 
 **Commands it runs.**
 
@@ -1024,6 +1107,11 @@ There is no telemetry, no update check and no other host. Opening the page or sw
 | Codex page sign-in: `Port 1455 on this computer is taken` | A Codex CLI login or `hermes auth add openai-codex --browser` is waiting on the port | Finish or stop that one, or paste the address the browser ends on |
 | Codex: `OpenAI refused the sign-in` or `Token exchange failed` | You cancelled on OpenAI's page, or the link was older than a few minutes | Start the sign-in again |
 | Codex: `This address belongs to another sign-in` | The pasted address came from an older sign-in link | Open the link from this dialog again and paste the address it ends on |
+| `wake failed ...: model ... not accepted` | The account's plan does not offer the wake model | `hermes account <provider> wake model=<id>` with a model the account offers, or `model=default` |
+| `wake failed ...: rate-limited` | The account is at a limit, so its window is running already | Nothing to fix; the next run finds the window running |
+| **Resets** shows `not started` | No 5-hour window is running on that account | Normal for an idle account. **Wake** starts it if you want it to reset sooner |
+| Automatic wake does nothing | The timer is off, or every window is already running | `hermes account <provider> wake status`; `doctor` |
+| Emails show as `al•••e@e•••.com` | Email masking is on | `hermes account <provider> privacy off`, or the eye button on the page |
 
 ## FAQ
 
@@ -1031,7 +1119,13 @@ There is no telemetry, no update check and no other host. Opening the page or sw
 Two different limits. Your model quota is what the bots spend. The usage endpoint that tools read to *display* that quota has its own request limit. When it is hit, only the display is affected: bots keep running, and the plugin shows the last known value.
 
 **Does the plugin use AI tokens?**
-No. It reads usage and reorders the pool. No model is called.
+Only for `wake`, and only when you run it or switch on `wake auto-on`: one request with a one-word answer per wake, which leaves the window at 0%. Everything else reads usage and reorders the pool without calling a model.
+
+**Should I turn on automatic wake?**
+It helps a pool with idle hours: an account that waits for work has its window running already, so it resets sooner once the work comes. It costs at most about 5 tiny requests per account per day. A pool that is busy around the clock gains little, because its windows run anyway. It adds no quota.
+
+**Does masking hide the emails from the files?**
+No. It masks what is shown: the command's output, alerts and the page. The files keep the real emails, so that targets and `privacy off` keep working.
 
 **Does `balance` move running sessions to a less used account?**
 No. A running session keeps its account until it hits a limit; moving it would discard the prompt cache. New sessions take the least used account.
@@ -1067,6 +1161,8 @@ At least two. `report` tells you when the whole pool was nearly full at the same
 
 - Usage comes from **undocumented endpoints**: `https://api.anthropic.com/api/oauth/usage` and `https://chatgpt.com/backend-api/wham/usage` (the one behind Codex CLI's `/status`). They can change or rate-limit without notice. The plugin sends the same client headers as Hermes' own usage fetcher.
 - Anthropic weekly quotas are not exposed for Team accounts, so `balance` uses the 5-hour window for `anthropic`.
+- `wake` relies on what the usage endpoints show today: Anthropic gives no reset time while no window runs, Codex shows a full untouched window that moves with every reading. If a provider changes that, `wake` cannot tell an idle window and leaves the account alone (a named account is still woken). A wake is a request made with the account like any Hermes session, so it falls under the same plan terms.
+- Email masking covers what the plugin shows. Other places that show account labels, such as `hermes auth list` or Hermes' own logs, are not masked.
 - Adapters exist for `anthropic` and `openai-codex`. The generic commands were tested for other providers with API-key entries only. Codex was verified with a real ChatGPT Business account: the browser sign-in, `check`, `usage`, `who`, `report`, `sessions`, `log`, `doctor` and `balance --dry-run`. Park, unpark, the parked-token refresh, balance and the page's sign-ins were tested in a sandbox with fake tokens (`tests/codex_sandbox.py`, `tests/api_sandbox.py`).
 - Token counts start when tracker 1.1.0 first runs and cover Hermes on this computer only. They are kept for 8 days, in 15-minute buckets, so a period starts at the nearest quarter hour. The split by profile and model starts with tracker 1.3.0; bots pick up a new tracker when their gateway or session restarts.
 - `API $` uses list prices for the standard context length; long-context surcharges and batch discounts are not applied.

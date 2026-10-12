@@ -2,6 +2,18 @@
 
 All releases of the `account-pool` plugin and its session tracker `account-pool-tracker` (now 1.5.0).
 
+## 3.11.0
+
+Wake starts an idle account's 5-hour window now, and email masking hides the account emails for screenshots.
+
+- **`hermes account <provider> wake`.** A 5-hour window starts with the account's first request, so an account that waits idle resets 5 hours after the work arrives. `wake` sends that first request now: one request with a one-word answer through each account in rotation whose window is not running (Anthropic: `claude-haiku-4-5`, one output token, through Hermes' own client; Codex: the smallest model the account offers, low reasoning). Running windows, benched, rate-limited, dead, API-key and parked accounts are left alone. `wake <target>[,<target>...]` wakes named accounts, `--dry-run` shows the plan, `wake status` shows every window without a request, `wake model=<id>` picks the model.
+- **Automatic wake** (`wake auto-on`, off by default): the balance timer wakes an account in rotation as soon as its window is not running, at most about 5 tiny requests per account per day, and not twice within an hour for the same account. `doctor` warns when it is on without the timer or when wakes failed.
+- **Codex windows.** An untouched Codex window reads as 0% with a full 5 hours left that moves with every reading; the plugin counts that as not running. The history keeps the 5-hour window next to the headline value when the weekly one is fuller (`win`), so the page can tell.
+- **`hermes account <provider> privacy on|off`** masks emails (`alice@example.com` → `al•••e@e•••.com`) in everything the command prints, with columns kept aligned, in desktop and Telegram alerts and the daily summary, and on the whole Accounts page. Files keep the real emails; targets still take the full email.
+- **Accounts page.** The eye button in the header switches masking. **Wake** opens a dialog with each account's window and last wake: idle ones ticked, **Wake N accounts**, **Keep windows running** and the model. **Resets** shows `not started` for an account without a running window.
+- Activity log: wakes and the wake and masking settings. `account-pool-state.json` keeps each account's last wake.
+- Docs: README and PDF (wake, privacy, the 5-hour window, the page, the settings file, balance, the timer, the disclosure with the new requests, troubleshooting, FAQ, limitations), two new screenshots, and the adapter's `wake` in CONTRIBUTING. Tests: `tests/wake_privacy_sandbox.py` (64 checks), the page tests for both features.
+
 ## 3.10.4
 
 - The timer unit and the commands the plugin starts (`hermes auth add`, `hermes send`, `hermes config set`, ...) use the `hermes` command you installed (`~/.local/bin/hermes`, or any other outside the Hermes home). While Hermes runs, its internal launcher inside `~/.hermes` comes first on `PATH`, so `setup --timer` wrote that path into the unit; Hermes' installer keeps `~/.local/bin/hermes` up to date across updates, not units that point inside its own folder.

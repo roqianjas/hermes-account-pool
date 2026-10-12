@@ -36,7 +36,7 @@ import {
   useQueryClient
 } from '@hermes/plugin-sdk'
 import * as sdk from '@hermes/plugin-sdk'
-import { createElement as h, Fragment, useEffect, useState } from 'react'
+import { createElement as rh, Fragment, useEffect, useState } from 'react'
 
 const ID = 'account-pool'
 const ROUTE = '/accounts'
@@ -45,6 +45,54 @@ const LIVE_GAP = 120
 let rest = null
 let storage = null
 let openExternal = null
+
+// ── email masking ────────────────────────────────────────────────────────────
+// With masking on (the eye button, or `hermes account <provider> privacy on`) every element the page
+// creates goes through h(), which masks emails in its text children and in the props below. The data
+// keeps the real emails, so actions still name the right account. Same rule as _mask_email() in
+// __init__.py: alice@example.com -> al•••e@e•••.com.
+
+let PRIVATE = false
+const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g
+const MASKED_PROPS = ['title', 'description', 'label', 'text', 'message', 'k', 'v', 's', 's2', 'aria-label']
+
+function maskLocal(name) {
+  return name.length > 4 ? `${name.slice(0, 2)}•••${name.slice(-1)}` : `${name.slice(0, 1)}•••`
+}
+
+function maskEmail(addr) {
+  const at = addr.indexOf('@')
+  const domain = addr.slice(at + 1)
+  return `${maskLocal(addr.slice(0, at))}@${domain.slice(0, 1)}•••.${domain.slice(domain.lastIndexOf('.') + 1)}`
+}
+
+function mask(text) {
+  return PRIVATE && typeof text === 'string' && text.includes('@') ? text.replace(EMAIL, m => maskEmail(m)) : text
+}
+
+function maskChild(c) {
+  return typeof c === 'string' ? mask(c) : Array.isArray(c) ? c.map(maskChild) : c
+}
+
+function h(type, props, ...children) {
+  if (!PRIVATE) return rh(type, props, ...children)
+  let out = props
+  if (props && type !== CopyButton) {                    // CopyButton's text is what gets copied
+    for (const k of MASKED_PROPS) {
+      if (typeof props[k] === 'string' && props[k].includes('@')) {
+        if (out === props) out = { ...props }
+        out[k] = mask(props[k])
+      }
+    }
+  }
+  return rh(type, out, ...children.map(maskChild))
+}
+
+function setPrivate(on) {
+  if (typeof on !== 'boolean' || on === PRIVATE) return
+  PRIVATE = on
+  if (storage) storage.set('privacy', on)
+}
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -65,7 +113,7 @@ function errText(error) {
 }
 
 function notify(kind, message) {
-  host.notify({ kind, message })
+  host.notify({ kind, message: mask(message) })
 }
 
 function firstLine(text) {
@@ -88,8 +136,11 @@ function ago(seconds) {
   return `${Math.round(seconds / 86400)} d ago`
 }
 
+// The name before @ (alice), masked like the email while masking is on (al•••e).
 function shortName(label) {
-  return String(label || '').split('@')[0]
+  const text = String(label || '')
+  const name = text.split('@')[0]
+  return PRIVATE && text.includes('@') ? maskLocal(name) : name
 }
 
 // Tooltip whose label keeps its line breaks. The desktop's tooltip wraps text with
@@ -371,6 +422,92 @@ function ResultDialog({ title, text, onClose }) {
       h(DialogHeader, null, h(DialogTitle, null, title)),
       h('pre', { className: 'hap-pre' }, text || '(no output)'),
       h(DialogFooter, null, h(Button, { onClick: onClose, size: 'sm' }, 'Close'))))
+}
+
+// Wake: start the 5-hour window of accounts whose window is not running, now or automatically.
+function WakeDialog({ provider, data, onClose, onResult }) {
+  const invalidate = useInvalidate()
+  const w = data.wake
+  const rows = data.rotation
+  const usable = r => r.state === 'active' && r.auth === 'oauth'
+  const running = r => !!(r.window && r.window.idle === false)
+  const [pick, setPick] = useState(() => rows.filter(r => usable(r) && r.window && r.window.idle).map(r => r.id))
+  const [auto, setAuto] = useState(!!w.auto)
+  const [model, setModel] = useState(w.model || '')
+  const [busy, setBusy] = useState('')
+  const [error, setError] = useState('')
+  const toggle = id => setPick(pick.includes(id) ? pick.filter(x => x !== id) : [...pick, id])
+  const dirty = auto !== !!w.auto || model.trim() !== (w.model || '')
+  const timerOff = !(data.timer && data.timer.active)
+
+  const save = async () => {
+    setBusy('save')
+    setError('')
+    try {
+      const r = await post('/wake/settings', { provider, auto, model: model.trim() })
+      if (!r.ok) throw new Error(r.output || 'Saving failed')
+      notify('success', firstLine(r.output))
+      invalidate()
+    } catch (e) {
+      setError(errText(e))
+    } finally {
+      setBusy('')
+    }
+  }
+  const wakeNow = async () => {
+    setBusy('wake')
+    setError('')
+    try {
+      const r = await post('/wake', { provider, targets: pick })
+      if (!r.ok && r.rc === 2) throw new Error(r.output)
+      invalidate()
+      onResult('Wake', r.output)
+    } catch (e) {
+      setError(errText(e))
+      setBusy('')
+    }
+  }
+  const stateText = r => {
+    if (r.state !== 'active') return (STATE[r.state] || STATE.active).text || r.state
+    if (r.auth !== 'oauth') return 'API key: no window'
+    if (!r.window || r.window.idle == null) return 'unknown'
+    return r.window.idle ? 'not running' : `running, resets ${hhmm(r.window.reset)}`
+  }
+
+  return h(Dialog, { open: true, onOpenChange: open => !open && onClose() },
+    h(DialogContent, { style: { maxWidth: 600 } },
+      h(DialogHeader, null,
+        h(DialogTitle, null, 'Wake accounts'),
+        h(DialogDescription, null, provider)),
+      h('p', { className: 'hap-small hap-muted', style: { margin: 0 } },
+        'An account\'s 5-hour window starts with its first request and resets 5 hours later. Wake sends that request now ',
+        `(one tiny request to ${w.model_name || w.model_text}), so the reset comes sooner. An account whose window is running gains nothing and is left alone.`),
+      h('table', { className: 'hap-table', style: { marginTop: 8 } },
+        h('thead', null, h('tr', null, h('th', { style: { width: 24 } }, ''), h('th', null, 'Account'), h('th', null, '5-hour window'), h('th', null, 'Last wake'))),
+        h('tbody', null, rows.map(r => h('tr', { key: r.id, 'data-wake-row': r.id },
+          h('td', null, h('input', {
+            type: 'checkbox', 'aria-label': `Wake ${r.label}`, checked: pick.includes(r.id),
+            disabled: !usable(r) || running(r) || !!busy, onChange: () => toggle(r.id)
+          })),
+          h('td', null, h('span', { className: 'hap-acc' }, r.label)),
+          h('td', { className: 'hap-tag' }, stateText(r)),
+          h('td', { className: 'hap-tag' }, r.woke ? (r.woke.ok ? `${hhmm(r.woke.ts)}` : h(MTip, { label: r.woke.note || '' }, h('span', { style: { color: 'var(--ui-orange)' } }, `failed ${hhmm(r.woke.ts)}`))) : '–'))))),
+      h('div', { className: 'hap-setting' },
+        h('div', { className: 'hap-grow' },
+          h('div', { className: 'hap-setting-t' }, 'Keep windows running'),
+          h('div', { className: 'hap-small hap-muted' },
+            'The balance timer wakes an account in rotation as soon as its window is not running: at most about 5 tiny requests a day per account.'),
+          auto && timerOff ? h('div', { className: 'hap-small', style: { color: 'var(--ui-orange)' } }, `The balance timer is off, so nothing wakes. Fix: hermes account ${provider} setup --timer`) : null),
+        h(Switch, { checked: auto, disabled: !!busy, onCheckedChange: setAuto })),
+      h('div', { className: 'hap-field' },
+        h('span', null, 'Model for the wake request'),
+        h(Input, { value: model, placeholder: `empty: ${w.model_text}`, onChange: e => setModel(e.target.value), 'aria-label': 'Wake model' })),
+      error ? h('div', { className: 'hap-banner', style: { marginTop: 10 } }, h(Codicon, { name: 'warning' }), h('span', null, error)) : null,
+      h(DialogFooter, null,
+        h(Button, { size: 'sm', variant: 'ghost', onClick: onClose }, 'Close'),
+        dirty ? h(Button, { size: 'sm', variant: 'outline', disabled: !!busy, onClick: save }, busy === 'save' ? 'Saving…' : 'Save settings') : null,
+        h(Button, { size: 'sm', disabled: !!busy || !pick.length, onClick: wakeNow },
+          busy === 'wake' ? 'Waking…' : `Wake ${pick.length} account${pick.length === 1 ? '' : 's'}`))))
 }
 
 function ParkDialog({ provider, row, onClose, onDone }) {
@@ -766,7 +903,10 @@ function AccountsView({ data, provider, openDialog }) {
           h('td', null, h(Spark, { points: r.spark, now })),
           h('td', { className: 'hap-num' },
             r.back_at ? h(MTip, { label: 'Back in rotation at this time' }, h('span', null, `back ${hhmm(r.back_at)}`))
-              : hhmm(r.usage && r.usage.pct != null ? r.usage.reset : null)),
+              : r.window && r.window.idle && r.state === 'active'
+                ? h(MTip, { label: `The 5-hour window is not running: it starts with the next request and resets 5 hours later.${data.wake && data.wake.available ? '\nWake starts it now.' : ''}` },
+                  h('span', { className: 'hap-tag', 'data-window': 'idle' }, 'not started'))
+                : hhmm(r.usage && r.usage.pct != null ? r.usage.reset : null)),
           h('td', { className: 'hap-num' }, h(TokensCell, { tokens: r.tokens, window: data.window })),
           h('td', null, h(Sessions, { sessions: r.sessions })),
           h('td', null, h('div', { className: 'hap-actions' },
@@ -1002,7 +1142,7 @@ function ReportView({ provider }) {
 
 const KIND_ICON = { balance: 'arrow-swap', alert: 'bell', park: 'debug-pause', unpark: 'debug-start', schedule: 'calendar',
   unschedule: 'calendar', strategy: 'settings-gear', notify: 'bell', add: 'add', remove: 'trash', relogin: 'key',
-  setup: 'tools' }
+  setup: 'tools', wake: 'zap', privacy: 'eye-closed' }
 
 function ActivityView({ provider }) {
   const [hours, setHours] = useState('24')
@@ -1181,6 +1321,7 @@ function AccountsPage() {
     refetchInterval: 30000
   })
   const data = q.data
+  if (data) setPrivate(data.privacy)
   const liveWait = data && data.live.ts ? Math.max(0, Math.ceil(data.live.ts + LIVE_GAP - Date.now() / 1000)) : 0
   const now = useNow(liveWait > 0)
   const liveLeft = data && data.live.ts ? Math.max(0, Math.ceil(data.live.ts + LIVE_GAP - now / 1000)) : 0
@@ -1198,6 +1339,20 @@ function AccountsPage() {
       const r = await post('/live', { provider })
       if (r.ok) notify(r.message ? 'warning' : 'success', r.message || 'Live usage updated.')
       else notify('info', r.message)
+      invalidate()
+    } catch (e) {
+      notify('error', errText(e))
+    } finally {
+      setBusy('')
+    }
+  }
+  const togglePrivacy = async () => {
+    setBusy('privacy')
+    try {
+      const r = await post('/privacy', { provider, on: !PRIVATE })
+      if (!r.ok) throw new Error(r.output || 'Saving failed')
+      setPrivate(r.privacy)
+      notify('success', r.privacy ? 'Emails are masked: on this page, in alerts and in hermes account output.' : 'Emails are shown in full.')
       invalidate()
     } catch (e) {
       notify('error', errText(e))
@@ -1290,6 +1445,8 @@ function AccountsPage() {
       modal = h(SignInDialog, {
         provider, mode: dialog.type, row: dialog.row, verify: data.has_identity, methods: data.signin_methods, onClose: close
       })
+    } else if (dialog.type === 'wake' && data.wake) {
+      modal = h(WakeDialog, { provider, data, onClose: close, onResult: openResult })
     } else if (dialog.type === 'result') {
       modal = h(ResultDialog, { title: dialog.title, text: dialog.text, onClose: close })
     }
@@ -1310,10 +1467,21 @@ function AccountsPage() {
         })
         : null,
       h('span', { className: 'hap-grow' }),
+      data
+        ? h(IconButton, {
+          icon: PRIVATE ? 'eye-closed' : 'eye', disabled: !!busy, onClick: togglePrivacy,
+          label: PRIVATE ? 'Emails are masked (privacy). Click to show them.' : 'Mask emails (privacy): on this page, in alerts and in hermes account output.'
+        })
+        : null,
       data && data.has_usage
         ? h(MTip, { label: liveLeft ? `Available in ${liveLeft}s. The usage endpoint rate-limits per account.` : 'Read live usage of every account now (one request per account).' },
           h('span', null, h(Button, { size: 'sm', variant: 'ghost', disabled: !!busy || liveLeft > 0, onClick: refreshLive },
             h(Codicon, { name: 'refresh', size: '0.8rem', spinning: busy === 'live' }), liveLeft ? `Live (${liveLeft}s)` : 'Live usage')))
+        : null,
+      data && data.wake && data.wake.available && data.rotation.length
+        ? h(MTip, { label: data.wake.auto ? 'Automatic wake is on: the balance timer starts the 5-hour window of idle accounts.' : 'Start the 5-hour window of idle accounts now, or keep them running.' },
+          h('span', null, h(Button, { size: 'sm', variant: 'ghost', disabled: !!busy, onClick: () => setDialog({ type: 'wake' }) },
+            h(Codicon, { name: 'zap', size: '0.8rem' }), data.wake.auto ? 'Wake: auto' : 'Wake')))
         : null,
       data && (data.rotation.length || data.parked.length)
         ? h(Button, { size: 'sm', variant: 'outline', disabled: !!busy, onClick: () => setDialog({ type: 'balance' }) },
@@ -1413,6 +1581,7 @@ function StatusChip() {
     refetchInterval: 60000,
     retry: false
   })
+  if (data) setPrivate(data.privacy)
   if (!data || (!data.rotation && !data.parked)) return null
   const pct = data.next && data.next.pct != null ? ` · ${Math.round(data.next.pct)}%` : ''
   const tip = [
@@ -1442,6 +1611,7 @@ export default {
   register(ctx) {
     rest = ctx.rest
     storage = ctx.storage
+    PRIVATE = !!storage.get('privacy', false)      // until the backend answers: no flash of real emails
     openExternal = url => ctx.os.openExternal(url)
 
     const style = document.createElement('style')

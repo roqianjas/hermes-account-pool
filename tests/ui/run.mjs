@@ -105,6 +105,13 @@ async function rest(path, opts = {}) {
     return stepCount < 2 ? { status: 'pending' } : { status: 'done', output: 'Signed in again.' }
   }
   if (path === '/signin/cancel') return { ok: true }
+  if (path === '/wake') return { ok: true, rc: 0, output: `wake: 1 woken\n  - woke ${b.targets.join(', ')}` }
+  if (path === '/wake/settings') return { ok: true, output: `Automatic wake ${b.auto ? 'on' : 'off'} [anthropic]`, wake: { auto: b.auto, model: b.model } }
+  if (path === '/privacy') {
+    fx['/status?provider=anthropic'].privacy = b.on
+    fx['/summary?provider=anthropic'].privacy = b.on
+    return { ok: true, rc: 0, output: b.on ? 'Email masking on' : 'Email masking off', privacy: b.on }
+  }
   throw new Error('unexpected ' + path)
 }
 
@@ -446,6 +453,73 @@ failNext = new Error('404: {"detail":"Not Found"}')
 mount('page')
 await screen.findByText(/The account-pool backend did not answer/)
 ok(screen.getByText(/plugins.enabled/), 'setup hint for a missing backend')
+cleanup()
+
+// wake: the idle accounts are preselected and their ids posted; the settings are saved apart
+const idleIds = status.rotation.filter(r => r.window && r.window.idle).map(r => r.id)
+mount('page')
+await screen.findByText('Next session starts on')
+const graceRow = [...document.querySelectorAll('.hap-table')[0].querySelectorAll('tbody tr')].find(r => r.textContent.includes('grace@example.com'))
+ok(within(graceRow).getByText('not started'), 'an idle 5-hour window reads "not started" under Resets')
+await click(screen.getByText('Wake').closest('button'))
+ok(screen.getByText('Wake accounts') && screen.getByText(/one tiny request to claude-haiku-4-5\)/), 'wake dialog opens and names the model')
+const boxes = [...document.querySelectorAll('[data-wake-row] input[type="checkbox"]')]
+ok(idleIds.length === 2 && boxes.length === status.rotation.length && boxes.filter(b => b.checked).length === idleIds.length
+  && idleIds.every(id => document.querySelector(`[data-wake-row="${id}"] input`).checked), 'only the idle accounts are preselected')
+ok(boxes.filter(b => b.disabled).length === status.rotation.length - idleIds.length, 'an account with a running window cannot be picked')
+ok(document.querySelector(`[data-wake-row="${status.rotation[1].id}"]`).textContent.includes('failed'), 'a failed wake is shown')
+await click(document.querySelector(`[data-wake-row="${idleIds[0]}"] input`))
+ok(screen.getByText('Wake 1 account'), 'unticking an account updates the button')
+await click(document.querySelector(`[data-wake-row="${idleIds[0]}"] input`))
+await click(screen.getByText('Wake 2 accounts'))
+await screen.findByText(/^wake: 1 woken/)
+ok(JSON.stringify([...lastPost('/wake').body.targets].sort()) === JSON.stringify([...idleIds].sort()), 'wake posts the picked ids')
+await click(screen.getByText('Close'))
+await click(screen.getByText('Wake').closest('button'))
+ok(!screen.queryByText('Save settings'), 'nothing to save until a setting changes')
+await click(within(document.querySelector('[role="dialog"]')).getByRole('switch'))
+await act(async () => { fireEvent.change(screen.getByLabelText('Wake model'), { target: { value: 'claude-haiku-4-5-20251001' } }) })
+ok(!screen.queryByText(/The balance timer is off/), 'no timer warning while the timer runs')
+await click(screen.getByText('Save settings'))
+await waitFor(() => ok(lastPost('/wake/settings')?.body.auto === true && lastPost('/wake/settings').body.model === 'claude-haiku-4-5-20251001',
+  'settings post auto and the model'))
+await click(screen.getByText('Close'))
+cleanup()
+
+// email masking: the eye button; every email on the page masked, actions still send real targets
+store.view = 'accounts'
+mount('page')
+await screen.findByText('Next session starts on')
+ok(document.body.textContent.includes('alice@example.com'), 'emails shown while masking is off')
+await click(screen.getByLabelText(/^Mask emails/))
+await waitFor(() => ok(lastPost('/privacy')?.body.on === true, 'the eye button posts privacy on'))
+await waitFor(() => ok(!document.body.textContent.includes('@example.com') && document.body.textContent.includes('al•••e@e•••.com'),
+  'every email on the page is masked'))
+ok(!/\b(heidi|ivan|alice)\b/.test(document.body.textContent) && document.body.textContent.includes('highest: he•••i'),
+  'names before @ in the cards are masked too')
+ok(![...document.querySelectorAll('[title],[aria-label]')].some(el => /@example\.com/.test(el.getAttribute('title') || '') || /@example\.com/.test(el.getAttribute('aria-label') || '')),
+  'tooltips and labels are masked too')
+ok(store.privacy === true && screen.getByLabelText(/^Emails are masked/), 'masking remembered; the button says how to undo it')
+const mrows = document.querySelectorAll('.hap-table')[0].querySelectorAll('tbody tr')
+await click(within(mrows[0]).getByLabelText('Park (take out of rotation)'))
+ok(screen.getByText('Park al•••e@e•••.com?'), 'dialog titles are masked')
+await click(screen.getAllByText('Park').find(b => b.tagName === 'BUTTON'))
+await waitFor(() => ok(lastPost('/action')?.body.target === status.rotation[0].id, 'the action still sends the real account id'))
+await click(within(document.querySelector('[data-table="schedules"] tbody tr')).getByLabelText('Remove schedule'))
+await click(screen.getAllByText('Remove schedule').find(b => b.tagName === 'BUTTON' && !b.getAttribute('aria-label')))
+await waitFor(() => ok(lastPost('/action')?.body.target === status.schedules[0].label, 'unschedule still posts the real label'))
+const toast = sdk.host.notes[sdk.host.notes.length - 1].message
+ok(!toast.includes('@example.com') && toast.includes('•••'), 'toasts are masked')
+cleanup()
+mount('chip')
+await screen.findByText(new RegExp(`^${fx['/summary?provider=anthropic'].usable}/`))
+ok(!document.body.innerHTML.includes('@example.com'), 'status-bar chip tooltip masked')
+cleanup()
+mount('page')
+await screen.findByText('Next session starts on')
+await click(screen.getByLabelText(/^Emails are masked/))
+await waitFor(() => ok(lastPost('/privacy')?.body.on === false && document.body.textContent.includes('alice@example.com'),
+  'the eye button turns masking off again'))
 cleanup()
 
 // status bar chip
