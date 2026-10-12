@@ -847,7 +847,7 @@ $ hermes account anthropic unpark frank@example.com
 """)
 LI(["Park membiarkan akun dan loginnya di pool Hermes dan meminta Hermes melewatinya: Hermes menandai akun "
     "exhausted dengan alasan " + C("parked") + " dan waktu reset. Waktunya jam " + C("--until") + ", atau 30 hari "
-    "untuk parkir tanpa jam; setiap putaran balance memperpanjang 30 hari itu, jadi parkir bertahan sampai Anda "
+    "untuk parkir tanpa jam; putaran balance memperpanjangnya lagi ke 30 hari begitu sisanya kurang dari 15 hari, jadi parkir bertahan sampai Anda "
     "unpark. " + C("hermes auth list") + " menampilkan akun itu sebagai exhausted, dan " + C("usage") + " tetap "
     "menampilkan pemakaiannya.",
     "Plugin menyimpan daftar parkir, " + C("account-pool-parking.json") + ", berisi label, id, dan waktu saja. "
@@ -1433,7 +1433,7 @@ OL(["<b>Park bertanggal</b>: mengaktifkan lagi akun yang waktu " + C("--until") 
     "jendela jadwal yang sudah berakhir).",
     "<b>Jadwal</b>: memarkir akun yang jendela jadwalnya sudah mulai, sampai jendela itu berakhir.",
     "<b>Parkir diselaraskan dengan Hermes</b>: memarkir lagi akun yang dikembalikan Hermes ke rotasi sebelum "
-    "waktunya, memperpanjang tahanan 30 hari untuk parkir tanpa jam selesai, melupakan parkir akun yang sudah keluar "
+    "waktunya, memperpanjang tahanan 30 hari parkir tanpa jam selesai begitu sisanya kurang dari 15 hari, melupakan parkir akun yang sudah keluar "
     "dari pool, dan mengembalikan akun yang ditahan Hermes sebagai parkir padahal tidak ada di daftar parkir.",
     "<b>Pemulihan</b>: mencoba ulang refresh token akun yang COOLING DOWN.",
     "<b>Pemakaian</b> (butuh adapter): membaca pemakaian semua akun; Hermes me-refresh access token yang "
