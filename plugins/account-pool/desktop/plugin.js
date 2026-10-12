@@ -197,15 +197,17 @@ function TokensCell({ tokens, window }) {
 
 // The bot picker for Telegram alerts. The SDK Select follows the Hermes theme;
 // a native <select> (older Hermes) is styled as far as Chromium allows.
-function Pick({ value, options, disabled, onChange, label }) {
+// options: strings, or { value, label } when the shown text differs from the value.
+function Pick({ value, options, disabled, onChange, label, wide }) {
+  const opts = options.map(o => (typeof o === 'string' ? { value: o, label: o } : o))
   if (sdk.Select && sdk.SelectTrigger && sdk.SelectContent && sdk.SelectItem && sdk.SelectValue) {
     return h(sdk.Select, { value, disabled, onValueChange: onChange },
-      h(sdk.SelectTrigger, { size: 'sm', className: 'hap-select-trigger', 'aria-label': label },
+      h(sdk.SelectTrigger, { size: 'sm', className: 'hap-select-trigger' + (wide ? ' hap-select-wide' : ''), 'aria-label': label },
         h(sdk.SelectValue, null)),
-      h(sdk.SelectContent, null, options.map(p => h(sdk.SelectItem, { key: p, value: p }, p))))
+      h(sdk.SelectContent, null, opts.map(o => h(sdk.SelectItem, { key: o.value, value: o.value }, o.label))))
   }
-  return h('select', { className: 'hap-select', value, disabled, 'aria-label': label, onChange: e => onChange(e.target.value) },
-    options.map(p => h('option', { key: p, value: p }, p)))
+  return h('select', { className: 'hap-select' + (wide ? ' hap-select-wide' : ''), value, disabled, 'aria-label': label, onChange: e => onChange(e.target.value) },
+    opts.map(o => h('option', { key: o.value, value: o.value }, o.label)))
 }
 
 function ProfileSelect({ value, profiles, disabled, onChange }) {
@@ -289,6 +291,7 @@ const CSS = `
 .hap-select{background:var(--ui-bg-input);color:var(--ui-text-primary);border:1px solid var(--ui-stroke-secondary);border-radius:6px;padding:3px 6px;font-size:.75rem;color-scheme:light dark}
 .hap-select option{background:var(--ui-bg-elevated,var(--ui-bg-card));color:var(--ui-text-primary)}
 .hap-select-trigger{width:auto;min-width:170px}
+.hap-select-wide{width:100%}
 .hap-ml{white-space:pre-line;display:block}
 .hap-mode{border-bottom:1px dotted currentColor;cursor:help}
 .hap-ellipsis{display:inline-block;max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
@@ -447,14 +450,28 @@ function WakeDialog({ provider, data, onClose, onResult }) {
   const rows = data.rotation
   const usable = r => r.state === 'active' && r.auth === 'oauth'
   const running = r => !!(r.window && r.window.idle === false)
+  const pickable = rows.filter(r => usable(r) && !running(r))
   const [pick, setPick] = useState(() => rows.filter(r => usable(r) && r.window && r.window.idle).map(r => r.id))
   const [auto, setAuto] = useState(!!w.auto)
   const [model, setModel] = useState(w.model || '')
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const toggle = id => setPick(pick.includes(id) ? pick.filter(x => x !== id) : [...pick, id])
-  const dirty = auto !== !!w.auto || model.trim() !== (w.model || '')
+  const allPicked = pickable.length > 0 && pickable.every(r => pick.includes(r.id))
+  const somePicked = pickable.some(r => pick.includes(r.id))
+  const toggleAll = () => setPick(allPicked ? [] : pickable.map(r => r.id))
+  const modelDirty = model.trim() !== (w.model || '')
+  const dirty = auto !== !!w.auto || modelDirty
   const timerOff = !(data.timer && data.timer.active)
+  // The model picker: the account's own list from the provider (read at most every few hours).
+  const mq = useQuery({
+    queryKey: [ID, 'wake-models', provider],
+    queryFn: () => get(`/wake/models?provider=${encodeURIComponent(provider)}`),
+    staleTime: 5 * 60 * 1000,
+    retry: false
+  })
+  const models = (mq.data && mq.data.models) || []
+  const firstReset = Math.min(...rows.filter(running).map(r => r.window.reset || Infinity))
 
   const save = async () => {
     setBusy('save')
@@ -474,6 +491,10 @@ function WakeDialog({ provider, data, onClose, onResult }) {
     setBusy('wake')
     setError('')
     try {
+      if (modelDirty) {                  // the wake goes to the model picked here, and keeps it
+        const s = await post('/wake/settings', { provider, model: model.trim() })
+        if (!s.ok) throw new Error(s.output || 'Saving the model failed')
+      }
       const r = await post('/wake', { provider, targets: pick })
       if (!r.ok && r.rc === 2) throw new Error(r.output)
       invalidate()
@@ -499,7 +520,13 @@ function WakeDialog({ provider, data, onClose, onResult }) {
         'An account\'s 5-hour window starts with its first request and resets 5 hours later. Wake sends that request now ',
         `(one tiny request to ${w.model_name || w.model_text}), so the reset comes sooner. An account whose window is running gains nothing and is left alone.`),
       h('table', { className: 'hap-table', style: { marginTop: 8 } },
-        h('thead', null, h('tr', null, h('th', { style: { width: 24 } }, ''), h('th', null, 'Account'), h('th', null, '5-hour window'), h('th', null, 'Last wake'))),
+        h('thead', null, h('tr', null,
+          h('th', { style: { width: 24 } }, h('input', {
+            type: 'checkbox', 'aria-label': 'Select every account that can be woken', checked: allPicked,
+            ref: el => { if (el) el.indeterminate = somePicked && !allPicked },
+            disabled: !pickable.length || !!busy, onChange: toggleAll
+          })),
+          h('th', null, 'Account'), h('th', null, '5-hour window'), h('th', null, 'Last wake'))),
         h('tbody', null, rows.map(r => h('tr', { key: r.id, 'data-wake-row': r.id },
           h('td', null, h('input', {
             type: 'checkbox', 'aria-label': `Wake ${r.label}`, checked: pick.includes(r.id),
@@ -508,6 +535,12 @@ function WakeDialog({ provider, data, onClose, onResult }) {
           h('td', null, h('span', { className: 'hap-acc' }, r.label)),
           h('td', { className: 'hap-tag' }, stateText(r)),
           h('td', { className: 'hap-tag' }, r.woke ? (r.woke.ok ? `${hhmm(r.woke.ts)}` : h(MTip, { label: r.woke.note || '' }, h('span', { style: { color: 'var(--ui-orange)' } }, `failed ${hhmm(r.woke.ts)}`))) : '–'))))),
+      !pickable.length
+        ? h('div', { className: 'hap-small hap-muted', 'data-wake-none': true, style: { marginTop: 6 } },
+          rows.some(running)
+            ? 'Every window is running, so there is nothing to wake now.' + (isFinite(firstReset) ? ` The first one resets at ${hhmm(firstReset)}.` : '')
+            : 'No account can be woken: wake needs a signed-in account in rotation.')
+        : null,
       h('div', { className: 'hap-setting' },
         h('div', { className: 'hap-grow' },
           h('div', { className: 'hap-setting-t' }, 'Keep windows running'),
@@ -515,15 +548,37 @@ function WakeDialog({ provider, data, onClose, onResult }) {
             'The balance timer wakes an account in rotation as soon as its window is not running: at most about 5 tiny requests a day per account.'),
           auto && timerOff ? h('div', { className: 'hap-small', style: { color: 'var(--ui-orange)' } }, `The balance timer is off, so nothing wakes. Fix: hermes account ${provider} setup --timer`) : null),
         h(Switch, { checked: auto, disabled: !!busy, onCheckedChange: setAuto })),
-      h('div', { className: 'hap-field' },
+      h('div', { className: 'hap-field', 'data-wake-model': true },
         h('span', null, 'Model for the wake request'),
-        h(Input, { value: model, placeholder: `empty: ${w.model_text}`, onChange: e => setModel(e.target.value), 'aria-label': 'Wake model' })),
+        h(WakeModel, { q: mq, models, model, setModel, w, disabled: !!busy })),
       error ? h('div', { className: 'hap-banner', style: { marginTop: 10 } }, h(Codicon, { name: 'warning' }), h('span', null, error)) : null,
       h(DialogFooter, null,
         h(Button, { size: 'sm', variant: 'ghost', onClick: onClose }, 'Close'),
         dirty ? h(Button, { size: 'sm', variant: 'outline', disabled: !!busy, onClick: save }, busy === 'save' ? 'Saving…' : 'Save settings') : null,
         h(Button, { size: 'sm', disabled: !!busy || !pick.length, onClick: wakeNow },
           busy === 'wake' ? 'Waking…' : `Wake ${pick.length} account${pick.length === 1 ? '' : 's'}`))))
+}
+
+// The wake model: a list from the provider when it could be read, else a field to type the id.
+const DEFAULT_MODEL = '__default__'
+function WakeModel({ q, models, model, setModel, w, disabled }) {
+  const d = q.data || {}
+  if (q.isLoading) return h('span', { className: 'hap-small hap-muted' }, 'Reading the model list…')
+  if (!models.length) {
+    return h(Fragment, null,
+      h(Input, { value: model, placeholder: `empty: ${w.model_text}`, onChange: e => setModel(e.target.value), 'aria-label': 'Wake model', disabled }),
+      h('span', { className: 'hap-small hap-muted' },
+        `The model list could not be read${q.error ? `: ${errText(q.error)}` : d.error ? `: ${d.error}` : ''}. Type a model id, or leave it empty for the default.`))
+  }
+  const options = [{ value: DEFAULT_MODEL, label: `Default: ${d.default || w.model_name}` }, ...models]
+  if (model && !models.includes(model)) options.push({ value: model, label: `${model} (not in the list)` })
+  const source = d.source === 'live' ? 'The account\'s own list, read just now.'
+    : d.source === 'fallback' ? `Hermes' built-in list: ${d.error}.`
+      : d.error ? `The list read at ${hhmm(d.ts)}; reading it again failed: ${d.error}.`
+        : `The account's own list, read at ${hhmm(d.ts)}.`
+  return h(Fragment, null,
+    h(Pick, { value: model || DEFAULT_MODEL, options, disabled, wide: true, label: 'Wake model', onChange: v => setModel(v === DEFAULT_MODEL ? '' : v) }),
+    h('span', { className: 'hap-small hap-muted', 'data-wake-source': d.source }, source))
 }
 
 function ParkDialog({ provider, row, onClose, onDone }) {

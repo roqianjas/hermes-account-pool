@@ -63,6 +63,14 @@ class MyProvider(Adapter):
         """Send one request with a one-word answer through the account. Return the model used;
         raise ValueError with a short reason (rate-limited, 401, model not accepted) when it failed."""
 
+    def models(self, entry):
+        """(ids, "live") from the account's own model list, or (ids, "fallback") when only a built-in
+        list is known; None when nothing can be read. Leave out models that would not start the
+        short window. Listing must not use quota."""
+
+    def default_model(self, ids=()):
+        """The model a wake goes to when none is set; ids is the list above (default: wake_model)."""
+
     # usage() also sets self.last_window = (percent, reset_epoch, window_seconds) of the short window,
     # None when unknown: the core uses it to tell a window that is not running.
 
@@ -70,7 +78,7 @@ class MyProvider(Adapter):
 ADAPTERS = {a.name: a for a in (Anthropic(), OpenAICodex(), MyProvider())}
 ```
 
-Implement only what the provider allows. Methods you leave out stay off: `has_usage`, `has_identity`, `has_web_signin` and `has_wake` are detected automatically.
+Implement only what the provider allows. Methods you leave out stay off: `has_usage`, `has_identity`, `has_web_signin`, `has_wake` and `has_models` are detected automatically.
 
 | You implement | Unlocks |
 |---|---|
@@ -79,6 +87,7 @@ Implement only what the provider allows. Methods you leave out stay off: `has_us
 | `refresh_parked` | live usage for parked OAuth accounts whose token expired |
 | `signin_start`, `signin_step` (and `signin_close` for a listener) | **Add account** and **Sign in again** on the Accounts page. The result must have the shape Hermes' own `hermes auth add` login returns, because the core saves it through Hermes' `_OAUTH_ADD_SPECS` |
 | `wake` (with `last_window` set in `usage`) | `wake`, automatic wake in `balance`, **Wake** on the page. A window counts as not running when `reset` is `None` or past, or when it is at 0% with a full `window_seconds` left (how Codex reports an untouched window) |
+| `models` (and `default_model` when the default depends on the list) | `wake models` and the model list in the Wake dialog; without it the dialog shows a text field |
 
 When a request fails, set `self.last_error = self.explain(err, entry)` before returning `None`, and reset it to `""` at the start of `usage`. `explain()` turns the exception into the reason `usage` prints (`usage endpoint rate-limited, ...`, `sign-in rejected (401)`, `usage endpoint HTTP 500`, `usage endpoint unreachable (...)`). Rate-limited, unreachable and HTTP 5xx reasons count as temporary: the core then falls back to the last value the timer recorded.
 
@@ -174,7 +183,7 @@ SB=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" hap-sandbox.XXXX)
 HERMES_HOME=$SB ~/.hermes/hermes-agent/venv/bin/python tests/codex_sandbox.py
 rm -rf "$SB"
 
-# wake (both providers, automatic wake in balance, the routes) and email masking
+# wake (both providers, automatic wake in balance, the model list, the routes) and email masking
 # (own sandbox; fake usage, a fake Hermes Anthropic client and a fake Codex endpoint, nothing is sent)
 SB=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" hap-sandbox.XXXX)
 HERMES_HOME=$SB ~/.hermes/hermes-agent/venv/bin/python tests/wake_privacy_sandbox.py

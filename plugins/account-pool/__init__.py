@@ -3436,6 +3436,7 @@ def _cmd_setup(args) -> int:
 
 WAKE_GUARD = 3600   # the timer wakes an account at most once an hour (a wake whose window has not shown yet)
 WAKE_SLACK = 150    # Codex reports an idle window as a full one that resets 5 h after the reading
+MODELS_MAX_AGE = 6 * 3600   # the page reads a provider's model list at most this often
 
 
 def _wake_cfg(provider: str) -> dict:
@@ -3463,6 +3464,57 @@ def _wake_model_name(provider: str) -> str:
 
 def _wake_model_text(provider: str) -> str:
     return _wake_model_name(provider) + ("" if _wake_cfg(provider)["model"] else " (default)")
+
+
+def _saved_models(provider: str):
+    """{"ts", "ids"} of the last live model list, or None (no network)."""
+    saved = (_load_json(_state_path(), {}) or {}).get(f"models:{provider}")
+    return saved if isinstance(saved, dict) and isinstance(saved.get("ids"), list) and saved["ids"] else None
+
+
+def _wake_models(provider: str, max_age: float = 0) -> dict:
+    """The models a wake can go to: {"models": [ids], "source", "ts", "error"}.
+
+    source: "live" (the account's own list), "fallback" (Hermes' built-in list: the account's could
+    not be read), "saved" (the last live list, kept in the state file). Read through a signed-in
+    account in rotation; listing models uses no quota. A saved live list younger than max_age is
+    returned without a request, so opening the page's Wake dialog is not a provider call each time."""
+    ad = providers.get(provider)
+    key = f"models:{provider}"
+    saved = _saved_models(provider)
+    if saved and max_age and time.time() - float(saved.get("ts") or 0) < max_age:
+        return {"models": saved["ids"], "source": "saved", "ts": saved.get("ts"), "error": ""}
+    error, fallback = "", None
+    if not ad.has_models:
+        error = f"the plugin cannot read {provider}'s model list"
+    else:
+        pool = _pool(provider)
+        cands = [e for e in sorted(pool.entries(), key=lambda e: e.priority)
+                 if _entry_state(e) == "active" and (_oauth(e) or not ad.oauth_only)]
+        if not cands:
+            error = "no signed-in account in rotation to read it with"
+        for e in cands[:2]:                     # a second account when the first one's sign-in fails
+            try:
+                got = ad.models(_refresh_if_expired(provider, pool, e))
+            except Exception as x:  # noqa: BLE001  (the page falls back to typing the id)
+                error = f"{type(x).__name__}: {str(x)[:120]}"
+                continue
+            if not got:
+                error = "the provider returned no model list"
+                continue
+            ids, source = list(got[0]), got[1]
+            if source == "live":
+                cur = _load_json(_state_path(), {}) or {}     # re-read: the daily summary writes here too
+                cur[key] = {"ts": round(time.time()), "ids": ids}
+                _atomic_json(_state_path(), cur)
+                return {"models": ids, "source": "live", "ts": cur[key]["ts"], "error": ""}
+            fallback, error = ids, "the account's own list could not be read"
+            break
+    if saved:
+        return {"models": saved["ids"], "source": "saved", "ts": saved.get("ts"), "error": error}
+    if fallback:
+        return {"models": fallback, "source": "fallback", "ts": None, "error": error}
+    return {"models": [], "source": "", "ts": None, "error": error}
 
 
 def _wake(provider: str, pool, entries, *, dry=False, auto=False, forced=False) -> list:
@@ -3572,6 +3624,29 @@ def _wake_status(provider: str) -> int:
             _p(f"  {pos:>3} {e.label:34s} {text:24s} {note}".rstrip())
     _p(f"Wake now: hermes account {provider} wake [<target>[,<target>...]] [--dry-run]")
     _p(f"Change:   hermes account {provider} wake auto-on|auto-off|model=<id>|model=default")
+    _p(f"Models:   hermes account {provider} wake models")
+    return 0
+
+
+def _wake_models_cmd(provider: str) -> int:
+    ad = providers.get(provider)
+    if not ad.has_wake:
+        raise SystemExit(f"[{provider}] wake is not available for {provider}. "
+                         f"Providers with wake: {', '.join(providers.with_wake())}.")
+    got = _wake_models(provider)
+    ids, set_to = got["models"], _wake_cfg(provider)["model"]
+    where = {"live": "the account's own list, read now",
+             "fallback": "Hermes' built-in list: " + got["error"],
+             "saved": f"saved {_hhmm(got['ts'])}, the live list could not be read: {got['error']}"}.get(got["source"])
+    if not ids:
+        _p(f"[{provider}] no model list: {got['error'] or 'not available'}.")
+        _p(f"The wake goes to {_wake_model_text(provider)}. Set another: hermes account {provider} wake model=<id>")
+        return 1
+    _p(f"[{provider}] models for the wake request ({where}):")
+    for m in ids:
+        mark = "  (set)" if m == set_to else "  (default)" if not set_to and m == ad.default_model(ids) else ""
+        _p(f"  {m}{mark}")
+    _p(f"Now: {_wake_model_text(provider)}. Set: hermes account {provider} wake model=<id>|model=default")
     return 0
 
 
@@ -3604,6 +3679,10 @@ def _wake_setting(provider: str, raw: str) -> int:
         w["model"] = value
     _atomic_json(_config_path(), user)
     _p(f"Wake model [{provider}]: {_wake_model_text(provider)}.")
+    known = _saved_models(provider) or {}
+    if w.get("model") and known and w["model"] not in known["ids"]:
+        _p(f"Note: {w['model']} is not in the account's model list (read {_hhmm(known.get('ts'))}). "
+           f"If the wake fails, pick one from: hermes account {provider} wake models")
     return 0
 
 
@@ -3614,6 +3693,8 @@ def _cmd_wake(args) -> int:
     sub = raw.lower()
     if sub == "status":
         return _wake_status(provider)
+    if sub == "models":
+        return _wake_models_cmd(provider)
     if sub in ("auto-on", "auto-off") or sub.startswith("model="):
         if args.dry_run:
             _p("--dry-run applies to waking, not to settings.")
@@ -3694,7 +3775,7 @@ ACTIONS = [
     ("doctor", "", "Check the whole setup: strategy, timer, files, pools, alerts"),
     ("setup", "[--timer] [--strategy] [--undo]", "Profiles, tracker and (--timer) the balance timer; shows the plan first"),
     ("notify", "[status|test|summary|...]", "Alert channels (desktop, Telegram) and the daily summary"),
-    ("wake", "[<target>|status|auto-on]", "Start the 5-hour window of idle accounts now (one tiny request)"),
+    ("wake", "[<target>|status|models|...]", "Start the 5-hour window of idle accounts now (one tiny request)"),
     ("privacy", "[on|off|status]", "Mask emails in the page, alerts and output (al•••e@e•••.com)"),
     ("help", "", "Show this help"),
 ]

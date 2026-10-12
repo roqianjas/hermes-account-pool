@@ -2,7 +2,7 @@
 
 Run several accounts of one provider in [Hermes Agent](https://hermes-agent.nousresearch.com/docs) and manage them from one command, `hermes account`, or from an Accounts page in Hermes Desktop. Add accounts with a verified email, see live usage per account, spread the load before an account runs out, start an idle account's 5-hour window early, park accounts for a while or on a weekly schedule, see which bot is on which account and how many tokens each bot uses, mask the emails for a screenshot, and get an alert or a daily summary.
 
-Version 3.11.1 · MIT · Hermes Agent ≥ 0.21.5 · Linux with systemd · Indonesian PDF guide in [`docs/`](docs/hermes-account-pool.pdf)
+Version 3.12.0 · MIT · Hermes Agent ≥ 0.21.5 · Linux with systemd · Indonesian PDF guide in [`docs/`](docs/hermes-account-pool.pdf)
 
 ![The Accounts page in Hermes Desktop: eight accounts in rotation with their 5-hour usage, the bots on each account, two parked accounts with their reset times, two park schedules and the forecast](docs/screenshots/accounts.png)
 
@@ -385,7 +385,7 @@ hermes account <provider> <action> [target] [options]
                                         profiles, tracker and timer after an install
   notify   [status|test|summary|...]    alert channels (desktop, Telegram) and the daily summary
   wake     [<target>[,...]] [--dry-run] start the 5-hour window of idle accounts now (one tiny request each)
-           status|auto-on|auto-off|model=<id>
+           status|models|auto-on|auto-off|model=<id>
                                         the setting and every window; the timer keeps windows running
   privacy  [on|off|status]              mask emails in the output, alerts and the page: al•••e@e•••.com
   help                                  show the help
@@ -711,6 +711,13 @@ The next balance run (within 5 minutes) reads the new reset times.
 
 $ hermes account anthropic wake auto-on
 Automatic wake on [anthropic]: the balance timer wakes an account in rotation whose 5-hour window is not running, with one tiny request to claude-haiku-4-5. At most about 5 a day per account.
+
+$ hermes account anthropic wake models
+[anthropic] models for the wake request (the account's own list, read now):
+  claude-opus-4-5-20251101
+  claude-sonnet-4-5-20250929
+  claude-haiku-4-5-20251001
+Now: claude-haiku-4-5 (default). Set: hermes account anthropic wake model=<id>|model=default
 ```
 
 An account's [5-hour window](#concepts) starts with its first request. An account that sits idle until 10:00 and is then used hard can be full by 11:00 and stays full until 15:00. Woken at 07:00, its window resets at 12:00 instead of 15:00: the work that hit the limit at 11:00 waits one hour, not four. `wake` sends that first request now: one request through the account that asks for a one-word answer.
@@ -725,6 +732,7 @@ An account's [5-hour window](#concepts) starts with its first request. An accoun
 - **`wake status`** shows the setting, the model, each account's window from the last balance run and its last wake. It sends nothing.
 - **`wake auto-on`** has the balance timer wake an account as soon as its window is not running. Once a window runs, nothing is sent until it ends: at most about 5 requests per account per day. An account woken in the last hour is not woken again, so a wake that did not start a window costs one request an hour, not one every 5 minutes. `wake auto-off` stops it. It needs the timer; `doctor` warns when the timer is off, and when wakes failed in the last 6 hours.
 - **`wake model=<id>`** sends the wake to another model; `model=default` goes back to the adapter's choice.
+- **`wake models`** lists the models the account offers, read now from the provider through the first signed-in account in rotation (a second one if that fails). Listing models is not a model request and uses no quota. Anthropic's list is the one Hermes' model picker reads (`/v1/models`); Codex's leaves out the `-900k` variants and `spark`, which has its own usage limit, so a request to it would not start the 5-hour window. The model in use is on the last line, and marked in the list when the list has it (Codex's default is the smallest model in the list; Anthropic's `claude-haiku-4-5` is an alias the list shows with its date). The list is saved in `account-pool-state.json`: when the provider cannot be reached, `wake models` shows the saved one and says why, and `model=<id>` with an id the saved list lacks is still set, with a note.
 - A failed wake says why (`rate-limited: the account is at a limit, so its window is running already`, `sign-in rejected (401): sign in again`, `model ... not accepted`) and the command exits with 1. Every wake, good or failed, goes into the [activity log](#log).
 - **What it does not do.** It adds no quota: the limits stay the same, only the start of the window moves. A pool whose accounts are busy all day has its windows running anyway, so there is nothing to wake.
 
@@ -809,9 +817,13 @@ The header has a provider switch (providers with accounts in the pool, plus the 
 
 **Park** asks when the account comes back: when you unpark it, in 1 hour, in 2 hours, or at a time you type (`17:00`, `+90m`, `2026-10-12 08:00`, the same formats as `--until`). **Park on a schedule** asks for the days and the hours (`09:00` to `17:00`), the same as `schedule --every`. **Remove** and **Balance now** ask before they act. Every action reports the same message as the command.
 
-**Wake** opens the wake dialog: every account in rotation with its 5-hour window (`not running`, `running, resets 11:02`) and its last wake. The accounts whose window is not running are ticked; **Wake N accounts** wakes the ticked ones, the same as `wake <id>,<id>`, and shows the result. Accounts with a running window cannot be ticked. **Keep windows running** is `wake auto-on`, and the model field is `wake model=` (empty for the default); **Save settings** appears once you change one. The button reads **Wake: auto** while automatic wake is on.
+**Wake** opens the wake dialog: every account in rotation with its 5-hour window (`not running`, `running, resets 11:02`) and its last wake. The accounts whose window is not running are ticked; **Wake N accounts** wakes the ticked ones, the same as `wake <id>,<id>`, and shows the result. Accounts with a running window cannot be ticked. The box in the header ticks every account that can be woken, or clears them all; it shows a dash when only some are ticked. When every window is running, the dialog says so, with the first reset time, and nothing can be ticked: there is nothing to wake.
 
-![The wake dialog: two accounts without a running window ticked, the others with their reset time, and the switch that keeps windows running](docs/screenshots/wake.png)
+**Keep windows running** is `wake auto-on`. **Model for the wake request** is a list of the models the account offers, from the provider (the same list as `wake models`), with **Default** first; below it the dialog says where the list comes from and when it was read. The dialog reads the list when the saved one is older than 6 hours; otherwise it opens without a request. A model set by hand that the list lacks stays selected, marked `not in the list`. When no list can be read, a text field takes the id instead. **Save settings** appears once you change a setting; **Wake N accounts** saves a changed model first, so the wake goes to the model you picked. The button reads **Wake: auto** while automatic wake is on.
+
+![The wake dialog: two accounts without a running window ticked, the select-all box in the header, the others with their reset time, the switch that keeps windows running, and the model list read from the provider](docs/screenshots/wake.png)
+
+![The wake dialog's model list opened: Default first, then the models the account offers](docs/screenshots/wake-models.png)
 
 The **eye button** masks every email on the page (`al•••e@e•••.com`), the same setting as `privacy on`, so it also masks alerts and the command's output. Click it again to show them. The page remembers it, so a reload does not flash the real emails.
 
@@ -1009,7 +1021,7 @@ Data files, all mode `600`, in `$HERMES_HOME`:
 | `account-pool-activity.jsonl` | The activity log: what the timer, the command and the page changed. Last 30 days, mode 600. |
 | `account-pool-history.jsonl` | Usage snapshots, one per timer run. Parked accounts are included and listed under `parked`, which the report, forecast, chart and daily summary leave out. Trimmed to the last 14 days once the file passes 3 MB. |
 | `account-pool-alerts.json` | Alerts already sent, so each incident is reported once |
-| `account-pool-state.json` | When the daily summary was last sent, which schedule windows were already applied, and each account's last wake (time, model or the reason it failed) |
+| `account-pool-state.json` | When the daily summary was last sent, which schedule windows were already applied, each account's last wake (time, model or the reason it failed), and the last model list per provider (time and ids) |
 | `account-pool.json` | Settings: alert channels, daily summary, park schedules, wake, email masking |
 
 How tokens are handled:
@@ -1033,7 +1045,7 @@ What the plugins do outside their own files, in one place: what you should know 
 - `add --key` reads an API key without echo and stores it through the pool API.
 - **It sends model requests only for `wake`.** Each wake is one request through the account, with a one-word answer: for Anthropic through Hermes' own client (`build_anthropic_client`: `claude-code/<version> (external, cli)`, `x-app: cli`, and the Claude Code system line Hermes sends with every subscription request); for Codex on the Codex Responses endpoint with the headers below. It runs when you run `wake`, click **Wake**, or, after `wake auto-on`, from the timer. Nothing else in either plugin calls a model.
 - Usage and profile requests send the same client headers as Hermes' own usage fetcher: `User-Agent: claude-code/2.1.0` with `anthropic-beta: oauth-2025-04-20` for Anthropic, `codex_cli_rs/0.0.0 (Hermes Agent)` with `originator: codex_cli_rs` for Codex. Without them Anthropic rate-limits the usage endpoint far sooner.
-- It uses these Hermes internals, checked against Hermes 0.21.5: `hermes_cli.auth_commands` (`_OAUTH_ADD_SPECS`, `_unsuppress_provider_sources`, `_normalize_provider`, `auth_add_command`, `auth_remove_command`), `agent.anthropic_credentials` (`_OAUTH_CLIENT_ID`, `_OAUTH_REDIRECT_URI`, `_OAUTH_SCOPES`, `_generate_pkce`, `_post_oauth_token`, `_oauth_token_state`, `refresh_anthropic_oauth_pure`), `hermes_cli.auth_codex` (`CODEX_OAUTH_CLIENT_ID`, `_codex_request_device_code`, `_codex_exchange_authorization_code`, `_codex_http_client`, `_codex_base_url`, `refresh_codex_oauth_pure`), `hermes_cli.auth_codex_browser._codex_browser_exchange_code` (Hermes 0.21.6 and newer; without it the plugin posts the same token request itself), `agent.codex_headers.codex_account_headers`, `agent.anthropic_adapter` (`build_anthropic_client`, `_CLAUDE_CODE_SYSTEM_PREFIX`) and `hermes_cli.codex_models.get_codex_model_ids` for `wake`, `hermes_cli.auth` (`PROVIDER_REGISTRY`, `_utc_now_z`, `mark_provider_active_if_unset`), `agent.credential_pool` (`load_pool`, `PooledCredential`), `hermes_constants` (the Hermes home and its per-profile override), `hermes_cli.secret_prompt.masked_secret_prompt`, `hermes_cli.config.set_config_value`, and `agent.usage_pricing` (`_lookup_official_docs_pricing`, `resolve_billing_route`) with `agent.models_dev._load_disk_cache` for API prices. A Hermes update that changes them breaks the affected command with an error; it cannot corrupt the pool, because every write still goes through the pool API.
+- It uses these Hermes internals, checked against Hermes 0.21.5: `hermes_cli.auth_commands` (`_OAUTH_ADD_SPECS`, `_unsuppress_provider_sources`, `_normalize_provider`, `auth_add_command`, `auth_remove_command`), `agent.anthropic_credentials` (`_OAUTH_CLIENT_ID`, `_OAUTH_REDIRECT_URI`, `_OAUTH_SCOPES`, `_generate_pkce`, `_post_oauth_token`, `_oauth_token_state`, `refresh_anthropic_oauth_pure`), `hermes_cli.auth_codex` (`CODEX_OAUTH_CLIENT_ID`, `_codex_request_device_code`, `_codex_exchange_authorization_code`, `_codex_http_client`, `_codex_base_url`, `refresh_codex_oauth_pure`), `hermes_cli.auth_codex_browser._codex_browser_exchange_code` (Hermes 0.21.6 and newer; without it the plugin posts the same token request itself), `agent.codex_headers.codex_account_headers`, `agent.anthropic_adapter` (`build_anthropic_client`, `_CLAUDE_CODE_SYSTEM_PREFIX`), `hermes_cli.models._fetch_anthropic_models` and `hermes_cli.codex_models.get_codex_model_ids` for `wake` and its model list, `hermes_cli.auth` (`PROVIDER_REGISTRY`, `_utc_now_z`, `mark_provider_active_if_unset`), `agent.credential_pool` (`load_pool`, `PooledCredential`), `hermes_constants` (the Hermes home and its per-profile override), `hermes_cli.secret_prompt.masked_secret_prompt`, `hermes_cli.config.set_config_value`, and `agent.usage_pricing` (`_lookup_official_docs_pricing`, `resolve_billing_route`) with `agent.models_dev._load_disk_cache` for API prices. A Hermes update that changes them breaks the affected command with an error; it cannot corrupt the pool, because every write still goes through the pool API.
 - Tokens are never printed, logged, returned to the page, or sent anywhere but the provider's own endpoints.
 
 **Network.** Only these, and only when a command, the timer or a page button asks:
@@ -1044,12 +1056,13 @@ What the plugins do outside their own files, in one place: what you should know 
 | Anthropic's OAuth token endpoint, through Hermes' `_post_oauth_token` | code exchange, token refresh | page sign-in, refresh of parked accounts |
 | `claude.ai/oauth/authorize` | the sign-in link you open yourself | page sign-in |
 | `api.anthropic.com/v1/messages` | one tiny request per wake (`claude-haiku-4-5`, one output token) | `wake`, **Wake**, and the timer after `wake auto-on` |
+| `api.anthropic.com/v1/models`, through Hermes' `_fetch_anthropic_models` | the account's model list (no quota) | `wake models`; the Wake dialog when the saved list is older than 6 hours |
 | `chatgpt.com/backend-api/wham/usage` | Codex usage | as for Anthropic usage |
-| `chatgpt.com/backend-api/codex/responses`, `.../codex/models` | one tiny request per wake; the account's model list, to pick the smallest model | as for the Anthropic wake |
+| `chatgpt.com/backend-api/codex/responses`, `.../codex/models` | one tiny request per wake; the account's model list, to pick the smallest model and fill the Wake dialog's list | as for the Anthropic wake and model list |
 | `auth.openai.com` | the sign-in link you open yourself; device code, token exchange and refresh | Codex sign-in, refresh of parked Codex accounts |
 | Telegram, through `hermes send` | alerts and the daily summary | when an alert fires or the summary is due, if Telegram alerts are on |
 
-There is no telemetry, no update check and no other host. Opening the page or switching tabs makes no request at all.
+There is no telemetry, no update check and no other host. Opening the page or switching tabs makes no request at all; the Wake dialog reads the model list only when the saved one is older than 6 hours.
 
 **Local listener.** Only during a Codex browser sign-in started on the Accounts page, the page's backend listens on `127.0.0.1:1455` (loopback only, not reachable from other computers) for the browser's return from OpenAI. It accepts only the sign-in it was started for and closes when that sign-in ends, is cancelled, or after 15 minutes. `add` and `relogin` in a terminal leave the listener to `hermes auth add`.
 
@@ -1110,7 +1123,8 @@ There is no telemetry, no update check and no other host. Opening the page or sw
 | Codex page sign-in: `Port 1455 on this computer is taken` | A Codex CLI login or `hermes auth add openai-codex --browser` is waiting on the port | Finish or stop that one, or paste the address the browser ends on |
 | Codex: `OpenAI refused the sign-in` or `Token exchange failed` | You cancelled on OpenAI's page, or the link was older than a few minutes | Start the sign-in again |
 | Codex: `This address belongs to another sign-in` | The pasted address came from an older sign-in link | Open the link from this dialog again and paste the address it ends on |
-| `wake failed ...: model ... not accepted` | The account's plan does not offer the wake model | `hermes account <provider> wake model=<id>` with a model the account offers, or `model=default` |
+| `wake failed ...: model ... not accepted` | The account's plan does not offer the wake model | Pick a model from the list in the Wake dialog, or `hermes account <provider> wake models` and `wake model=<id>` with one of them, or `model=default` |
+| The Wake dialog has a text field instead of a model list | The model list could not be read (no signed-in account in rotation, or the provider did not answer); the line below says why | Type the id, or leave it empty for the default; `hermes account <provider> wake models` shows the same reason |
 | `wake failed ...: rate-limited` | The account is at a limit, so its window is running already | Nothing to fix; the next run finds the window running |
 | **Resets** shows `not started` | No 5-hour window is running on that account | Normal for an idle account. **Wake** starts it if you want it to reset sooner |
 | Automatic wake does nothing | The timer is off, or every window is already running | `hermes account <provider> wake status`; `doctor` |

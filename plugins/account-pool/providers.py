@@ -88,6 +88,15 @@ class Adapter:
         """Start the account's short window with one tiny request. Returns the model used."""
         return None
 
+    def models(self, entry):
+        """(model ids this account can send a wake to, "live" | "fallback"), or None when the
+        provider's list cannot be read. "fallback": Hermes' built-in list, not the account's own."""
+        return None
+
+    def default_model(self, ids=()) -> str:
+        """The model a wake goes to when none is set; `ids` is the account's model list."""
+        return self.wake_model
+
     def signin_start(self, method=None):
         """{"kind": "code" | "device" | "browser", "url", "user_code"?, "listening"?,
         "state": private dict kept by the server}."""
@@ -111,6 +120,10 @@ class Adapter:
     @property
     def has_wake(self) -> bool:
         return type(self).wake is not Adapter.wake
+
+    @property
+    def has_models(self) -> bool:
+        return type(self).models is not Adapter.models
 
     @property
     def has_web_signin(self) -> bool:
@@ -217,6 +230,12 @@ class Anthropic(Adapter):
         except Exception as x:
             raise ValueError(self._wake_error(x, model)) from None
         return model
+
+    def models(self, entry):
+        # Hermes' own /v1/models fetcher: the OAuth headers and betas of a Hermes session, every page.
+        from hermes_cli.models import _fetch_anthropic_models
+        ids = _fetch_anthropic_models(timeout=10, api_key=getattr(entry, "access_token", "") or "")
+        return (list(ids), "live") if ids else None
 
     @staticmethod
     def _wake_error(x, model) -> str:
@@ -337,19 +356,36 @@ class OpenAICodex(Adapter):
         detail = " · ".join(f"{n} {p:.0f}%" for n, p, _ in windows)
         return pct, reset, detail
 
-    def _pick_model(self, entry) -> str:
-        """The smallest model this account offers (its live model list, as Hermes reads it)."""
-        try:
-            from hermes_cli.codex_models import get_codex_model_ids
-            ids = [m for m in get_codex_model_ids(access_token=getattr(entry, "access_token", "") or "")
-                   if not str(m).endswith("-900k") and "spark" not in str(m)]
-        except Exception:
-            ids = []
+    def _model_ids(self, entry):
+        """The account's model list as Hermes reads it, and whether it came live.
+        Left out: "-900k" (the same model with a longer context) and "spark" (its own usage limit,
+        so a request to it does not start the 5-hour window)."""
+        from hermes_cli.codex_models import get_codex_model_ids
+        got = get_codex_model_ids(access_token=getattr(entry, "access_token", "") or "",
+                                  base_url=getattr(entry, "base_url", None) or None)
+        live = type(got).__name__ != "CuratedFallbackModels"     # Hermes' offline list when the API failed
+        return [str(m) for m in got if not str(m).endswith("-900k") and "spark" not in str(m)], live
+
+    def models(self, entry):
+        ids, live = self._model_ids(entry)
+        return (ids, "live" if live else "fallback") if ids else None
+
+    def default_model(self, ids=()) -> str:
+        """The smallest model in the list."""
+        ids = list(ids or ())
         for part in ("mini", "nano", "luna"):
             hit = next((m for m in ids if part in m), None)
             if hit:
                 return hit
         return ids[-1] if ids else "gpt-5.4-mini"
+
+    def _pick_model(self, entry) -> str:
+        """The smallest model this account offers (its live model list, as Hermes reads it)."""
+        try:
+            ids = self._model_ids(entry)[0]
+        except Exception:
+            ids = []
+        return self.default_model(ids)
 
     def wake(self, entry, model=None):
         model = model or self._pick_model(entry)

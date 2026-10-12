@@ -2,6 +2,18 @@
 
 All releases of the `account-pool` plugin and its session tracker `account-pool-tracker` (now 1.5.0).
 
+## 3.12.0
+
+The Wake dialog gets a select-all box and a model list from the provider.
+
+- **Select all.** The header box of the Wake dialog ticks every account that can be woken, or clears them all, and shows a dash when only some are ticked. When every window is running, the dialog says so with the first reset time instead of showing a column of boxes that cannot be ticked.
+- **The wake model is picked from a list.** The dialog lists the models the account offers, read from the provider through a signed-in account in rotation (no quota), with **Default** first and a line that says where the list comes from and when it was read. Anthropic: the `/v1/models` list Hermes' own model picker reads. Codex: the account's list without the `-900k` variants and `spark` (its own usage limit, so a request to it would not start the 5-hour window). A model set by hand that the list lacks stays selected, marked `not in the list`; without a list the text field comes back with the reason.
+- The list is saved in `account-pool-state.json` and read again when it is older than 6 hours, so the dialog usually opens without a request. A failed read is not retried within a minute, and the saved list is used meanwhile.
+- **Wake N accounts** saves a changed model first, so the wake goes to the model you picked; before, it went to the saved one until you clicked **Save settings**.
+- **`hermes account <provider> wake models`** prints the same list, read now, with the model in use. `wake model=<id>` with an id the saved list lacks is still set, with a note. `wake status` points to `wake models`.
+- Adapters: optional `models(entry)` and `default_model(ids)`; the Codex adapter reads the list on the account's own host (`base_url`), as Hermes asks.
+- Tests: `tests/wake_privacy_sandbox.py` 64 → 79 checks (list, fallback to a second account, saved list, route limits, Codex filter and Hermes' offline list), UI 121 → 137.
+
 ## 3.11.1
 
 Parked accounts keep their usage, reset time and trend on the page.

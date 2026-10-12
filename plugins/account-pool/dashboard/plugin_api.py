@@ -489,6 +489,33 @@ def wake(body: dict):
                     dry_run=bool(body.get("dry_run")))
 
 
+_MODELS: dict[str, tuple] = {}           # provider -> (time, answer) of the last failed model-list read
+
+
+@router.get("/wake/models")
+def wake_models(provider: str = "anthropic"):
+    """The models the wake can go to, for the dialog's picker. A list read in the last
+    MODELS_MAX_AGE comes from the state file (no network); otherwise one model-list request
+    through an account in rotation (no quota), at most one a minute."""
+    p = _provider(provider)
+    ad = providers.get(p)
+    if not ad.has_wake:
+        return {"provider": p, "models": [], "source": "", "ts": None, "default": "",
+                "error": f"Wake is not available for {p}."}
+    with _root_home():
+        saved = core._saved_models(p)
+    if saved and time.time() - float(saved.get("ts") or 0) < core.MODELS_MAX_AGE:
+        got = {"models": saved["ids"], "source": "saved", "ts": saved.get("ts"), "error": ""}
+    elif p in _MODELS and time.time() - _MODELS[p][0] < NET_MIN_GAP:     # a failed read is not retried at once
+        got = _MODELS[p][1]
+    else:
+        with _exclusive():
+            got = core._wake_models(p)
+        if got["source"] != "live":                # a live list is in the state file now
+            _MODELS[p] = (time.time(), got)
+    return dict(got, provider=p, default=ad.default_model(got["models"]))
+
+
 @router.post("/wake/settings")
 def wake_settings(body: dict):
     """auto: the balance timer wakes idle accounts; model: the wake model ("" = default). No provider call."""

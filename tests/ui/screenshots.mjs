@@ -121,10 +121,23 @@ await waitFor(hasText('Copy link'), 'the sign-in step')
 await shot('add-account')
 await click('[role=dialog] button', 'Cancel').catch(() => {})
 
-// Wake: the idle accounts ticked, the others with their reset time
+// Wake: the idle accounts ticked, the others with their reset time; then its model list opened
 await click('button', 'Wake')
-await waitFor(hasText('Wake accounts') + ' && ' + hasText('Keep windows running'), 'the Wake dialog')
+await waitFor(hasText('Wake accounts') + ' && ' + hasText('Keep windows running') + ' && ' + hasText('Default: claude-haiku-4-5'),
+  'the Wake dialog with its model list')
 await shot('wake')
+const picker = await js(`(() => {
+  const t = document.querySelector('[data-wake-model] [role=combobox], [data-wake-model] button')
+  if (!t) return null
+  const r = t.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } })()`)
+if (!picker) throw new Error('no wake model picker')
+for (const type of ['mousePressed', 'mouseReleased']) {     // Radix opens on pointerdown, not on el.click()
+  await send('Input.dispatchMouseEvent', { type, x: picker.x, y: picker.y, button: 'left', clickCount: 1 })
+}
+await waitFor(`!!document.querySelector('[role=listbox]')`, 'the open model list')
+await shot('wake-models')
+await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+await waitFor(`!document.querySelector('[role=listbox]')`, 'the model list to close')
 await click('[role=dialog] button', 'Close')
 
 // Email masking: the eye button masks every email on the page; a second click shows them again

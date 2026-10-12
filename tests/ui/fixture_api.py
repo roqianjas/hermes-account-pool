@@ -120,6 +120,11 @@ def activity(request: Request):
     return _get("activity", request)
 
 
+@router.get("/wake/models")
+def wake_models(request: Request):
+    return _get("wake/models", request)
+
+
 @router.post("/live")
 def live():
     return {"ok": True, "ts": time.time(), "rows": [], "message": ""}

@@ -32,6 +32,7 @@ from agent.credential_pool import PooledCredential, load_pool  # noqa: E402
 from fastapi import FastAPI  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from hermes_cli import codex_models  # noqa: E402
+from hermes_cli import models as hermes_models  # noqa: E402
 
 API = Path(__file__).resolve().parent.parent / "plugins" / "account-pool" / "dashboard" / "plugin_api.py"
 spec = importlib.util.spec_from_file_location("hap_api", API)
@@ -169,6 +170,74 @@ rc, out = run("wake", "model=default")
 check(rc == 0 and core._wake_cfg(P)["model"] == "", "wake model=default goes back to the adapter's model")
 rc, out = run("wake", "auto-on", dry_run=True)
 check(rc == 2 and not core._wake_cfg(P)["auto"], "--dry-run does not apply to settings")
+
+# ── the model list (Hermes' /v1/models fetcher, faked) ───────────────────────
+MLIST = {"ids": ["claude-opus-4-5-20251101", "claude-haiku-4-5", "claude-haiku-4-5-20251001"], "fail": set()}
+MCALLS = []
+
+
+def fake_models(timeout=5.0, *, base_url=None, api_key=None):
+    MCALLS.append((api_key, timeout))
+    if api_key in MLIST["fail"]:
+        raise urllib.error.URLError("offline")
+    return list(MLIST["ids"]) if MLIST["ids"] else None
+
+
+hermes_models._fetch_anthropic_models = fake_models
+rc, out = run("wake", "models")
+check(rc == 0 and "claude-opus-4-5-20251101" in out and "  claude-haiku-4-5  (default)" in out
+      and "the account's own list, read now" in out, "wake models: the account's list, the default marked")
+check(MCALLS == [("fake-at-0", 10)], "wake models: read once, through the first signed-in account in rotation")
+check(state().get(f"models:{P}", {}).get("ids") == MLIST["ids"], "wake models: the live list is saved")
+MCALLS.clear()
+MLIST["fail"] = {"fake-at-0"}
+rc, out = run("wake", "models")
+check(rc == 0 and [k for k, _ in MCALLS] == ["fake-at-0", "fake-at-1"] and "read now" in out,
+      "wake models: a second account when the first one's request fails")
+MLIST["fail"], MLIST["ids"] = set(), None
+rc, out = run("wake", "models")
+check(rc == 0 and "saved " in out and "the provider returned no model list" in out and "claude-opus-4-5-20251101" in out,
+      "wake models: the saved list when the live one cannot be read, said why")
+saved_models = state()[f"models:{P}"]
+st = state()
+st.pop(f"models:{P}")
+(ROOT / "account-pool-state.json").write_text(json.dumps(st))
+rc, out = run("wake", "models")
+check(rc == 1 and "no model list" in out and "claude-haiku-4-5 (default)" in out, "wake models: no list at all, said so")
+st = state()
+st[f"models:{P}"] = saved_models
+(ROOT / "account-pool-state.json").write_text(json.dumps(st))
+MLIST["ids"] = ["claude-opus-4-5-20251101", "claude-haiku-4-5", "claude-haiku-4-5-20251001"]
+rc, out = run("wake", "model=claude-made-up-1")
+check(rc == 0 and core._wake_cfg(P)["model"] == "claude-made-up-1" and "is not in the account's model list" in out,
+      "model=<id> outside the saved list: saved, with a note (no request)")
+rc, out = run("wake", "models")
+check("  claude-made-up-1" not in out and "(default)" not in out and "Now: claude-made-up-1." in out,
+      "wake models: no default mark while a model is set")
+run("wake", "model=default")
+api._MODELS.clear()
+MCALLS.clear()
+got = c.get("/x/wake/models").json()
+check(got["source"] == "saved" and got["models"] == MLIST["ids"] and got["default"] == "claude-haiku-4-5" and not MCALLS,
+      "route: a list read in the last hours comes from the state file, no request")
+st = state()
+st[f"models:{P}"]["ts"] -= core.MODELS_MAX_AGE + 60
+(ROOT / "account-pool-state.json").write_text(json.dumps(st))
+got = c.get("/x/wake/models").json()
+check(got["source"] == "live" and len(MCALLS) == 1, "route: an older list is read again")
+st = state()
+st.pop(f"models:{P}")
+(ROOT / "account-pool-state.json").write_text(json.dumps(st))
+MLIST["ids"] = None
+MCALLS.clear()
+got = c.get("/x/wake/models").json()
+again = c.get("/x/wake/models").json()
+check(got["models"] == [] and got["error"] and again == got and len(MCALLS) == 2,
+      "route: a failed read gives an empty list and why; not tried again within a minute")
+check(c.get("/x/wake/models?provider=openrouter").json()["error"].startswith("Wake is not available"),
+      "route: a provider without wake says so")
+MLIST["ids"] = ["claude-opus-4-5-20251101", "claude-haiku-4-5", "claude-haiku-4-5-20251001"]
+api._MODELS.clear()
 
 # ── wake by hand ─────────────────────────────────────────────────────────────
 rc, out = run("wake", dry_run=True)
@@ -377,8 +446,33 @@ def fake_urlopen(req, timeout=None):
 
 
 urllib.request.urlopen = fake_urlopen
-codex_models.get_codex_model_ids = lambda access_token=None, base_url=None: ["gpt-6-sol", "gpt-6-luna",
-                                                                             "gpt-6-luna-900k", "gpt-5.3-codex-spark"]
+CMODELS = {"curated": False, "base": []}
+
+
+class CuratedFallbackModels(list):          # the type Hermes returns when the live list failed
+    pass
+
+
+def fake_codex_ids(access_token=None, base_url=None):
+    CMODELS["base"].append(base_url)
+    ids = ["gpt-6-sol", "gpt-6-luna", "gpt-6-luna-900k", "gpt-5.3-codex-spark"]
+    return CuratedFallbackModels(ids) if CMODELS["curated"] else ids
+
+
+codex_models.get_codex_model_ids = fake_codex_ids
+rc, out = run("wake", "models", provider=C)
+check(rc == 0 and "  gpt-6-luna  (default)" in out and "gpt-6-sol" in out and "900k" not in out and "spark" not in out,
+      "codex wake models: the account's list without -900k and spark, the smallest marked")
+check(CMODELS["base"] and CMODELS["base"][-1] == "https://chatgpt.com/backend-api/codex"
+      and state().get(f"models:{C}", {}).get("ids") == ["gpt-6-sol", "gpt-6-luna"], "codex: read on the account's own host, saved")
+CMODELS["curated"] = True
+st = state()
+st.pop(f"models:{C}")
+(ROOT / "account-pool-state.json").write_text(json.dumps(st))
+rc, out = run("wake", "models", provider=C)
+check(rc == 0 and "Hermes' built-in list" in out and f"models:{C}" not in state(),
+      "codex: Hermes' offline list is shown as such and not saved as the account's")
+CMODELS["curated"] = False
 
 
 def window(pct, after, length=18000):

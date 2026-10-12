@@ -3883,5 +3883,29 @@
     "text": "Rotation strategy [anthropic]: worker-3 round_robin -> fill_first."
    }
   ]
+ },
+ "/wake/models?provider=anthropic": {
+  "provider": "anthropic",
+  "models": [
+   "claude-opus-4-5-20251101",
+   "claude-sonnet-4-5-20250929",
+   "claude-haiku-4-5-20251001"
+  ],
+  "source": "saved",
+  "ts": 1791632037,
+  "error": "",
+  "default": "claude-haiku-4-5"
+ },
+ "/wake/models?provider=openai-codex": {
+  "provider": "openai-codex",
+  "models": [
+   "gpt-5.4",
+   "gpt-5.4-mini",
+   "gpt-5.3-codex"
+  ],
+  "source": "live",
+  "ts": 1791639177,
+  "error": "",
+  "default": "gpt-5.4-mini"
  }
 }

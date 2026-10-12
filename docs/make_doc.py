@@ -16,7 +16,7 @@ from reportlab.platypus import (CondPageBreak, Image, KeepTogether, PageBreak, P
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 from reportlab.platypus.tableofcontents import TableOfContents
 
-VERSION = "3.11.1"
+VERSION = "3.12.0"
 REPO = "github.com/roqianjas/hermes-account-pool"
 FOOTER = f"Hermes plugin account-pool {VERSION} · {REPO}"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hermes-account-pool.pdf")
@@ -546,7 +546,7 @@ hermes account <provider> <action> [target] [options]
   doctor                                periksa strategi, timer, file, pool, peringatan
   notify   [status|test|summary|...]    peringatan (desktop, Telegram), ringkasan harian
   wake     [<target>[,...]] [--dry-run] mulai jendela 5 jam akun yang menganggur sekarang
-           status|auto-on|auto-off|model=<id>
+           status|models|auto-on|auto-off|model=<id>
                                         pengaturan dan jendela tiap akun; otomatis lewat timer
   privacy  [on|off|status]              sensor email di output, peringatan, dan halaman
   help                                  bantuan
@@ -925,6 +925,13 @@ The next balance run (within 5 minutes) reads the new reset times.
 $ hermes account anthropic wake auto-on
 Automatic wake on [anthropic]: the balance timer wakes an account in rotation whose
 5-hour window is not running, with one tiny request to claude-haiku-4-5.
+
+$ hermes account anthropic wake models
+[anthropic] models for the wake request (the account's own list, read now):
+  claude-opus-4-5-20251101
+  claude-sonnet-4-5-20250929
+  claude-haiku-4-5-20251001
+Now: claude-haiku-4-5 (default). Set: hermes account anthropic wake model=<id>|model=default
 """)
 P("Jendela 5 jam sebuah akun mulai saat request pertamanya (bagian 5). Akun yang menganggur sampai 10:00 lalu dipakai "
   "berat bisa penuh pukul 11:00 dan tetap penuh sampai 15:00. Bila dibangunkan pukul 07:00, jendelanya reset pukul "
@@ -952,6 +959,13 @@ LI(["<b>Akun mana.</b> Akun dalam rotasi yang jendelanya tidak berjalan. Jendela
     "jam, bukan tiap 5 menit. " + C("wake auto-off") + " mematikannya. Butuh timer; " + C("doctor")
     + " memperingatkan bila timer mati atau ada wake yang gagal dalam 6 jam terakhir.",
     C("wake model=&lt;id&gt;") + " memakai model lain; " + C("model=default") + " kembali ke pilihan adapter.",
+    C("wake models") + " menampilkan model yang tersedia untuk akun itu, dibaca langsung dari provider lewat akun "
+    "pertama dalam rotasi yang login-nya aktif (akun kedua bila yang pertama gagal). Membaca daftar model bukan "
+    "request model, jadi tidak memakai kuota. Anthropic: daftar " + C("/v1/models") + " yang juga dibaca pemilih "
+    "model Hermes. Codex: daftar akun tanpa varian " + C("-900k") + " dan " + C("spark") + " (Spark punya limit "
+    "sendiri, jadi request ke sana tidak memulai jendela 5 jam). Baris terakhir menyebut model yang dipakai. Daftarnya "
+    "disimpan di " + C("account-pool-state.json") + ": bila provider tidak terjangkau, yang tersimpan ditampilkan "
+    "beserta alasannya, dan " + C("model=&lt;id&gt;") + " yang tidak ada di daftar tetap disimpan dengan catatan.",
     "Wake yang gagal menyebut alasannya (" + C("rate-limited") + ", " + C("sign-in rejected (401)") + ", "
     + C("model ... not accepted") + ") dan perintah keluar dengan exit 1. Setiap wake, berhasil atau gagal, masuk log "
     "aktivitas.",
@@ -1085,11 +1099,22 @@ P("<b>Park</b> menanyakan kapan akun kembali: saat di-unpark, 1 jam lagi, 2 jam 
 P("<b>Wake</b> membuka dialog wake: setiap akun dalam rotasi beserta jendela 5 jamnya (" + C("not running") + ", "
   + C("running, resets 11:02") + ") dan wake terakhirnya. Akun yang jendelanya tidak berjalan sudah dicentang; <b>Wake "
   "N accounts</b> membangunkan yang dicentang (sama dengan " + C("wake &lt;id&gt;,&lt;id&gt;") + ") lalu menampilkan "
-  "hasilnya. Akun dengan jendela yang berjalan tidak bisa dicentang. <b>Keep windows running</b> sama dengan "
-  + C("wake auto-on") + ", dan kolom model sama dengan " + C("wake model=") + " (kosong untuk default); <b>Save "
-  "settings</b> muncul setelah salah satunya diubah. Tombolnya bertuliskan <b>Wake: auto</b> selama wake otomatis menyala.")
-shot("wake", "Dialog Wake: dua akun tanpa jendela berjalan sudah dicentang, akun lain dengan jam resetnya, dan sakelar "
-     "yang menjaga jendela tetap berjalan.", width=0.85)
+  "hasilnya. Akun dengan jendela yang berjalan tidak bisa dicentang. Kotak di kepala tabel mencentang semua akun "
+  "yang bisa dibangunkan, atau mengosongkan semuanya; isinya tanda strip bila baru sebagian yang dicentang. Bila "
+  "semua jendela sedang berjalan, dialog menyebutkannya beserta jam reset paling awal, dan tidak ada yang bisa "
+  "dicentang: memang tidak ada yang perlu dibangunkan.")
+P("<b>Keep windows running</b> sama dengan " + C("wake auto-on") + ". <b>Model for the wake request</b> berupa "
+  "daftar model yang tersedia untuk akun itu, diambil dari provider (daftar yang sama dengan " + C("wake models")
+  + "), dengan <b>Default</b> di urutan pertama; di bawahnya tertulis asal daftar dan kapan dibaca. Dialog membaca "
+  "daftar itu hanya bila yang tersimpan lebih tua dari 6 jam; selain itu dialog terbuka tanpa request. Model yang "
+  "diisi manual dan tidak ada di daftar tetap terpilih, dengan tanda " + C("not in the list") + ". Bila daftar "
+  "tidak bisa dibaca, muncul kolom teks untuk mengetik id-nya. <b>Save settings</b> muncul setelah salah satu "
+  "pengaturan diubah; <b>Wake N accounts</b> menyimpan model yang diganti lebih dulu, jadi wake memakai model yang "
+  "Anda pilih. Tombolnya bertuliskan <b>Wake: auto</b> selama wake otomatis menyala.")
+shot("wake", "Dialog Wake: dua akun tanpa jendela berjalan sudah dicentang, kotak pilih semua di kepala tabel, akun "
+     "lain dengan jam resetnya, sakelar yang menjaga jendela tetap berjalan, dan daftar model dari provider.", width=0.85)
+shot("wake-models", "Daftar model di dialog Wake: Default di urutan pertama, lalu model yang tersedia untuk akun itu.",
+     width=0.85)
 P("<b>Tombol mata</b> menyensor semua email di halaman (" + C("al•••e@e•••.com") + "). Ini pengaturan yang sama "
   "dengan " + C("privacy on") + ", jadi peringatan dan output perintah ikut tersensor. Klik lagi untuk menampilkannya. "
   "Halaman mengingat pilihan ini, jadi email asli tidak sempat terlihat saat halaman dimuat ulang.")
@@ -1143,6 +1168,8 @@ table([
     ["Check accounts", "Satu permintaan profil per akun."],
     ["Wake", "Satu permintaan pemakaian per akun yang dicentang, lalu satu request model kecil per akun yang jendelanya "
      "tidak berjalan. Paling sering sekali per menit, bersama Balance now dan Check accounts."],
+    ["Membuka dialog Wake", "Tidak ada, kecuali daftar model yang tersimpan lebih tua dari 6 jam: satu permintaan "
+     "daftar model (tanpa kuota). Bacaan yang gagal tidak diulang dalam satu menit."],
     ["Tombol mata, pengaturan wake", "Tidak ada."],
     ["Run doctor", "Satu permintaan pemakaian."],
     ["Add account, Sign in again", "Proses login, lalu satu permintaan profil untuk verifikasi email."],
@@ -1357,7 +1384,8 @@ table([
      "menghitungnya. Dipangkas ke 14 hari terakhir saat file melewati 3 MB."],
     [C("~/.hermes/account-pool-alerts.json"), "Peringatan yang sudah terkirim (satu pesan per kejadian)"],
     [C("~/.hermes/account-pool-state.json"), "Kapan ringkasan harian terakhir dikirim, jendela jadwal yang sudah "
-     "dijalankan, dan wake terakhir tiap akun (waktu, model, atau alasan gagal)"],
+     "dijalankan, wake terakhir tiap akun (waktu, model, atau alasan gagal), dan daftar model terakhir per "
+     "provider (waktu dan id)"],
     [C("~/.hermes/account-pool.json"), "Pengaturan: saluran peringatan, ringkasan harian, peringatan bot, jadwal "
      "parkir, wake, sensor email"],
     [C("~/.config/systemd/user/") + "<br/>" + C("hermes-account-balance.{service,timer}"), "Timer 5 menit, ditulis "
@@ -1397,8 +1425,8 @@ table([
     ["Jaringan", C("api.anthropic.com") + " (usage, profile), endpoint token OAuth Anthropic lewat Hermes, "
      + C("claude.ai/oauth/authorize") + " (link yang Anda buka sendiri), " + C("chatgpt.com/backend-api/wham/usage")
      + ", " + C("auth.openai.com") + " (link login yang Anda buka sendiri, kode perangkat, token), untuk wake "
-     + C("api.anthropic.com/v1/messages") + " dan " + C("chatgpt.com/backend-api/codex/responses") + " (serta "
-     "daftar model Codex), dan Telegram "
+     + C("api.anthropic.com/v1/messages") + " dan " + C("chatgpt.com/backend-api/codex/responses") + ", daftar "
+     "model untuk wake (" + C("api.anthropic.com/v1/models") + " lewat fungsi Hermes, daftar model Codex), dan Telegram "
      "lewat " + C("hermes send") + ". Header klien sama dengan "
      "pembaca pemakaian Hermes (" + C("claude-code/2.1.0") + ", " + C("codex_cli_rs") + "). Tanpa telemetri, tanpa "
      "cek update."],
@@ -1507,8 +1535,11 @@ table([
     ["Codex: " + C("This address belongs to another sign-in"), "Alamat yang ditempel berasal dari link login yang "
      "lebih lama", "Buka lagi link dari dialog ini dan tempel alamat tujuannya"],
     [C("wake failed ...: model ... not accepted"), "Paket akun itu tidak menyediakan model wake",
-     C("hermes account &lt;provider&gt;") + "<br/>" + C("wake model=&lt;id&gt;") + " dengan model yang tersedia, atau "
-     + C("model=default")],
+     "Pilih model dari daftar di dialog Wake, atau " + C("wake models") + " lalu<br/>" + C("wake model=&lt;id&gt;")
+     + " dengan salah satunya, atau " + C("model=default")],
+    ["Dialog Wake berisi kolom teks, bukan daftar model", "Daftar model tidak terbaca (tidak ada akun aktif dalam "
+     "rotasi, atau provider tidak menjawab); alasannya tertulis di bawah kolom", "Ketik id-nya, atau kosongkan untuk "
+     "default; " + C("wake models") + " menampilkan alasan yang sama"],
     [C("wake failed ...: rate-limited"), "Akun sedang kena limit, jadi jendelanya memang sudah berjalan",
      "Tidak perlu diperbaiki; putaran berikutnya melihat jendelanya berjalan"],
     ["<b>Resets</b> menampilkan " + C("not started"), "Tidak ada jendela 5 jam yang berjalan di akun itu",
@@ -1656,6 +1687,11 @@ table([
 H1("19. Riwayat versi")
 table([
     ["Versi", "Perubahan"],
+    ["3.12.0", "Dialog Wake: kotak <b>pilih semua</b> di kepala tabel (centang semua akun yang bisa dibangunkan, "
+     "atau kosongkan), dan pesan bila semua jendela sedang berjalan. Model wake dipilih dari daftar model akun yang "
+     "diambil dari provider (tanpa kuota, disimpan, dibaca ulang paling cepat tiap 6 jam), dengan kolom teks bila "
+     "daftar tidak terbaca. <b>Wake N accounts</b> menyimpan model yang dipilih lebih dulu. Perintah baru "
+     + C("wake models") + "."],
     ["3.11.1", "Timer juga membaca akun yang diparkir (tanpa kuota) dan me-refresh tokennya, jadi halaman "
      "menampilkan pemakaian, jam reset, dan garis tren akun parkir. Tabel parkir punya kolom <b>Resets</b> ("
      + C("not started") + " bila jendela sudah habis); tooltip garis tren menunjukkan angka tertinggi 24 jam "
