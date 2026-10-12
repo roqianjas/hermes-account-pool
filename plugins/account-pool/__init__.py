@@ -297,7 +297,7 @@ def _migrate_parked() -> None:
             for it in _load_parked(path):
                 provider = _norm(it["_provider"])
                 label = it.get("label") or it["id"]
-                pool = _pool(provider)
+                pool = _load_pool(provider)
                 if not any(e.id == it["id"] for e in pool.entries()):
                     pool.add_entry(PooledCredential.from_dict(
                         provider, {k: v for k, v in it.items() if not k.startswith("_")}))
@@ -378,9 +378,16 @@ def _hold_parks(provider: str, pool, dry: bool = False) -> list[str]:
     return actions
 
 
-def _pool(provider: str):
+def _load_pool(provider: str):
     from agent.credential_pool import load_pool
     return load_pool(provider)
+
+
+def _pool(provider: str):
+    """Hermes' pool of the provider. A 3.x park file is moved in first: a pool loaded before the move
+    would miss those accounts and take their parks for accounts that left the pool."""
+    _migrate_parked()
+    return _load_pool(provider)
 
 
 def _entries(provider: str):

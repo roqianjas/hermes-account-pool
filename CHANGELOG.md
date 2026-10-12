@@ -2,6 +2,11 @@
 
 All releases of the `account-pool` plugin. Up to 3.13 its session tracker was a separate plugin, `account-pool-tracker` (last version 1.5.1); since 4.0 it is part of `account-pool`.
 
+## 4.0.1
+
+- The move from 3.x: the first command after the update loaded Hermes' pool before it moved the accounts from `account-pool-parked.json` in, so in that one run it did not see them. `list` showed them as `(no longer in the pool)`; the next command showed them parked. Every command now loads the pool after the move. Nothing was lost: Hermes' pool writes keep entries a command did not load. Found while updating a real install.
+- Tests: `parked_usage_sandbox` 42 → 44 (`list` right after the move, `balance` as the first command after the update); 493 checks in total, UI 140.
+
 ## 4.0.0
 
 The plugin holds no login of its own any more: parked accounts, sign-ins and token refreshes are Hermes' own, as the Hermes plugin catalog asks (rule 11). The session tracker is now part of `account-pool`. Update with `hermes plugins update account-pool` (or `git pull` and `./install.sh`), then run `hermes account <provider> setup` once; see [Upgrading from 3.x](README.md#upgrading-from-3x).

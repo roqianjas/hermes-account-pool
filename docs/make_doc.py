@@ -16,7 +16,7 @@ from reportlab.platypus import (CondPageBreak, Image, KeepTogether, PageBreak, P
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 from reportlab.platypus.tableofcontents import TableOfContents
 
-VERSION = "4.0.0"
+VERSION = "4.0.1"
 REPO = "github.com/roqianjas/hermes-account-pool"
 FOOTER = f"Hermes plugin account-pool {VERSION} · {REPO}"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hermes-account-pool.pdf")
@@ -288,7 +288,7 @@ code("""
 $ hermes account anthropic setup --timer
 [anthropic] Setup: the default profile and 2 other profile(s) in /home/you/.hermes
   Accounts page    backend listed in 0 of 2 other profile(s)
-  Session tracking 4.0.0, active in 1 of 3 profile(s)
+  Session tracking 4.0.1, active in 1 of 3 profile(s)
   Balance timer    not installed
   Rotation         fill_first in all 3 profile(s)
 Changes:
@@ -442,7 +442,7 @@ hermes account anthropic doctor
 code("""
 [anthropic] Setup: the default profile and 2 other profile(s) in /home/you/.hermes
   Accounts page    backend listed in 2 of 2 other profile(s)
-  Session tracking 4.0.0, active in 1 of 3 profile(s)
+  Session tracking 4.0.1, active in 1 of 3 profile(s)
   Balance timer    runs every provider with accounts (now: anthropic), active
   Rotation         fill_first in all 3 profile(s)
 Changes:
@@ -959,7 +959,7 @@ $ hermes account anthropic doctor
   OK    strategy fill_first in 6 profiles
   OK    every profile uses the shared account pool
   OK    session tracking active in every profile
-  OK    running sessions count with session tracking 4.0.0
+  OK    running sessions count with session tracking 4.0.1
   OK    Accounts page backend enabled in every profile
   OK    account-pool-parking.json permissions 600
   OK    balance timer active, last run 2026-10-10 18:36:09 WIB
@@ -971,7 +971,7 @@ $ hermes account anthropic doctor
 """)
 P("Jalankan setelah instalasi, setelah update Hermes, atau saat bot berperilaku aneh. Setiap baris FAIL atau WARN "
   "menyertakan perbaikannya. Pelacak sesi dimuat saat proses mulai, jadi setelah update gateway, Hermes Desktop, dan sesi "
-  "panjang masih memakai pelacak lama; doctor lalu memberi WARN " + C("session tracker 4.0.0 is not loaded yet by: ...")
+  "panjang masih memakai pelacak lama; doctor lalu memberi WARN " + C("session tracker 4.0.1 is not loaded yet by: ...")
   + " beserta restart yang dibutuhkan masing-masing. Token tanpa nama bot dalam setengah jam terakhir berarti "
   + C("account-pool-tracker") + " 1.2.0 atau lebih lama masih berjalan. Untuk akun parkir, doctor memberi WARN bila "
   "Hermes memasukkannya lagi ke rotasi, bila akunnya keluar dari pool, bila Hermes menahan akun sebagai parkir "
@@ -1939,6 +1939,9 @@ table([
 H1("19. Riwayat versi")
 table([
     ["Versi", "Perubahan"],
+    ["4.0.1", "Perintah pertama setelah update dari 3.x (misalnya " + C("list") + ") kini memuat pool Hermes "
+     "setelah file parkir 3.x dipindahkan, jadi akun yang dipindah tidak lagi tampil sebagai " + C("no longer in the pool")
+     + " pada putaran itu."],
     ["4.0.0", "Plugin tidak lagi memegang login sendiri (aturan katalog 11). Akun parkir tetap di pool Hermes, "
      "ditahan di luar rotasi (" + C("mark_exhausted_and_rotate") + ", alasan " + C("parked") + "; unpark = "
      + C("reset_status") + "); daftar parkir " + C("account-pool-parking.json") + " tanpa token; file parkir 3.x "

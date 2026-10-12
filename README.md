@@ -2,7 +2,7 @@
 
 Run several accounts of one provider in [Hermes Agent](https://hermes-agent.nousresearch.com/docs) and manage them from one command, `hermes account`, or from an Accounts page in Hermes Desktop. Add accounts with a verified email, see live usage per account, spread the load before an account runs out, start an idle account's 5-hour window early, park accounts for a while or on a weekly schedule, see which bot is on which account and how many tokens each bot uses, mask the emails for a screenshot, and get an alert or a daily summary.
 
-Version 4.0.0 · MIT · Hermes Agent ≥ 0.21.6 · Linux or Windows 10/11 · Indonesian PDF guide in [`docs/`](docs/hermes-account-pool.pdf)
+Version 4.0.1 · MIT · Hermes Agent ≥ 0.21.6 · Linux or Windows 10/11 · Indonesian PDF guide in [`docs/`](docs/hermes-account-pool.pdf)
 
 ![The Accounts page in Hermes Desktop: eight accounts in rotation with their 5-hour usage, the bots on each account, two parked accounts with their reset times, two park schedules and the forecast](docs/screenshots/accounts.png)
 
@@ -161,7 +161,7 @@ Each one is in the [Security and privacy disclosure](#security-and-privacy-discl
 $ hermes account anthropic setup --timer
 [anthropic] Setup: the default profile and 2 other profile(s) in /home/you/.hermes
   Accounts page    backend listed in 0 of 2 other profile(s)
-  Session tracking 4.0.0, active in 1 of 3 profile(s)
+  Session tracking 4.0.1, active in 1 of 3 profile(s)
   Balance timer    not installed
   Rotation         fill_first in all 3 profile(s)
 Changes:
@@ -270,7 +270,7 @@ hermes account anthropic doctor
 ```
 [anthropic] Setup: the default profile and 2 other profile(s) in /home/you/.hermes
   Accounts page    backend listed in 2 of 2 other profile(s)
-  Session tracking 4.0.0, active in 1 of 3 profile(s)
+  Session tracking 4.0.1, active in 1 of 3 profile(s)
   Balance timer    runs every provider with accounts (now: anthropic), active
   Rotation         fill_first in all 3 profile(s)
 Changes:
@@ -733,7 +733,7 @@ $ hermes account anthropic doctor
   OK    strategy fill_first in 6 profiles
   OK    every profile uses the shared account pool
   OK    session tracking active in every profile
-  OK    running sessions count with session tracking 4.0.0
+  OK    running sessions count with session tracking 4.0.1
   OK    Accounts page backend enabled in every profile
   OK    account-pool-parking.json permissions 600
   OK    balance timer active, last run 2026-10-10 18:36:09 WIB
@@ -744,7 +744,7 @@ $ hermes account anthropic doctor
   0 failure(s), 0 warning(s).
 ```
 
-Run it after installing, after a Hermes update, or when bots behave oddly. Every FAIL or WARN line includes the fix. A process loads the session tracker when it starts, so after an update the gateway, Hermes Desktop and long sessions keep the old one; doctor then warns `session tracker 4.0.0 is not loaded yet by: the gateway (...); Hermes Desktop (...)` with the restart each one needs. Tokens without a bot name in the last half hour mean an `account-pool-tracker` 1.2.0 or older is still running. For parked accounts it warns when Hermes has one in rotation again, when one left the pool, when Hermes holds an account as parked that the park list does not name, and when a park without an end time has no balance timer to renew it. For Telegram it warns when the bot has no home channel. A leftover `account-pool-tracker` from 3.x is a WARN with `Fix: hermes account <provider> setup`. A profile on another strategy is a FAIL (`Fix: hermes account <provider> strategy fill_first`); a value Hermes does not know is only a WARN, because Hermes then uses `fill_first`. Exit code 1 when there is a FAIL. For a provider with no accounts it says `not in use, nothing to check`.
+Run it after installing, after a Hermes update, or when bots behave oddly. Every FAIL or WARN line includes the fix. A process loads the session tracker when it starts, so after an update the gateway, Hermes Desktop and long sessions keep the old one; doctor then warns `session tracker 4.0.1 is not loaded yet by: the gateway (...); Hermes Desktop (...)` with the restart each one needs. Tokens without a bot name in the last half hour mean an `account-pool-tracker` 1.2.0 or older is still running. For parked accounts it warns when Hermes has one in rotation again, when one left the pool, when Hermes holds an account as parked that the park list does not name, and when a park without an end time has no balance timer to renew it. For Telegram it warns when the bot has no home channel. A leftover `account-pool-tracker` from 3.x is a WARN with `Fix: hermes account <provider> setup`. A profile on another strategy is a FAIL (`Fix: hermes account <provider> strategy fill_first`); a value Hermes does not know is only a WARN, because Hermes then uses `fill_first`. Exit code 1 when there is a FAIL. For a provider with no accounts it says `not in use, nothing to check`.
 
 ### setup
 

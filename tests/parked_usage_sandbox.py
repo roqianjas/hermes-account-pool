@@ -320,6 +320,20 @@ check([p["label"] for p in parked_file() if p["label"] in ("dave@example.com", "
       and "fake-" not in PARKED.read_text() and "dave@example.com" in out and "parked (2)" in out,
       "the park list names dave without a token; list shows him parked")
 check(any("moved into Hermes' pool" in a["text"] for a in core._read_activity(P, 0)), "the move is in the activity log")
+check("no longer in the pool" not in out, "list right after the move sees the moved account in the pool")
+
+# the timer's balance is often the first command after the update: it must keep the moved park
+LEGACY.write_text(json.dumps({"version": 1, "parked": [
+    {"_provider": P, "id": "fr0001", "label": "frank@example.com", "auth_type": "oauth", "priority": 7,
+     "source": "manual:hermes_pkce", "access_token": "fake-at-frank", "refresh_token": "fake-rt-frank",
+     "expires_at_ms": FAR, "_parked_at": time.time() - 600, "_parked_at_h": "earlier", "_by": "cli"}]}))
+LEGACY.chmod(0o600)
+rc, out = run("balance", threshold=90.0)
+frank = entry("frank@example.com")
+check(not LEGACY.exists() and frank is not None and core._park_mark(frank)
+      and "frank@example.com" in [p["label"] for p in parked_file()]
+      and "frank@example.com" not in [e.label for e in core._rotation(P)] and "no longer in the pool" not in out,
+      "balance as the first command after the update keeps the moved park")
 
 print(f"\n{len(failures)} failure(s)")
 sys.exit(1 if failures else 0)
