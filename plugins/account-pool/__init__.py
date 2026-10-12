@@ -276,16 +276,23 @@ def _history_path() -> Path:
     return _root() / "account-pool-history.jsonl"
 
 
-def _record_history(provider: str, known) -> None:
+def _record_history(provider: str, known, parked=()) -> None:
+    """Append one snapshot of the usage read this run. Parked accounts are read too (their window keeps
+    running, and other apps may still use them) and listed under "parked", so the pool's own numbers
+    (report, forecast, chart, daily summary) leave them out: see _pool_usage."""
     path = _history_path()
     known = [(e, u) for e, u in known if e.label not in _CACHED]     # never re-record a cached value
-    if not known:
+    parked = [(e, u) for e, u in parked if e.label not in _CACHED]
+    if not known and not parked:
         return
+    both = known + parked
     rec = {"ts": round(time.time()), "provider": provider,
-           "usage": {e.label: u[0] for e, u in known},
-           "reset": {e.label: u[1] for e, u in known}}
+           "usage": {e.label: u[0] for e, u in both},
+           "reset": {e.label: u[1] for e, u in both}}
+    if parked:
+        rec["parked"] = [e.label for e, _ in parked]
     win = {}
-    for e, u in known:
+    for e, u in both:
         w = _WINDOW.get((provider, e.label))
         if w and (w[0], w[1]) != (u[0], u[1]):
             win[e.label] = [w[0], w[1]]
@@ -303,6 +310,13 @@ def _record_history(provider: str, known) -> None:
         with os.fdopen(fd, "w") as fh:
             fh.write("\n".join(keep) + "\n")
         os.replace(tmp, path)
+
+
+def _pool_usage(rec: dict) -> dict:
+    """A snapshot's usage of the accounts that were in rotation (parked readings left out)."""
+    usage = rec.get("usage") or {}
+    skip = rec.get("parked")
+    return {k: v for k, v in usage.items() if k not in skip} if skip else usage
 
 
 def _load_line_ts(line: str) -> float:
@@ -681,7 +695,7 @@ def _quiet_day(provider: str, hours: float = 24) -> bool:
         return False
     since = time.time() - hours * 3600
     if _has_usage(provider) and any((v or 0) > 0 for h in _read_history(provider, since)
-                                    for v in (h.get("usage") or {}).values()):
+                                    for v in _pool_usage(h).values()):
         return False
     return not _report_data(provider, hours)["tokens_total"]["requests"]
 
@@ -1142,7 +1156,6 @@ def _usage_rows(provider: str) -> list:
     Each row: label, id, state (see _entry_state, or PARKED), parked, usage = (percent, reset_epoch,
     detail) or None, and note = why usage is missing ("dead" for a parked account whose login died).
     """
-    from types import SimpleNamespace
     pool = _pool(provider)
     rows = []
     for e in sorted(pool.entries(), key=lambda x: x.priority):
@@ -1156,11 +1169,32 @@ def _usage_rows(provider: str) -> list:
         row = {"label": item.get("label", "?"), "id": item.get("id"), "state": "PARKED", "parked": True,
                "usage": None, "note": "dead"}
         if not item.get("_dead"):
-            ent = SimpleNamespace(access_token=item.get("access_token"), auth_type=item.get("auth_type"))
-            row["usage"] = _usage_full(provider, ent)
+            row["usage"] = _usage_full(provider, _parked_entry(item))
             row["note"] = "" if row["usage"] else _usage_reason(provider)
         rows.append(row)
     return rows
+
+
+def _parked_entry(item: dict):
+    """A parked record as the minimal entry the adapters read (the label keys the 5-hour window)."""
+    from types import SimpleNamespace
+    return SimpleNamespace(label=item.get("label", "?"), id=item.get("id"), access_token=item.get("access_token"),
+                           auth_type=item.get("auth_type"))
+
+
+def _parked_usage(provider: str) -> list:
+    """(entry, (percent, reset)) of every parked account whose usage could be read, for the history.
+    Expired tokens are refreshed first; accounts whose sign-in died are skipped. Reading costs no quota."""
+    out = []
+    for item in [p for p in _read_parked() if p["_provider"] == provider and not p.get("_dead")]:
+        item = _refresh_parked(provider, item)
+        if item.get("_dead"):
+            continue
+        ent = _parked_entry(item)
+        u = _usage(provider, ent)
+        if u is not None:
+            out.append((ent, u))
+    return out
 
 
 def _cmd_usage(args) -> int:
@@ -1383,9 +1417,21 @@ def _cmd_balance(args) -> int:
             e = _refresh_if_expired(provider, pool, e)
         rows.append((e, _usage(provider, e), None))
 
+    # Parked accounts: read for the page and the history only; they never change the order or the alerts.
+    parked_known = []
+    if not dry:
+        try:
+            parked_known = _parked_usage(provider)
+        except Exception as x:
+            actions.append(f"parked usage not read: {type(x).__name__}: {x}")
+
     known = [(e, u) for e, u, flag in rows if u is not None]
     if not known:
         if not dry:
+            try:
+                _record_history(provider, [], parked_known)
+            except Exception as x:
+                actions.append(f"history not written: {x}")
             try:
                 actions += _run_alerts(provider, pool, [])
             except Exception as x:
@@ -1452,7 +1498,7 @@ def _cmd_balance(args) -> int:
 
     if not dry:
         try:
-            _record_history(provider, known)
+            _record_history(provider, known, parked_known)
         except Exception as x:
             actions.append(f"history not written: {x}")
         try:
@@ -2255,7 +2301,7 @@ def _report_data(provider: str, hours: float) -> dict:
         return out
     series = defaultdict(list)
     for rec in hist:
-        for label, util in rec["usage"].items():
+        for label, util in _pool_usage(rec).items():
             series[label].append((rec["ts"], util))
     burn = defaultdict(float)
     hot = defaultdict(float)                      # minutes at/above 90%
@@ -2274,7 +2320,7 @@ def _report_data(provider: str, hours: float) -> dict:
         peak[label] = max(u for _, u in pts)
     full_min = 0.0
     for r1, r2 in zip(hist, hist[1:]):
-        if r2["ts"] - r1["ts"] <= 1200 and r1["usage"] and all(u >= 90 for u in r1["usage"].values()):
+        if r2["ts"] - r1["ts"] <= 1200 and _pool_usage(r1) and all(u >= 90 for u in _pool_usage(r1).values()):
             full_min += (r2["ts"] - r1["ts"]) / 60
     span = (hist[-1]["ts"] - hist[0]["ts"]) / 3600
     total = sum(burn.values())
@@ -2320,7 +2366,7 @@ def _forecast(provider: str, now: float = None, threshold: float = 90) -> dict:
         return out
     series = defaultdict(list)
     for rec in hist:
-        for label, util in (rec.get("usage") or {}).items():
+        for label, util in _pool_usage(rec).items():
             series[label].append((rec["ts"], float(util)))
     burn = 0.0
     for pts in series.values():
@@ -2381,7 +2427,7 @@ def _chart_data(provider: str, days: int = 7) -> dict:
 
     series = defaultdict(list)
     for rec in _read_history(provider, starts[0] - 1200):
-        for label, util in (rec.get("usage") or {}).items():
+        for label, util in _pool_usage(rec).items():
             series[label].append((rec["ts"], float(util)))
     for pts in series.values():
         for (t1, u1), (t2, u2) in zip(pts, pts[1:]):

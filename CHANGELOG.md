@@ -2,6 +2,16 @@
 
 All releases of the `account-pool` plugin and its session tracker `account-pool-tracker` (now 1.5.0).
 
+## 3.11.1
+
+Parked accounts keep their usage, reset time and trend on the page.
+
+- **The balance timer reads parked accounts too.** Until now it read only the accounts in rotation, so a parked account's usage stopped at the moment it was parked: no reset time, a flat or missing trend, and "window reset since" once the old reading expired. Its 5-hour window keeps running after parking, though (work done just before still counts), and other apps can still use the account. The timer now reads every parked account (a usage read is not a model request: no quota) and refreshes an expired parked token first, as the docs already said it did. Accounts whose sign-in died are skipped.
+- **History.** Parked readings go into the same snapshot, listed under `parked`. The report, forecast, hourly chart and daily summary leave them out (`_pool_usage`), so a parked account used by another app never shows up as Hermes' load, and a full rotation still counts as full while a parked account is low. Order, benching and alerts never saw parked accounts and still do not. When no account in rotation can be read, the parked readings are still written.
+- **Accounts page.** The parked table has the rotation table's columns: 5-hour usage, trend and **Resets** (`not started` once the window has ended). Hovering a trend, in either table, shows its range over the last 5 hours and the highest reading of the last 24 hours, so an account used this morning and parked since still shows its morning. The section line says the timer still reads its usage.
+- Live usage keeps a parked account's 5-hour window under its email, which the Codex window detection needs.
+- Tests: `tests/parked_usage_sandbox.py` (35 checks), UI 121.
+
 ## 3.11.0
 
 Wake starts an idle account's 5-hour window now, and email masking hides the account emails for screenshots.

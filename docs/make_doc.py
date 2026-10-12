@@ -16,7 +16,7 @@ from reportlab.platypus import (CondPageBreak, Image, KeepTogether, PageBreak, P
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 from reportlab.platypus.tableofcontents import TableOfContents
 
-VERSION = "3.11.0"
+VERSION = "3.11.1"
 REPO = "github.com/roqianjas/hermes-account-pool"
 FOOTER = f"Hermes plugin account-pool {VERSION} · {REPO}"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hermes-account-pool.pdf")
@@ -721,7 +721,13 @@ LI(["Park memindahkan akun beserta loginnya keluar dari pool ke " + C("account-p
     "Park bertanggal berakhir pada putaran timer pertama setelah waktunya (paling lambat 5 menit). Akun aktif "
     "terakhir tidak bisa diparkir.",
     "Contoh kegunaan: menyisakan kuota akun tertentu untuk Anda pakai sendiri di claude.ai, atau mengistirahatkan "
-    "akun yang mendekati limit mingguan. Untuk jam yang sama setiap minggu, pakai " + C("schedule") + " (7.7)."])
+    "akun yang mendekati limit mingguan. Untuk jam yang sama setiap minggu, pakai " + C("schedule") + " (7.7).",
+    "Jendela 5 jam akun yang diparkir tetap berjalan: pekerjaan sesaat sebelum diparkir tetap terhitung sampai "
+    "reset, dan aplikasi lain yang login ke akun itu masih bisa memakainya. Karena itu timer tetap membaca "
+    "pemakaiannya (membaca pemakaian bukan request model, tidak memakai kuota) dan me-refresh tokennya saat "
+    "kedaluwarsa. Halaman menampilkan pemakaian, jam reset, dan garis tren akun parkir seperti akun lain.",
+    "Angka ini tidak ikut angka pool (urutan, peringatan, laporan, perkiraan, grafik per jam, ringkasan harian), "
+    "karena yang memakai akun parkir bukan Hermes."])
 H2("7.7 schedule / unschedule", need=70)
 code("""
 $ hermes account anthropic schedule dave@example.com --every "mon-fri 09:00-17:00"
@@ -1034,8 +1040,8 @@ LI(["Agent di sebuah profil memuat plugin dari folder " + C("plugins/") + " mili
 P(C("doctor") + " memeriksa hal ini jika Hermes Desktop punya halamannya: " + C("Accounts page backend enabled in every profile")
   + ", atau peringatan berisi nama profil yang belum mencantumkannya.")
 H2("8.3 Isi halaman", need=120)
-shot("accounts", "Tab Accounts: delapan akun dalam rotasi beserta pemakaian 5 jam dan bot di tiap akun, satu akun "
-     "parkir, dua jadwal parkir, dan perkiraan. Semua akun di gambar adalah data contoh dari tes.")
+shot("accounts", "Tab Accounts: delapan akun dalam rotasi beserta pemakaian 5 jam dan bot di tiap akun, dua akun "
+     "parkir beserta jam resetnya, dua jadwal parkir, dan perkiraan. Semua akun di gambar adalah data contoh dari tes.")
 P("Header berisi pilihan provider, tombol mata untuk sensor email, tombol <b>Live usage</b>, <b>Wake</b>, <b>Balance now</b>, dan <b>Add account</b>. Baris di "
   "bawahnya menunjukkan umur angka pemakaian dan kapan timer jalan berikutnya.")
 table([
@@ -1045,12 +1051,13 @@ table([
      "tombol <b>Use fill_first</b>. Lima kartu: akun dalam rotasi, akun parkir, akun tempat sesi berikutnya mulai beserta pemakaiannya, "
      "jumlah sesi 30 menit terakhir, dan token 24 jam terakhir beserta harga API-nya. Kartu keenam adalah perkiraan "
      "(bagian 9): kapan semua akun ≥ 90% dengan laju satu jam terakhir. Lalu tabel rotasi sesuai urutan pool: status, bar "
-     "pemakaian 5 jam, garis tren 5 jam terakhir, jam reset (" + C("back HH:MM") + " saat diistirahatkan, " + C("not started") + " selama jendela tidak berjalan), "
+     "pemakaian 5 jam, garis tren 5 jam terakhir (arahkan kursor untuk rentangnya dan angka tertinggi 24 jam terakhir), jam reset (" + C("back HH:MM") + " saat diistirahatkan, " + C("not started") + " selama jendela tidak berjalan), "
      "token 24 jam terakhir (arahkan kursor untuk rincian input, output, cache, jumlah request, harga API, model utama, dan "
      "jendela 5 jam yang sedang berjalan), profil yang memakai akun itu "
      "(arahkan kursor untuk melihat sesi, platform, model, sejak kapan sesi itu di akun ini, dan akun asalnya bila pindah), serta tombol <b>Sign in again</b>, <b>Park</b>, "
      "<b>Park on a schedule</b>, <b>Remove</b>. Ikon kalender di sebelah akun menunjukkan jadwalnya. Di bawahnya akun "
-     "parkir: pemakaian terakhir, sejak kapan, kapan kembali (" + C("(schedule)") + " bila diparkir jadwal), tombol "
+     "parkir dengan kolom yang sama: pemakaian 5 jam, garis tren, dan jam reset (timer tetap membacanya; "
+     + C("not started") + " bila jendelanya sudah habis), sejak kapan, kapan kembali (" + C("(schedule)") + " bila diparkir jadwal), tombol "
      "<b>Unpark</b>, <b>Park on a schedule</b>, dan <b>Remove</b>. Lalu tabel jadwal parkir beserta keadaannya "
      "sekarang, dengan tombol ubah dan hapus. Peringatan aktif tampil sebagai banner di atas; akun mati mendapat tombol <b>Sign in again</b>, peringatan bot "
      "mendapat tombol <b>See sessions</b>. Banner info "
@@ -1345,8 +1352,9 @@ table([
      "model, dalam blok 15 menit, 8 hari terakhir. Hanya angka dan id sesi."],
     [C("~/.hermes/account-pool-activity.jsonl"), "Log aktivitas: apa yang diubah timer, perintah, dan halaman. 30 hari "
      "terakhir, izin 600."],
-    [C("~/.hermes/account-pool-history.jsonl"), "Riwayat pemakaian, satu snapshot per putaran timer. Dipangkas ke "
-     "14 hari terakhir saat file melewati 3 MB."],
+    [C("~/.hermes/account-pool-history.jsonl"), "Riwayat pemakaian, satu snapshot per putaran timer. Akun parkir "
+     "ikut dicatat dan ditandai " + C("parked") + "; laporan, perkiraan, grafik, dan ringkasan harian tidak "
+     "menghitungnya. Dipangkas ke 14 hari terakhir saat file melewati 3 MB."],
     [C("~/.hermes/account-pool-alerts.json"), "Peringatan yang sudah terkirim (satu pesan per kejadian)"],
     [C("~/.hermes/account-pool-state.json"), "Kapan ringkasan harian terakhir dikirim, jendela jadwal yang sudah "
      "dijalankan, dan wake terakhir tiap akun (waktu, model, atau alasan gagal)"],
@@ -1376,8 +1384,8 @@ table([
     ["Menulis kredensial", C("add") + ", " + C("relogin") + ", " + C("remove") + ", " + C("park") + ", " + C("unpark")
      + ", " + C("schedule") + ", dan " + C("balance") + " mengubah pool lewat API " + C("CredentialPool") + " milik "
      "Hermes atau " + C("hermes auth add/remove") + ". " + C("park") + " memindahkan entri beserta token OAuth-nya ke "
-     + C("account-pool-parked.json") + " (600, file lock); " + C("balance") + " me-refresh token akun parkir dengan "
-     "fungsi refresh Hermes sendiri. Login dari halaman memakai client id dan fungsi token Hermes."],
+     + C("account-pool-parked.json") + " (600, file lock); " + C("balance") + " membaca pemakaian akun parkir dan "
+     "me-refresh tokennya dengan fungsi refresh Hermes sendiri. Login dari halaman memakai client id dan fungsi token Hermes."],
     ["Request model", "Hanya untuk " + C("wake") + ": satu request dengan jawaban satu kata per wake. Anthropic "
      "lewat klien Hermes sendiri (" + C("build_anthropic_client") + ", identitas Claude Code yang dikirim Hermes di "
      "setiap request langganan); Codex lewat endpoint Responses dengan header " + C("codex_cli_rs") + ". Jalan saat "
@@ -1449,6 +1457,10 @@ table([
     ["Peringatan bot terlalu sering", "Batas bawah terlalu rendah untuk beban Anda", C("notify bots=30") + " (atau "
      + C("bots-off") + "); lihat " + C("sessions --hours 1") + " dulu"],
     ["Akun " + C("--until") + " tidak kembali", "Timer mati", C("hermes account &lt;provider&gt;") + "<br/>" + C("setup --timer")],
+    ["Akun parkir tanpa jam reset, garis trennya datar", "Sebelum 3.11.1 timer tidak membaca akun parkir. Di "
+     "3.11.1 putaran timer berikutnya mengisinya. Garis datar di 0% dengan " + C("not started") + " berarti "
+     "jendelanya sudah habis; arahkan kursor ke garis untuk angka tertinggi 24 jam terakhir",
+     "Tunggu putaran timer berikutnya (5 menit) atau tekan <b>Live usage</b>"],
     ["Jadwal tidak memarkir akunnya", "Timer mati, akun itu akun aktif terakhir, atau Anda meng-unpark di tengah jendela",
      C("hermes account anthropic schedule") + " menampilkan keadaan tiap jadwal"],
     ["Ringkasan harian tidak datang", "Timer mati, tidak ada saluran aktif, dinyalakan setelah jamnya hari ini, atau "
@@ -1644,6 +1656,11 @@ table([
 H1("19. Riwayat versi")
 table([
     ["Versi", "Perubahan"],
+    ["3.11.1", "Timer juga membaca akun yang diparkir (tanpa kuota) dan me-refresh tokennya, jadi halaman "
+     "menampilkan pemakaian, jam reset, dan garis tren akun parkir. Tabel parkir punya kolom <b>Resets</b> ("
+     + C("not started") + " bila jendela sudah habis); tooltip garis tren menunjukkan angka tertinggi 24 jam "
+     "terakhir. Riwayat menandai bacaan parkir dengan " + C("parked") + ", dan laporan, perkiraan, grafik, serta "
+     "ringkasan harian tidak menghitungnya. Tes baru " + C("tests/parked_usage_sandbox.py") + "."],
     ["3.11.0", C("wake") + " memulai jendela 5 jam akun yang menganggur dengan satu request kecil (Anthropic: "
      + C("claude-haiku-4-5") + ", satu token output; Codex: model terkecil akun itu), dengan target, " + C("--dry-run")
      + ", " + C("status") + ", dan " + C("model=") + ". " + C("wake auto-on") + ": timer menjaga jendela tetap "

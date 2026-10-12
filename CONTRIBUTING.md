@@ -12,7 +12,7 @@ Bug reports, fixes and adapters for more providers are welcome. This page covers
 | `plugins/account-pool/desktop/plugin.js` | The Accounts page in Hermes Desktop (one ES module, no build step) |
 | `plugins/account-pool/dashboard/plugin_api.py` | The page's backend: FastAPI routes under `/api/plugins/account-pool/` |
 | `plugins/account-pool/dashboard/manifest.json` | Tells Hermes to mount `plugin_api.py`; `dist/index.js` is a stub for the browser dashboard |
-| `tests/api_sandbox.py`, `tests/profile_backend.py`, `tests/tokens_sandbox.py`, `tests/features_sandbox.py`, `tests/insights_sandbox.py`, `tests/setup_sandbox.py`, `tests/codex_sandbox.py`, `tests/wake_privacy_sandbox.py`, `tests/ui/` | Backend tests in a sandbox (actions and the page's sign-ins, Codex browser and device code included; backend launched under a profile; token counting; the tracker check, tokens per session, bot alerts, the activity log and the forecast; tokens per bot and model, API prices, the hour chart, the daily summary and park schedules; `setup`, the terminal's Codex sign-in and the refusals without a terminal; Codex identity, usage, park, parked-token refresh and balance; the timer's `all balance` and the daily summary of an idle provider; `wake` and automatic wake for both providers, email masking in the output, alerts and routes), and the page in jsdom |
+| `tests/api_sandbox.py`, `tests/profile_backend.py`, `tests/tokens_sandbox.py`, `tests/features_sandbox.py`, `tests/insights_sandbox.py`, `tests/setup_sandbox.py`, `tests/codex_sandbox.py`, `tests/wake_privacy_sandbox.py`, `tests/parked_usage_sandbox.py`, `tests/ui/` | Backend tests in a sandbox (actions and the page's sign-ins, Codex browser and device code included; backend launched under a profile; token counting; the tracker check, tokens per session, bot alerts, the activity log and the forecast; tokens per bot and model, API prices, the hour chart, the daily summary and park schedules; `setup`, the terminal's Codex sign-in and the refusals without a terminal; Codex identity, usage, park, parked-token refresh and balance; the timer's `all balance` and the daily summary of an idle provider; `wake` and automatic wake for both providers, email masking in the output, alerts and routes), and the page in jsdom |
 | `tests/ui/fixture_api.py`, `tests/ui/screenshots.mjs` | A backend that answers from `tests/ui/fixtures.json`, and the script that takes `docs/screenshots/` from a Hermes Desktop running it |
 | `plugins/account-pool-tracker/` | The `post_api_request` hook behind `who`, with its own `README.md` |
 | `install.sh`, `uninstall.sh` | Install and remove from a git checkout. `install.sh` copies the plugins and runs `hermes account <provider> setup --yes`; the systemd units are written by `setup` (`_write_timer`) |
@@ -178,6 +178,11 @@ rm -rf "$SB"
 # (own sandbox; fake usage, a fake Hermes Anthropic client and a fake Codex endpoint, nothing is sent)
 SB=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" hap-sandbox.XXXX)
 HERMES_HOME=$SB ~/.hermes/hermes-agent/venv/bin/python tests/wake_privacy_sandbox.py
+rm -rf "$SB"
+
+# parked accounts: the timer reads them, the history marks them, the pool's numbers leave them out
+SB=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" hap-sandbox.XXXX)
+HERMES_HOME=$SB ~/.hermes/hermes-agent/venv/bin/python tests/parked_usage_sandbox.py
 rm -rf "$SB"
 
 # the page in jsdom, every tab, dialog and button, answered from tests/ui/fixtures.json

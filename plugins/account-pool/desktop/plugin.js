@@ -267,6 +267,7 @@ const CSS = `
 .hap-pct{min-width:34px;text-align:right;font-variant-numeric:tabular-nums;color:var(--ui-text-primary)}
 .hap-tag{font-size:.625rem;color:var(--ui-text-tertiary);white-space:nowrap}
 .hap-spark polyline{fill:none;stroke:var(--ui-text-tertiary);stroke-width:1.2}
+.hap-spark-cell{display:inline-flex;align-items:center;min-width:60px;min-height:16px;cursor:default}
 .hap-chip{display:inline-block;border:1px solid var(--ui-stroke-secondary);border-radius:999px;padding:0 6px;font-size:.625rem;margin:1px 3px 1px 0;color:var(--ui-text-secondary);white-space:nowrap}
 .hap-actions{display:flex;justify-content:flex-end;gap:2px;opacity:.6}
 .hap-table tr:hover .hap-actions{opacity:1}
@@ -316,6 +317,21 @@ function Spark({ points, now }) {
     .join(' ')
   return h('svg', { className: 'hap-spark', width: w, height: ht, viewBox: `0 0 ${w} ${ht}`, 'aria-hidden': true },
     h('polyline', { points: pts }))
+}
+
+// The sparkline with what it cannot show at 16 px: the range of the last 5 hours and the day's highest reading
+// (an account used this morning and parked since is flat now, but its morning is in the tooltip).
+function SparkCell({ points, peak, now }) {
+  const seen = points && points.length >= 2
+  if (!seen && !peak) return null
+  const vals = seen ? points.map(p => p[1]) : []
+  const label = [
+    seen ? `Last 5 hours: ${Math.round(vals[0])}% to ${Math.round(vals[vals.length - 1])}%, highest ${Math.round(Math.max(...vals))}%.`
+      : 'No reading in the last 5 hours.',
+    peak ? `Highest in the last 24 hours: ${Math.round(peak.pct)}% at ${hhmm(peak.ts)}.` : 'Nothing used in the last 24 hours.'
+  ].join('\n')
+  return h(MTip, { label }, h('span', { className: 'hap-spark-cell', 'data-spark': seen ? 'line' : 'none', 'aria-label': label },
+    seen ? h(Spark, { points, now }) : h('span', { className: 'hap-tag' }, '–')))
 }
 
 function UsageCell({ usage, parked, now }) {
@@ -900,7 +916,7 @@ function AccountsView({ data, provider, openDialog }) {
               h(Badge, { variant: r.state === 'DEAD' ? 'destructive' : 'warn' }, st.text)) : null,
             h(SchedChip, { s: schedOf(r.label) }))),
           h('td', null, h(UsageCell, { usage: r.usage, now })),
-          h('td', null, h(Spark, { points: r.spark, now })),
+          h('td', null, h(SparkCell, { points: r.spark, peak: r.peak, now })),
           h('td', { className: 'hap-num' },
             r.back_at ? h(MTip, { label: 'Back in rotation at this time' }, h('span', null, `back ${hhmm(r.back_at)}`))
               : r.window && r.window.idle && r.state === 'active'
@@ -923,11 +939,13 @@ function AccountsView({ data, provider, openDialog }) {
         h('div', { className: 'hap-section' }, 'Parked', h('span', { className: 'hap-pill' }, data.parked.length),
           h('span', { className: 'hap-grow' }),
           h('span', { className: 'hap-tag', style: { textTransform: 'none', letterSpacing: 0, fontWeight: 400 } },
-            'Not used by Hermes. The login is kept.')),
+            data.has_usage ? 'Not used by Hermes. The login is kept, and the balance timer still reads its usage.'
+              : 'Not used by Hermes. The login is kept.')),
         h('table', { className: 'hap-table' },
           h('thead', null, h('tr', null,
-            h('th', { style: { width: 28 } }, ''), h('th', null, 'Account'), h('th', null, 'Last known usage'),
-            h('th', null, ''), h('th', null, 'Parked'), h('th', { className: 'hap-num' }, 'Tokens, 24 h'), h('th', null, 'Returns'), h('th', { style: { width: 96 } }, ''))),
+            h('th', { style: { width: 28 } }, ''), h('th', null, 'Account'),
+            h('th', null, data.has_usage ? `${data.window} usage` : 'Usage'), h('th', null, ''), h('th', null, 'Resets'),
+            h('th', null, 'Parked'), h('th', { className: 'hap-num' }, 'Tokens, 24 h'), h('th', null, 'Returns'), h('th', { style: { width: 96 } }, ''))),
           h('tbody', null, data.parked.map(p => h('tr', { key: p.id },
             h('td', null, ''),
             h('td', null, h('div', { className: 'hap-acc' },
@@ -936,7 +954,12 @@ function AccountsView({ data, provider, openDialog }) {
                 h(Badge, { variant: 'destructive' }, 'sign-in expired')) : null,
               h(SchedChip, { s: schedOf(p.label) }))),
             h('td', null, h(UsageCell, { usage: p.usage, parked: true, now })),
-            h('td', null, h(Spark, { points: p.spark, now })),
+            h('td', null, h(SparkCell, { points: p.spark, peak: p.peak, now })),
+            h('td', { className: 'hap-num' },
+              p.window && p.window.idle && !p.dead
+                ? h(MTip, { label: 'The 5-hour window is not running: it starts with the first request after the account is unparked.' },
+                  h('span', { className: 'hap-tag', 'data-window': 'idle' }, 'not started'))
+                : hhmm(p.usage && p.usage.pct != null ? p.usage.reset : null)),
             h('td', { className: 'hap-num' }, hhmm(p.since)),
             h('td', { className: 'hap-num' }, h(TokensCell, { tokens: p.tokens, window: data.window })),
             h('td', { className: 'hap-num' }, p.until

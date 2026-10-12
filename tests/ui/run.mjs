@@ -147,6 +147,23 @@ const rows = document.querySelectorAll('.hap-table')[0].querySelectorAll('tbody 
 ok(rows.length === status.rotation.length, `rotation table has ${rows.length} rows`)
 const parkedRows = document.querySelectorAll('.hap-table')[1]?.querySelectorAll('tbody tr') || []
 ok(parkedRows.length === status.parked.length, `parked table has ${parkedRows.length} rows`)
+{
+  // parked accounts: the timer still reads them, so they show their reset and their day
+  const ptable = document.querySelectorAll('.hap-table')[1]
+  const heads = [...ptable.querySelectorAll('thead th')].map(t => t.textContent)
+  const col = heads.indexOf('Resets')
+  ok(col > 0 && heads.includes('5-hour usage'), `parked table has a Resets column (${heads.filter(Boolean).join(', ')})`)
+  const cell = (row, i) => row.querySelectorAll('td')[i].textContent
+  const [ivanRow, judyRow] = parkedRows
+  ok(/\d{2}:\d{2}/.test(cell(ivanRow, col)), `a parked account mid-window shows when it resets (${cell(ivanRow, col)})`)
+  ok(cell(judyRow, col) === 'not started', 'a parked account whose window ended reads "not started"')
+  const tip = row => row.querySelector('.hap-spark-cell')?.getAttribute('aria-label') || ''
+  ok(tip(ivanRow).startsWith('Last 5 hours: 5% to 29%, highest 29%.'), `the parked sparkline tells the 5 hours: ${tip(ivanRow).split('\n')[0]}`)
+  ok(/Highest in the last 24 hours: 48% at [^\n]*\d{2}:\d{2}[^\n]*\.$/.test(tip(judyRow)) && judyRow.querySelector('svg.hap-spark'),
+    'a flat parked sparkline still tells the day\'s highest reading')
+  ok(tip(rows[0]).includes('Highest in the last 24 hours: 10%'), 'rotation sparklines carry the same tooltip')
+  ok(screen.getByText(/the balance timer still reads its usage/), 'the parked section says its usage is still read')
+}
 ok(within(rows[0]).getByText(status.rotation[0].label), 'first account label shown')
 ok(document.querySelectorAll('.hap-bar').length >= status.rotation.filter(r => r.usage && r.usage.pct != null).length, 'usage bars drawn')
 ok(document.querySelectorAll('svg.hap-spark').length > 0, 'sparklines drawn')

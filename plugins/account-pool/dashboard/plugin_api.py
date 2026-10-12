@@ -223,13 +223,15 @@ def _status(provider: str) -> dict:
     now = time.time()
 
     hist = _history_tail(provider, 24) if ad.has_usage else []
-    snap, spark = {}, {}
+    snap, spark, peak = {}, {}, {}
     for rec in hist:                                   # oldest -> newest: the last write wins
         for label, pct in (rec.get("usage") or {}).items():
             snap[label] = {"pct": float(pct), "reset": (rec.get("reset") or {}).get(label), "ts": rec["ts"],
                            "source": "timer", "win": (rec.get("win") or {}).get(label)}
             if rec["ts"] >= now - SPARK_HOURS * 3600:
                 spark.setdefault(label, []).append([rec["ts"], float(pct)])
+            if float(pct) > 0 and float(pct) >= peak.get(label, {}).get("pct", 0):
+                peak[label] = {"pct": float(pct), "ts": rec["ts"]}    # the highest reading of the last 24 h
     live = _LIVE.get(provider)
     if live and now - live["ts"] < 900:
         for row in live["rows"]:
@@ -283,7 +285,8 @@ def _status(provider: str) -> dict:
             "pos": pos, "id": e.id, "label": e.label, "state": state, "auth": getattr(e, "auth_type", ""),
             "problems": core._problems(provider, e, None),
             "back_at": getattr(e, "last_error_reset_at", None) if state in ("BENCHED", "LIMITED") else None,
-            "usage": usage_for(e.label), "spark": spark.get(e.label, []), "sessions": by_label.get(e.label, []),
+            "usage": usage_for(e.label), "spark": spark.get(e.label, []), "peak": peak.get(e.label),
+            "sessions": by_label.get(e.label, []),
             "window": window_for(e.label) if ad.has_usage else None, "woke": woke.get(e.id),
         })
         rotation[-1]["tokens"] = tokens_for(e.label, rotation[-1]["usage"])
@@ -291,6 +294,8 @@ def _status(provider: str) -> dict:
         "id": p.get("id"), "label": p.get("label", "?"), "since": p.get("_parked_at"),
         "until": p.get("_until"), "dead": bool(p.get("_dead")), "auth": p.get("auth_type", ""), "by": p.get("_by"),
         "usage": usage_for(p.get("label", "?")), "spark": spark.get(p.get("label", "?"), []),
+        "peak": peak.get(p.get("label", "?")),
+        "window": window_for(p.get("label", "?")) if ad.has_usage else None,
     } for p in parked]
     for row in parked_rows:
         row["tokens"] = tokens_for(row["label"], row["usage"])
