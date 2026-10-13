@@ -232,14 +232,20 @@ table([
     [C("-h") + ", " + C("--help"), "Tampilkan opsi."],
 ], [0.26, 0.74])
 H2("4.2 Instalasi dengan hermes plugins install")
-P("Folder yang sama, langsung dari repo ini, tanpa salinan git:")
+P(C("account-pool") + " sudah ada di katalog plugin Hermes, jadi cukup sebut namanya:")
+code("""
+hermes plugins install account-pool --enable
+hermes account anthropic setup --timer --strategy
+""")
+P("Katalog memasang versi yang sudah direview pengelolanya (sekarang 4.0.1), dan "
+  + C("hermes plugins update account-pool") + " ikut naik setelah entri katalog dipindah ke rilis baru. Untuk "
+  "mengikuti " + C("main") + " repo ini, pasang langsung dari GitHub:")
 code("""
 hermes plugins install roqianjas/hermes-account-pool#plugins/account-pool --enable
-hermes account anthropic setup --timer --strategy
 """)
 P("Jalankan di profil default (tanpa " + C("-p") + "): perintahnya ada di sana, dan " + C("setup") + " menautkan "
   "plugin dari sana ke profil lain, supaya pelacak sesinya jalan di setiap profil.")
-P("Hermes memindai plugin dari GitHub sebelum memasangnya, dan berhenti bila ada temuan. Untuk "
+P("Kedua cara mengunduh plugin dari GitHub. Hermes memindainya sebelum memasang, dan berhenti bila ada temuan. Untuk "
   + C("account-pool") + " ada 16 temuan, semuanya memang bagian dari cara kerja plugin:")
 LI(["15 panggilan " + C("subprocess") + ": " + C("notify-send") + " (notifikasi desktop di Linux), "
     + C("hermes send") + " (peringatan Telegram), " + C("systemctl --user") + " lima kali (status timer untuk "
@@ -260,7 +266,8 @@ H2("Katalog plugin Hermes")
 P("Katalog plugin Hermes hanya memuat plugin yang tidak pernah memegang login sendiri: token OAuth dan API key "
   "tetap di Hermes (aturan katalog 11). Sampai 3.13, " + C("account-pool") + " menyimpan login akun parkir di file "
   "sendiri dan menjalankan login dengan kodenya sendiri, jadi hanya bisa dipasang dari repo ini. Versi 4.0 "
-  "menyerahkan semua itu ke Hermes dan sudah diajukan ke katalog:")
+  "menyerahkan semua itu ke Hermes, dan katalog memuatnya sejak 13 Oktober 2026 dengan pin 4.0.1 (PR "
+  "NousResearch/hermes-agent#136665):")
 table([
     ["Fitur", "Cara kerjanya sejak 4.0"],
     [C("park") + ", " + C("unpark") + " dan jadwal", "Akun tetap di pool Hermes. Plugin meminta pool Hermes "
@@ -281,8 +288,10 @@ table([
     ["Pelacak sesi", "Bagian dari " + C("account-pool") + " (hook " + C("post_api_request") + "), bukan plugin kedua "
      "lagi."],
 ], [0.30, 0.70])
-P("Yang masih dilakukan plugin dengan token tercantum di bagian pengungkapan keamanan (bagian 13). Selama "
-  "katalog belum memuatnya, pasang dari repo ini seperti di atas.")
+P("Yang masih dilakukan plugin dengan token tercantum di bagian pengungkapan keamanan (bagian 13). Pasang dengan "
+  + C("hermes plugins install account-pool") + " (bagian 4.2). Dua perubahan di Hermes akan membuat plugin makin "
+  "sedikit memegang token: status \"parkir\" bawaan di credential pool, dan request lewat satu entri pool yang "
+  "dipilih. Keduanya diusulkan di issue NousResearch/hermes-agent#137237.")
 H2("4.3 Yang dikerjakan setup", need=70)
 code("""
 $ hermes account anthropic setup --timer

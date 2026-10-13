@@ -4,6 +4,7 @@ All releases of the `account-pool` plugin. Up to 3.13 its session tracker was a 
 
 ## 4.0.1
 
+- Listed in the Hermes plugin catalog on 13 October 2026, pinned at 4.0.1 (NousResearch/hermes-agent#136665): `hermes plugins install account-pool`. README and PDF show the catalog install first.
 - The move from 3.x: the first command after the update loaded Hermes' pool before it moved the accounts from `account-pool-parked.json` in, so in that one run it did not see them. `list` showed them as `(no longer in the pool)`; the next command showed them parked. Every command now loads the pool after the move. Nothing was lost: Hermes' pool writes keep entries a command did not load. Found while updating a real install.
 - Tests: `parked_usage_sandbox` 42 → 44 (`list` right after the move, `balance` as the first command after the update); 493 checks in total, UI 140.
 

@@ -139,16 +139,22 @@ Everything else, the commands and the Accounts page included, is the same.
 
 ### Install with `hermes plugins install`
 
-The same folder, straight from this repository, without a git checkout:
+`account-pool` is in the [Hermes plugin catalog](#hermes-plugin-catalog), so its name is enough:
+
+```bash
+hermes plugins install account-pool --enable
+hermes account anthropic setup --timer --strategy
+```
+
+The catalog installs the version its maintainers reviewed (now 4.0.1), and `hermes plugins update account-pool` moves on when the catalog entry moves to a newer release. To follow this repository's `main` instead, install from GitHub:
 
 ```bash
 hermes plugins install roqianjas/hermes-account-pool#plugins/account-pool --enable
-hermes account anthropic setup --timer --strategy
 ```
 
 Run them in the default profile (without `-p`): the command lives there, and `setup` links the plugin from there into the other profiles, so its session tracker runs in every profile ([What setup does](#what-setup-does)).
 
-Hermes scans a plugin from GitHub before it installs it, and stops when the scan has findings. For `account-pool` it reports 16, all expected:
+Both ways download the plugin from GitHub. Hermes scans it before it installs it, and stops when the scan has findings. For `account-pool` it reports 16, all expected:
 
 - 15 `subprocess` calls: `notify-send` (desktop alerts on Linux), `hermes send` (Telegram alerts), `systemctl --user` five times (timer state for `doctor` and the page, `setup --timer` on Linux), `schtasks` and Windows PowerShell in `winsys.py` (the timer and desktop alerts on Windows), `hermes config set` (the fallback for `strategy` and `setup` when Hermes' own config writer cannot be imported), `hermes auth add` twice (`add` and `relogin` in a terminal; **Add account** and **Sign in again** on the page, in `signin.py`), `taskkill` (stops a cancelled page sign-in on Windows), `hermes auth remove` (`remove`), and `hermes plugins remove account-pool-tracker` (`setup`, once, on an update from 3.x);
 - 1 read of `/proc/self/cgroup`, to know whether the process is the timer's service (Linux only).
@@ -244,7 +250,7 @@ It removes the timer, the plugin (the Accounts page included), its links in the 
 
 ## Hermes plugin catalog
 
-The [Hermes plugin catalog](https://hermes-agent.nousresearch.com/docs/developer-guide/plugins) lists plugins that never hold a login themselves: OAuth tokens and API keys stay with Hermes (catalog rule 11). Up to 3.13 `account-pool` kept parked accounts' logins in a file of its own and ran sign-ins in its own code, so it was installed from this repository only. Version 4.0 hands all of that to Hermes and has been submitted to the catalog:
+The [Hermes plugin catalog](https://hermes-agent.nousresearch.com/docs/developer-guide/plugins) lists plugins that never hold a login themselves: OAuth tokens and API keys stay with Hermes (catalog rule 11). Up to 3.13 `account-pool` kept parked accounts' logins in a file of its own and ran sign-ins in its own code, so it was installed from this repository only. Version 4.0 hands all of that to Hermes. The catalog listed it on 13 October 2026, pinned at 4.0.1 ([NousResearch/hermes-agent#136665](https://github.com/NousResearch/hermes-agent/pull/136665)):
 
 | Feature | How it works since 4.0 |
 |---|---|
@@ -255,7 +261,7 @@ The [Hermes plugin catalog](https://hermes-agent.nousresearch.com/docs/developer
 | Accounts of every profile | Read through Hermes' `read_credential_pool`, never from `auth.json` directly. |
 | Session tracker | Part of `account-pool` (a `post_api_request` hook), no longer a second plugin. |
 
-What the plugin still does with tokens is listed under [Security and privacy disclosure](#security-and-privacy-disclosure). Until the catalog lists it, install it from this repository as above.
+What the plugin still does with tokens is listed under [Security and privacy disclosure](#security-and-privacy-disclosure). Install it with `hermes plugins install account-pool` ([Install with hermes plugins install](#install-with-hermes-plugins-install)). Two Hermes changes would let the plugin do even less with tokens itself: a first-class "parked" status in the credential pool, and requests through one chosen pool entry. They are proposed in [NousResearch/hermes-agent#137237](https://github.com/NousResearch/hermes-agent/issues/137237).
 
 ## Upgrading from 3.x
 
