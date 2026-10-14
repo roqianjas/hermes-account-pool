@@ -1580,7 +1580,7 @@ function AccountsPage() {
         ? h('span', null,
           'Shared pool · ',
           age != null ? `usage from the balance timer, ${ago(age)}` : 'no usage history yet',
-          t && t.active ? ` · next run ${t.running ? 'now' : t.next || '–'}` : ' · balance timer off',
+          t && t.active ? ` · next run ${t.running ? 'now' : t.stuck ? 'none, the timer is stuck (see Health)' : t.next || '–'}` : ' · balance timer off',
           data.rotation_mode ? ' · ' : null,
           data.rotation_mode ? h(RotationMode, { mode: data.rotation_mode, provider: data.provider, onEdit: () => setDialog({ type: 'strategy' }) }) : null)
         : null),

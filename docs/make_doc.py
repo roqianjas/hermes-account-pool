@@ -16,7 +16,7 @@ from reportlab.platypus import (CondPageBreak, Image, KeepTogether, PageBreak, P
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 from reportlab.platypus.tableofcontents import TableOfContents
 
-VERSION = "4.0.1"
+VERSION = "4.0.2"
 REPO = "github.com/roqianjas/hermes-account-pool"
 FOOTER = f"Hermes plugin account-pool {VERSION} · {REPO}"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hermes-account-pool.pdf")
@@ -237,7 +237,7 @@ code("""
 hermes plugins install account-pool --enable
 hermes account anthropic setup --timer --strategy
 """)
-P("Katalog memasang versi yang sudah direview pengelolanya (sekarang 4.0.1), dan "
+P("Katalog memasang versi yang sudah direview pengelolanya (sekarang 4.0.1; 4.0.2 ada di GitHub sampai entri katalog dipindah), dan "
   + C("hermes plugins update account-pool") + " ikut naik setelah entri katalog dipindah ke rilis baru. Untuk "
   "mengikuti " + C("main") + " repo ini, pasang langsung dari GitHub:")
 code("""
@@ -297,7 +297,7 @@ code("""
 $ hermes account anthropic setup --timer
 [anthropic] Setup: the default profile and 2 other profile(s) in /home/you/.hermes
   Accounts page    backend listed in 0 of 2 other profile(s)
-  Session tracking 4.0.1, active in 1 of 3 profile(s)
+  Session tracking 4.0.2, active in 1 of 3 profile(s)
   Balance timer    not installed
   Rotation         fill_first in all 3 profile(s)
 Changes:
@@ -451,7 +451,7 @@ hermes account anthropic doctor
 code("""
 [anthropic] Setup: the default profile and 2 other profile(s) in /home/you/.hermes
   Accounts page    backend listed in 2 of 2 other profile(s)
-  Session tracking 4.0.1, active in 1 of 3 profile(s)
+  Session tracking 4.0.2, active in 1 of 3 profile(s)
   Balance timer    runs every provider with accounts (now: anthropic), active
   Rotation         fill_first in all 3 profile(s)
 Changes:
@@ -968,7 +968,7 @@ $ hermes account anthropic doctor
   OK    strategy fill_first in 6 profiles
   OK    every profile uses the shared account pool
   OK    session tracking active in every profile
-  OK    running sessions count with session tracking 4.0.1
+  OK    running sessions count with session tracking 4.0.2
   OK    Accounts page backend enabled in every profile
   OK    account-pool-parking.json permissions 600
   OK    balance timer active, last run 2026-10-10 18:36:09 WIB
@@ -980,7 +980,7 @@ $ hermes account anthropic doctor
 """)
 P("Jalankan setelah instalasi, setelah update Hermes, atau saat bot berperilaku aneh. Setiap baris FAIL atau WARN "
   "menyertakan perbaikannya. Pelacak sesi dimuat saat proses mulai, jadi setelah update gateway, Hermes Desktop, dan sesi "
-  "panjang masih memakai pelacak lama; doctor lalu memberi WARN " + C("session tracker 4.0.1 is not loaded yet by: ...")
+  "panjang masih memakai pelacak lama; doctor lalu memberi WARN " + C("session tracker 4.0.2 is not loaded yet by: ...")
   + " beserta restart yang dibutuhkan masing-masing. Token tanpa nama bot dalam setengah jam terakhir berarti "
   + C("account-pool-tracker") + " 1.2.0 atau lebih lama masih berjalan. Untuk akun parkir, doctor memberi WARN bila "
   "Hermes memasukkannya lagi ke rotasi, bila akunnya keluar dari pool, bila Hermes menahan akun sebagai parkir "
@@ -1489,7 +1489,17 @@ systemctl --user start hermes-account-balance.service              # jalankan se
 systemctl --user disable --now hermes-account-balance.timer        # matikan
 systemctl --user enable --now hermes-account-balance.timer         # nyalakan
 """)
-LI(["<b>Interval</b>: " + C("systemctl --user edit --full hermes-account-balance.timer") + ", ubah "
+LI(["<b>Kapan jalan</b>: 2 menit setelah Anda login (" + C("OnStartupSec=2min") + "), lalu setiap 5 menit ("
+    + C("OnUnitActiveSec=5min") + "). Waktu tidur (sleep) tidak dihitung, jadi setelah komputer bangun putaran "
+    "berikutnya datang dalam 5 menit.",
+    "<b>File timer dari 4.0.1 atau lebih lama</b> memakai " + C("OnBootSec=2min") + " dengan " + C("Persistent=true")
+    + ". Bila Anda login lebih dari 2 menit setelah komputer menyala, systemd menganggap pemicu boot sudah terpakai "
+    "dan tidak punya putaran di sesi ini untuk menghitung 5 menitnya, jadi timer tidak jalan sama sekali di sesi itu: "
+    + C("list-timers") + " menampilkan " + C("-") + " sebagai putaran berikutnya, " + C("doctor") + " gagal dengan "
+    + C("balance timer is active but has no next run") + ", dan urutan akun tidak berubah. 4.0.2 memperbaiki file "
+    "itu di putaran timer berikutnya; " + C("hermes account &lt;provider&gt; setup --timer") + " memperbaikinya "
+    "saat itu juga dan menjalankan satu putaran. Interval yang Anda ubah tetap dipakai.",
+    "<b>Interval</b>: " + C("systemctl --user edit --full hermes-account-balance.timer") + ", ubah "
     + C("OnUnitActiveSec=5min") + ". Setiap putaran membaca pemakaian semua akun sekali, jadi jangan jauh di bawah 5 menit.",
     "<b>Ambang</b>: " + C("systemctl --user edit --full hermes-account-balance.service") + ", tambahkan "
     + C("--threshold 85") + " di baris " + C("ExecStart") + ".",
@@ -1703,6 +1713,12 @@ table([
     [C("report") + ": not enough history", "Timer mati atau baru dipasang", C("doctor") + ", tunggu beberapa putaran"],
     ["Peringatan bot terlalu sering", "Batas bawah terlalu rendah untuk beban Anda", C("notify bots=30") + " (atau "
      + C("bots-off") + "); lihat " + C("sessions --hours 1") + " dulu"],
+    ["Header halaman: " + C("next run none, the timer is stuck") + "; " + C("doctor") + ": "
+     + C("balance timer is active but has no next run") + "; atau urutan akun tidak berubah berjam-jam",
+     "File timer dari 4.0.1 atau lebih lama, setelah login lebih dari 2 menit sejak komputer menyala: systemd tidak "
+     "punya jadwal berikutnya. <b>Balance now</b> di halaman hanya menjalankan satu putaran, timernya tetap diam",
+     C("hermes account anthropic setup --timer") + " (memperbaiki file, reload systemd, menjalankan satu putaran). "
+     "Sejak 4.0.2 putaran timer berikutnya memperbaikinya sendiri"],
     ["Akun " + C("--until") + " tidak kembali", "Timer mati", C("hermes account &lt;provider&gt;") + "<br/>" + C("setup --timer")],
     ["Akun parkir tanpa jam reset, garis trennya datar", "Sebelum 3.11.1 timer tidak membaca akun parkir. Di "
      "3.11.1 putaran timer berikutnya mengisinya. Garis datar di 0% dengan " + C("not started") + " berarti "
@@ -1948,6 +1964,11 @@ table([
 H1("19. Riwayat versi")
 table([
     ["Versi", "Perubahan"],
+    ["4.0.2", "Timer balance tidak jalan sepanjang sesi bila Anda login lebih dari 2 menit setelah komputer "
+     "menyala (file timer " + C("OnBootSec") + " + " + C("Persistent=true") + "). File baru memakai "
+     + C("OnStartupSec=2min") + " tanpa " + C("Persistent") + "; file lama diperbaiki di putaran timer berikutnya "
+     "atau oleh " + C("setup --timer") + ". " + C("doctor") + " gagal bila timer aktif tanpa jadwal berikutnya, dan "
+     "header halaman menyebutnya. Windows tidak terdampak."],
     ["4.0.1", "Perintah pertama setelah update dari 3.x (misalnya " + C("list") + ") kini memuat pool Hermes "
      "setelah file parkir 3.x dipindahkan, jadi akun yang dipindah tidak lagi tampil sebagai " + C("no longer in the pool")
      + " pada putaran itu."],

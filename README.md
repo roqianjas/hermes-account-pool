@@ -2,7 +2,7 @@
 
 Run several accounts of one provider in [Hermes Agent](https://hermes-agent.nousresearch.com/docs) and manage them from one command, `hermes account`, or from an Accounts page in Hermes Desktop. Add accounts with a verified email, see live usage per account, spread the load before an account runs out, start an idle account's 5-hour window early, park accounts for a while or on a weekly schedule, see which bot is on which account and how many tokens each bot uses, mask the emails for a screenshot, and get an alert or a daily summary.
 
-Version 4.0.1 · MIT · Hermes Agent ≥ 0.21.6 · Linux or Windows 10/11 · Indonesian PDF guide in [`docs/`](docs/hermes-account-pool.pdf)
+Version 4.0.2 · MIT · Hermes Agent ≥ 0.21.6 · Linux or Windows 10/11 · Indonesian PDF guide in [`docs/`](docs/hermes-account-pool.pdf)
 
 ![The Accounts page in Hermes Desktop: eight accounts in rotation with their 5-hour usage, the bots on each account, two parked accounts with their reset times, two park schedules and the forecast](docs/screenshots/accounts.png)
 
@@ -146,7 +146,7 @@ hermes plugins install account-pool --enable
 hermes account anthropic setup --timer --strategy
 ```
 
-The catalog installs the version its maintainers reviewed (now 4.0.1), and `hermes plugins update account-pool` moves on when the catalog entry moves to a newer release. To follow this repository's `main` instead, install from GitHub:
+The catalog installs the version its maintainers reviewed (now 4.0.1; 4.0.2 is on GitHub until the catalog entry moves), and `hermes plugins update account-pool` moves on when the catalog entry moves to a newer release. To follow this repository's `main` instead, install from GitHub:
 
 ```bash
 hermes plugins install roqianjas/hermes-account-pool#plugins/account-pool --enable
@@ -167,7 +167,7 @@ Each one is in the [Security and privacy disclosure](#security-and-privacy-discl
 $ hermes account anthropic setup --timer
 [anthropic] Setup: the default profile and 2 other profile(s) in /home/you/.hermes
   Accounts page    backend listed in 0 of 2 other profile(s)
-  Session tracking 4.0.1, active in 1 of 3 profile(s)
+  Session tracking 4.0.2, active in 1 of 3 profile(s)
   Balance timer    not installed
   Rotation         fill_first in all 3 profile(s)
 Changes:
@@ -276,7 +276,7 @@ hermes account anthropic doctor
 ```
 [anthropic] Setup: the default profile and 2 other profile(s) in /home/you/.hermes
   Accounts page    backend listed in 2 of 2 other profile(s)
-  Session tracking 4.0.1, active in 1 of 3 profile(s)
+  Session tracking 4.0.2, active in 1 of 3 profile(s)
   Balance timer    runs every provider with accounts (now: anthropic), active
   Rotation         fill_first in all 3 profile(s)
 Changes:
@@ -739,7 +739,7 @@ $ hermes account anthropic doctor
   OK    strategy fill_first in 6 profiles
   OK    every profile uses the shared account pool
   OK    session tracking active in every profile
-  OK    running sessions count with session tracking 4.0.1
+  OK    running sessions count with session tracking 4.0.2
   OK    Accounts page backend enabled in every profile
   OK    account-pool-parking.json permissions 600
   OK    balance timer active, last run 2026-10-10 18:36:09 WIB
@@ -750,7 +750,7 @@ $ hermes account anthropic doctor
   0 failure(s), 0 warning(s).
 ```
 
-Run it after installing, after a Hermes update, or when bots behave oddly. Every FAIL or WARN line includes the fix. A process loads the session tracker when it starts, so after an update the gateway, Hermes Desktop and long sessions keep the old one; doctor then warns `session tracker 4.0.1 is not loaded yet by: the gateway (...); Hermes Desktop (...)` with the restart each one needs. Tokens without a bot name in the last half hour mean an `account-pool-tracker` 1.2.0 or older is still running. For parked accounts it warns when Hermes has one in rotation again, when one left the pool, when Hermes holds an account as parked that the park list does not name, and when a park without an end time has no balance timer to renew it. For Telegram it warns when the bot has no home channel. A leftover `account-pool-tracker` from 3.x is a WARN with `Fix: hermes account <provider> setup`. A profile on another strategy is a FAIL (`Fix: hermes account <provider> strategy fill_first`); a value Hermes does not know is only a WARN, because Hermes then uses `fill_first`. Exit code 1 when there is a FAIL. For a provider with no accounts it says `not in use, nothing to check`.
+Run it after installing, after a Hermes update, or when bots behave oddly. Every FAIL or WARN line includes the fix. A process loads the session tracker when it starts, so after an update the gateway, Hermes Desktop and long sessions keep the old one; doctor then warns `session tracker 4.0.2 is not loaded yet by: the gateway (...); Hermes Desktop (...)` with the restart each one needs. Tokens without a bot name in the last half hour mean an `account-pool-tracker` 1.2.0 or older is still running. For parked accounts it warns when Hermes has one in rotation again, when one left the pool, when Hermes holds an account as parked that the park list does not name, and when a park without an end time has no balance timer to renew it. For Telegram it warns when the bot has no home channel. A leftover `account-pool-tracker` from 3.x is a WARN with `Fix: hermes account <provider> setup`. A profile on another strategy is a FAIL (`Fix: hermes account <provider> strategy fill_first`); a value Hermes does not know is only a WARN, because Hermes then uses `fill_first`. Exit code 1 when there is a FAIL. For a provider with no accounts it says `not in use, nothing to check`.
 
 ### setup
 
@@ -1065,6 +1065,8 @@ systemctl --user disable --now hermes-account-balance.timer         # stop
 systemctl --user enable --now hermes-account-balance.timer          # start again
 ```
 
+- **When it runs**: 2 minutes after you sign in (`OnStartupSec=2min`), then every 5 minutes (`OnUnitActiveSec=5min`). Time asleep does not count, so after the computer wakes up the next run comes within 5 minutes.
+- **Timer files from 4.0.1 or older** had `OnBootSec=2min` with `Persistent=true`. When you signed in more than 2 minutes after the computer started, systemd counted the boot trigger as used and had no run in this session to count the 5 minutes from, so the timer never ran in that session: `list-timers` shows `-` as the next run, `doctor` fails with `balance timer is active but has no next run`, and the order of the accounts stays as it was. 4.0.2 repairs the file on its next timer run; `hermes account <provider> setup --timer` repairs it at once and starts a run. A changed interval is kept.
 - **Interval**: `systemctl --user edit --full hermes-account-balance.timer`, change `OnUnitActiveSec=5min`. Every run reads each account's usage once, so do not go much below 5 minutes.
 - **Threshold**: `systemctl --user edit --full hermes-account-balance.service`, add `--threshold 85` to the `ExecStart` line.
 - **Providers**: the timer runs `hermes account all balance`, so every provider with accounts is balanced, including one that gets its first account later. On a unit from 3.10.2 or older (one `ExecStart` line per provider), `doctor` warns about a provider with accounts that the timer misses; `hermes account <provider> setup --timer` switches the unit to `all`.
@@ -1209,6 +1211,7 @@ Sign-in (`claude.ai`, `auth.openai.com`, their token endpoints) and token refres
 | Sign-in page says "Sign in again to continue" | The browser's login is old (Anthropic policy) | Click it and sign in as the same account |
 | `add` says `discarded` | The browser was signed in as another account, or as one already in the pool | Use that account's own Chrome profile or a fresh private window, then run `add` again |
 | `Cancelled (Ctrl+C). Nothing was added.` | You pressed Ctrl+C during sign-in | Expected. Run `add` again when ready. |
+| The page header says `next run none, the timer is stuck (see Health)`, `doctor` fails with `balance timer is active but has no next run`, or the order of the accounts has not changed for hours | A timer file from 4.0.1 or older, after you signed in more than 2 minutes after the computer started: systemd had no next run for it. **Balance now** on the page runs once but does not restart the timer | `hermes account anthropic setup --timer` (repairs the file, reloads systemd, starts a run). From 4.0.2 the next timer run repairs the file by itself |
 | A bot says "retrying in 600s" | Its account hit a 429 before `balance` benched it | `hermes account anthropic balance`, then stop and resend the message in that session |
 | `check`: `DEAD` | Login revoked, or the token was used by another app or machine | `hermes account anthropic relogin <email>` |
 | `check`: `WRONG LABEL` or `DUPLICATE` | Added with plain `hermes auth add` while signed in as another account | `relogin` the right account, or `remove <id>` the extra entry |

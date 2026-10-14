@@ -1821,6 +1821,8 @@ def _cmd_balance_all(args) -> int:
     timer = WINDOWS and _in_timer()
     if timer:
         _timer_run_mark(None)
+    if not WINDOWS and _in_timer():
+        _heal_timer_live()
     rc = 1
     try:
         rc = _balance_every(args)
@@ -1913,6 +1915,7 @@ def _timer_info() -> dict:
         out["next_ts"] = (row.get("next") or 0) / 1e6 or None
         out["last_ts"] = (row.get("last") or 0) / 1e6 or None
         out["next"] = _hhmm(out["next_ts"]) if out["next_ts"] else ""
+        out["stuck"] = bool(out["active"] and not out["running"] and not out["next_ts"])
     except Exception as x:
         out["error"] = str(x)
     return out
@@ -2241,6 +2244,9 @@ def _doctor_checks(provider: str) -> list:
         active = timer["active"]
         if not active:
             add("fail", f"balance timer is NOT active. Fix: hermes account {provider} setup --timer")
+        elif _timer_stuck(timer):
+            add("fail", f"balance timer is active but has no next run, so it does not run again by itself (last "
+                        f"run {timer['last']}). Fix: hermes account {provider} setup --timer")
         elif timer["result"] != "success" and not timer["running"]:
             add("fail", f"balance timer active but the last run failed ({timer['result']}). "
                         f"See: {_timer_log_hint()}")
@@ -2249,6 +2255,10 @@ def _doctor_checks(provider: str) -> list:
                         f"while you are signed in to Windows. If you were, see {_timer_log_hint()}")
         else:
             add("ok", f"balance timer active, last run {timer['last']}")
+        if active and _timer_file_stale():
+            add("warn", f"the balance timer file is from account-pool 4.0.1 or older: after a login more than 2 "
+                        f"minutes after boot it stops running. The next timer run repairs it. "
+                        f"Now: hermes account {provider} setup --timer")
         if WINDOWS:
             execs = "\n".join(_timer_lines().values())
         else:
@@ -3635,10 +3645,73 @@ def _default_root() -> bool:
         return False
 
 
+# OnStartupSec counts from the start of the user's systemd (the login), so the first run comes 2 minutes after
+# you sign in. No Persistent=: it only applies to OnCalendar=, and next to OnBootSec= it made systemd skip
+# every run after a login more than 2 minutes after boot (account-pool 4.0.1 and older, see _heal_timer_file).
+TIMER_UNIT = ("[Unit]\nDescription=Run hermes account balance every 5 minutes\n\n[Timer]\nOnStartupSec=2min\n"
+              "OnUnitActiveSec=5min\n\n[Install]\nWantedBy=timers.target\n")
+
+
+def _timer_file_stale(text: str = None) -> bool:
+    """True for a timer file as account-pool 4.0.1 and older wrote it (OnBootSec= + Persistent=true). After a
+    login more than 2 minutes after boot, systemd loads the last run from Persistent's stamp, counts the boot
+    trigger as used, and OnUnitActiveSec= has no run in this session to count from: no next run, ever.
+    A file with OnCalendar= (where Persistent= belongs) is left alone."""
+    if WINDOWS:
+        return False
+    if text is None:
+        try:
+            text = (_unit_dir() / f"{UNIT_NAME}.timer").read_text(encoding="utf-8")
+        except OSError:
+            return False
+    return (bool(re.search(r"^Persistent=(?:true|yes|1|on)\s*$", text, re.M | re.I))
+            and not re.search(r"^OnCalendar=", text, re.M))
+
+
+def _heal_timer_file() -> bool:
+    """Rewrite a stale timer file (see _timer_file_stale): drop Persistent=, OnBootSec= becomes OnStartupSec=.
+    Every other line stays, so a hand-changed interval survives. True when the file changed."""
+    path = _unit_dir() / f"{UNIT_NAME}.timer"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    if not _timer_file_stale(text):
+        return False
+    new = re.sub(r"^Persistent=.*\n?", "", text, flags=re.M)
+    new = re.sub(r"^OnBootSec=", "OnStartupSec=", new, flags=re.M)
+    if not re.search(r"^On(?:Startup|Boot|Active)Sec=", new, re.M):
+        new = new.replace("[Timer]\n", "[Timer]\nOnStartupSec=2min\n", 1)
+    path.write_text(new, encoding="utf-8")
+    return True
+
+
+def _heal_timer_live() -> None:
+    """From a timer run (Linux): repair a stale timer file once and reload systemd, so the next late login
+    still gets its runs. A failure is printed to the timer's log and never stops the balance."""
+    stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        if _heal_timer_file():
+            _systemctl("daemon-reload")
+            _p(f"{stamp} timer: updated {UNIT_NAME}.timer, so it also runs after a login more than 2 minutes "
+               f"after boot (OnStartupSec=, no Persistent=)")
+    except Exception as x:  # noqa: BLE001  (the balance itself must go on)
+        _p(f"{stamp} timer: could not update {UNIT_NAME}.timer: {x}. Fix: hermes account <provider> setup --timer")
+
+
+def _timer_stuck(info: dict = None) -> bool:
+    """Linux: the timer is active, not running, and systemd has no next run for it, so it never runs again by
+    itself (a stale timer file after a late login). _timer_info sets it as "stuck"."""
+    if WINDOWS:
+        return False
+    return bool((info if info is not None else _timer_info()).get("stuck"))
+
+
 def _write_timer(provs: list) -> None:
     """Write the balance service and, when missing, its 5-minute timer. provs == ["all"]: one ExecStart that
     balances every provider with accounts; otherwise one ExecStart per provider, run in order. Hand-added
-    options are kept. An existing timer file is left alone (its interval may have been changed by hand).
+    options are kept. An existing timer file keeps its lines (its interval may have been changed by hand); one
+    from 4.0.1 or older is repaired (_heal_timer_file).
     On Windows: balance.cmd and balance.vbs in <Hermes home>/account-pool-timer (the task is registered by
     _timer_on)."""
     if WINDOWS:
@@ -3662,9 +3735,9 @@ def _write_timer(provs: list) -> None:
         f"[Service]\nType=oneshot\n{env}{execs}TimeoutStartSec={600 if provs == [ALL] else 120 * len(provs)}\n")
     timer = d / f"{UNIT_NAME}.timer"
     if not timer.exists():
-        timer.write_text(
-            "[Unit]\nDescription=Run hermes account balance every 5 minutes\n\n[Timer]\nOnBootSec=2min\n"
-            "OnUnitActiveSec=5min\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n")
+        timer.write_text(TIMER_UNIT, encoding="utf-8")
+    else:
+        _heal_timer_file()
 
 
 def _timer_on(provs: list) -> None:
@@ -3852,6 +3925,9 @@ def _cmd_setup(args) -> int:
         state = (f"runs every provider with accounts (now: {now}), {'active' if active else 'NOT active'}" if follows else
                  f"runs {', '.join(provs)}, {'active' if active else 'NOT active'}" if lines else
                  "active, but not from this setup (no unit file found)" if active else "not installed")
+        broken = bool(lines) and (_timer_file_stale() or (active and _timer_stuck()))
+        if broken and not want_timer:
+            state += "; it can stop after a late login, add --timer to repair it"
         if want_timer and not _timer_available():
             status.append(("Balance timer", "systemd not found: run `hermes account all balance` every few "
                            "minutes some other way (cron)"))
@@ -3867,6 +3943,9 @@ def _cmd_setup(args) -> int:
         elif want_timer and not active:
             change("start the balance timer (" + ("Task Scheduler" if WINDOWS else "systemctl --user enable --now")
                    + ")", lambda: _timer_on(list(lines)))
+        elif want_timer and broken:
+            change("repair the balance timer: first run 2 minutes after login (OnStartupSec=, no Persistent=), "
+                   "then every run as before; it starts one run now", lambda: _timer_on(list(lines)))
         if not want_timer and not follows and provider not in lines:
             state += f"; add --timer to balance {provider} (and every other provider with accounts) every 5 minutes"
         status.append(("Balance timer", state))

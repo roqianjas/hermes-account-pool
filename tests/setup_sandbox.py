@@ -70,6 +70,7 @@ def fake_hermes(profile, *args):
 core._systemctl = fake_systemctl
 core._run_hermes = fake_hermes
 core._timer_active = lambda: STATE["active"]
+core._timer_stuck = lambda info=None: bool(info.get("stuck")) if info is not None else STATE.get("stuck", False)
 core._tty = lambda: False
 
 
@@ -186,6 +187,9 @@ check("every provider with accounts, now: anthropic" in text and "included by th
       "the plan says which providers that is now and that later ones are included")
 check(CALLS == [("daemon-reload",), ("enable", "--now", "hermes-account-balance.timer"),
                 ("start", "--no-block", "hermes-account-balance.service")], "--timer reloads, enables and starts once")
+tmr = (UNITS / "hermes-account-balance.timer").read_text()
+check("OnStartupSec=2min" in tmr and "OnUnitActiveSec=5min" in tmr and "Persistent" not in tmr and "OnBootSec" not in tmr,
+      "a new timer runs 2 minutes after login, then every 5 minutes, without Persistent= (it skipped runs after a late login)")
 rc, text = run(core._cmd_setup, timer=True, yes=True)
 check(rc == 0 and "Nothing to change." in text and "runs every provider with accounts (now: anthropic), active" in text,
       "--timer again: nothing to change")
@@ -216,6 +220,68 @@ check(rc == 0 and "switch the balance timer from anthropic to every provider wit
       and "TimeoutStartSec=600" in svc, "--timer for a provider it lacks switches an older unit to every provider")
 check("OnUnitActiveSec=10min" in (UNITS / "hermes-account-balance.timer").read_text(),
       "hand edits survive: the options of the ExecStart line and the timer's interval")
+
+# a timer file from 4.0.1 or older (OnBootSec + Persistent=true) never ran again after a late login
+TIMER = UNITS / "hermes-account-balance.timer"
+STALE = ("[Unit]\nDescription=Run hermes account balance every 5 minutes\n\n[Timer]\nOnBootSec=2min\n"
+         "OnUnitActiveSec=10min\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n")
+HEALED = STALE.replace("OnBootSec=", "OnStartupSec=").replace("Persistent=true\n", "")
+TIMER.write_text(STALE)
+check(core._timer_file_stale() and not core._timer_file_stale(HEALED), "a 4.0.1 timer file is recognised, a repaired one is not")
+rc, text = run(core._cmd_setup, yes=True)
+check(rc == 0 and "it can stop after a late login, add --timer to repair it" in text and TIMER.read_text() == STALE,
+      "setup without --timer only says so")
+CALLS.clear()
+rc, text = run(core._cmd_setup, timer=True, yes=True)
+check(rc == 0 and "repair the balance timer" in text and TIMER.read_text() == HEALED,
+      "--timer repairs it: OnStartupSec=, no Persistent=, the hand-set interval and every other line kept")
+check(CALLS == [("daemon-reload",), ("enable", "--now", "hermes-account-balance.timer"),
+                ("start", "--no-block", "hermes-account-balance.service")], "the repair reloads systemd and starts one run")
+rc, text = run(core._cmd_setup, timer=True, yes=True)
+check(rc == 0 and "Nothing to change." in text, "repaired: nothing to change")
+CAL = "[Unit]\nDescription=mine\n\n[Timer]\nOnCalendar=*:0/5\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n"
+TIMER.write_text(CAL)
+check(not core._timer_file_stale() and not core._heal_timer_file() and TIMER.read_text() == CAL,
+      "a hand-written OnCalendar= timer with Persistent= is left alone")
+TIMER.write_text(HEALED)
+STATE["stuck"] = True
+CALLS.clear()
+rc, text = run(core._cmd_setup, timer=True, yes=True)
+STATE["stuck"] = False
+check(rc == 0 and "repair the balance timer" in text and ("start", "--no-block", "hermes-account-balance.service") in CALLS,
+      "a stuck timer (active, no next run) gets the repair and one run now from --timer")
+# the timer's own run repairs a stale file once
+TIMER.write_text(STALE)
+real_every, real_proc = core._balance_every, list(core._TIMER_PROC)
+core._balance_every = lambda args: 0
+core._TIMER_PROC[:] = [True]
+CALLS.clear()
+rc, text = run(core._cmd_balance_all)
+check(rc == 0 and CALLS == [("daemon-reload",)] and "timer: updated hermes-account-balance.timer" in text
+      and TIMER.read_text() == HEALED, "a timer run repairs a stale timer file and reloads systemd")
+CALLS.clear()
+rc, text = run(core._cmd_balance_all)
+check(rc == 0 and CALLS == [] and "timer:" not in text, "only once")
+core._TIMER_PROC[:] = []
+TIMER.write_text(STALE)
+rc, text = run(core._cmd_balance_all)
+check(rc == 0 and CALLS == [] and TIMER.read_text() == STALE, "a manual `all balance` outside the timer touches no unit file")
+core._balance_every, core._TIMER_PROC[:] = real_every, real_proc
+TIMER.write_text(HEALED)
+# doctor names the stuck state
+real_info = core._timer_info
+core._timer_info = lambda: {"active": True, "running": False, "result": "success", "last": "Tue 2026-10-13 22:08:29",
+                            "next": "", "next_ts": None, "last_ts": None, "stuck": True}
+doc = [(lvl, t) for lvl, t in core._doctor_checks("anthropic") if "timer" in t]
+check(any(lvl == "fail" and "has no next run" in t and "setup --timer" in t for lvl, t in doc),
+      "doctor: an active timer with no next run is a failure with the fix")
+TIMER.write_text(STALE)
+core._timer_info = lambda: {"active": True, "running": False, "result": "success", "last": "now",
+                            "next": "10:05", "next_ts": 1.0, "last_ts": 1.0, "stuck": False}
+doc = [(lvl, t) for lvl, t in core._doctor_checks("anthropic") if "timer" in t]
+check(any(lvl == "warn" and "from account-pool 4.0.1 or older" in t for lvl, t in doc), "doctor: a stale timer file is a warning")
+core._timer_info = real_info
+TIMER.write_text(HEALED)
 
 # ── --strategy ───────────────────────────────────────────────────────────────
 rc, text = run(core._cmd_setup, strategy=True, yes=True)

@@ -609,6 +609,20 @@ await waitFor(() => ok(lastPost('/privacy')?.body.on === false && document.body.
   'the eye button turns masking off again'))
 cleanup()
 
+// a timer that systemd has no next run for says so in the header, instead of a bare dash
+const tmr = status.timer
+status.timer = { ...tmr, next: '', next_ts: null, stuck: true }
+mount('page')
+await screen.findByText('Next session starts on')
+ok(document.body.textContent.includes('next run none, the timer is stuck (see Health)'), 'a stuck timer is named in the header')
+cleanup()
+status.timer = tmr
+mount('page')
+await screen.findByText('Next session starts on')
+ok(document.body.textContent.includes(`next run ${tmr.next}`) && !document.body.textContent.includes('timer is stuck'),
+  'a working timer shows its next run')
+cleanup()
+
 // Telegram: the bot's home channel, and a warning when the bot has none
 store.provider = 'anthropic'
 const savedNotify = fx['/notify?provider=anthropic']

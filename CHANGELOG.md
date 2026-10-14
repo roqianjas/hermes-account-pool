@@ -2,6 +2,12 @@
 
 All releases of the `account-pool` plugin. Up to 3.13 its session tracker was a separate plugin, `account-pool-tracker` (last version 1.5.1); since 4.0 it is part of `account-pool`.
 
+## 4.0.2
+
+- The balance timer did not run at all in a session that started more than 2 minutes after the computer did (Linux). The timer file that `setup --timer` writes had `OnBootSec=2min` with `Persistent=true`: systemd took the last run from the previous session, counted the boot trigger as used, and `OnUnitActiveSec=5min` had no run in this session to count from, so `list-timers` showed no next run. The order of the accounts, timed unparks, alerts and automatic wake stayed where they were; **Balance now** ran once without restarting the timer. New timer files use `OnStartupSec=2min` (2 minutes after login) and no `Persistent=`. An existing file is repaired on the next timer run, or at once by `hermes account <provider> setup --timer`, which also starts a run. Other lines, such as a changed interval, are kept; a hand-written `OnCalendar=` timer is left alone. Windows (Task Scheduler) was not affected.
+- `doctor` fails when the timer is active but has no next run, and warns about a timer file from 4.0.1 or older. The Accounts page header says `next run none, the timer is stuck (see Health)` instead of a dash.
+- Tests: `setup_sandbox` 54 → 67 (a new timer file, the repair by `setup --timer` and by a timer run, a stuck timer, an `OnCalendar=` timer left alone, both `doctor` lines); 506 checks in total, UI 140 → 142 (the header of a stuck and of a working timer). The repair was also proven on the live install by its next timer run.
+
 ## 4.0.1
 
 - Listed in the Hermes plugin catalog on 13 October 2026, pinned at 4.0.1 (NousResearch/hermes-agent#136665): `hermes plugins install account-pool`. README and PDF show the catalog install first.
