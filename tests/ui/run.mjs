@@ -477,6 +477,15 @@ failNext = new Error('404: {"detail":"Not Found"}')
 mount('page')
 await screen.findByText(/The account-pool backend did not answer/)
 ok(screen.getByText(/plugins.enabled/), 'setup hint for a missing backend')
+ok(document.querySelector('.hap-setup-steps ol.hap-steps') && screen.getByText('hermes account anthropic setup'),
+  'missing backend: numbered steps with the setup command')
+ok(screen.getByText(/Skip "Install here"/), 'missing backend: warns off Hermes\' Install here button')
+cleanup()
+// any other error keeps the plain message, without the setup steps
+failNext = new Error('500: {"detail":"boom"}')
+mount('page')
+await screen.findByText(/The account-pool backend did not answer/)
+ok(!document.querySelector('.hap-setup-steps'), 'other backend errors: no setup steps')
 cleanup()
 
 // wake: the idle accounts are preselected and their ids posted; the settings are saved apart

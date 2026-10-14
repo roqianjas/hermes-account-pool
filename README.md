@@ -2,7 +2,7 @@
 
 Run several accounts of one provider in [Hermes Agent](https://hermes-agent.nousresearch.com/docs) and manage them from one command, `hermes account`, or from an Accounts page in Hermes Desktop. Add accounts with a verified email, see live usage per account, spread the load before an account runs out, start an idle account's 5-hour window early, park accounts for a while or on a weekly schedule, see which bot is on which account and how many tokens each bot uses, mask the emails for a screenshot, and get an alert or a daily summary.
 
-Version 4.0.2 · MIT · Hermes Agent ≥ 0.21.6 · Linux or Windows 10/11 · Indonesian PDF guide in [`docs/`](docs/hermes-account-pool.pdf)
+Version 4.0.3 · MIT · Hermes Agent ≥ 0.21.6 · Linux or Windows 10/11 · Indonesian PDF guide in [`docs/`](docs/hermes-account-pool.pdf)
 
 ![The Accounts page in Hermes Desktop: eight accounts in rotation with their 5-hour usage, the bots on each account, two parked accounts with their reset times, two park schedules and the forecast](docs/screenshots/accounts.png)
 
@@ -76,7 +76,14 @@ hermes account anthropic add alice@example.com
 hermes account anthropic doctor
 ```
 
-Without a git checkout, `hermes plugins install` does the same in two commands, on Linux and Windows alike ([Install with hermes plugins install](#install-with-hermes-plugins-install)). From then on the timer keeps the pool ordered. Day to day you mostly need `usage`, `who`, `park` and `doctor`. In Hermes Desktop, restart the app once and switch the page on in Capabilities > Plugins to get the same in a page ([Hermes Desktop page](#hermes-desktop-page)).
+Without a git checkout, two commands do the same, on Linux and Windows alike:
+
+```bash
+hermes plugins install account-pool --enable
+hermes account anthropic setup --timer --strategy
+```
+
+Run both: `hermes plugins install` puts the plugin into one profile, and `setup` adds it to the others ([Install with hermes plugins install](#install-with-hermes-plugins-install)). From then on the timer keeps the pool ordered. Day to day you mostly need `usage`, `who`, `park` and `doctor`. In Hermes Desktop, restart the app once and switch the page on in Capabilities > Plugins to get the same in a page ([Hermes Desktop page](#hermes-desktop-page)).
 
 ## Requirements
 
@@ -146,13 +153,15 @@ hermes plugins install account-pool --enable
 hermes account anthropic setup --timer --strategy
 ```
 
-The catalog installs the version its maintainers reviewed (now 4.0.1; 4.0.2 is on GitHub until the catalog entry moves), and `hermes plugins update account-pool` moves on when the catalog entry moves to a newer release. To follow this repository's `main` instead, install from GitHub:
+The catalog installs the version its maintainers reviewed (now 4.0.1; 4.0.3 is on GitHub until the catalog entry moves), and `hermes plugins update account-pool` moves on when the catalog entry moves to a newer release. To follow this repository's `main` instead, install from GitHub:
 
 ```bash
 hermes plugins install roqianjas/hermes-account-pool#plugins/account-pool --enable
 ```
 
 Run them in the default profile (without `-p`): the command lives there, and `setup` links the plugin from there into the other profiles, so its session tracker runs in every profile ([What setup does](#what-setup-does)).
+
+The second command is part of the install. With the first one alone, `hermes account` works, but the Accounts page in Hermes Desktop says `The account-pool backend did not answer` whenever Desktop runs another profile, and `who` misses the bots of the other profiles. Do not add the plugin to another profile with **Install here** in Capabilities > Plugins either: Hermes keeps a catalog install's address without its `plugins/account-pool` folder, so that dialog stops with `No agent or desktop plugin artifacts found in this repository.` (Hermes Desktop 0.21.7 and older). `setup` does that step.
 
 Both ways download the plugin from GitHub. Hermes scans it before it installs it, and stops when the scan has findings. For `account-pool` it reports 16, all expected:
 
@@ -167,7 +176,7 @@ Each one is in the [Security and privacy disclosure](#security-and-privacy-discl
 $ hermes account anthropic setup --timer
 [anthropic] Setup: the default profile and 2 other profile(s) in /home/you/.hermes
   Accounts page    backend listed in 0 of 2 other profile(s)
-  Session tracking 4.0.2, active in 1 of 3 profile(s)
+  Session tracking 4.0.3, active in 1 of 3 profile(s)
   Balance timer    not installed
   Rotation         fill_first in all 3 profile(s)
 Changes:
@@ -276,7 +285,7 @@ hermes account anthropic doctor
 ```
 [anthropic] Setup: the default profile and 2 other profile(s) in /home/you/.hermes
   Accounts page    backend listed in 2 of 2 other profile(s)
-  Session tracking 4.0.2, active in 1 of 3 profile(s)
+  Session tracking 4.0.3, active in 1 of 3 profile(s)
   Balance timer    runs every provider with accounts (now: anthropic), active
   Rotation         fill_first in all 3 profile(s)
 Changes:
@@ -739,7 +748,7 @@ $ hermes account anthropic doctor
   OK    strategy fill_first in 6 profiles
   OK    every profile uses the shared account pool
   OK    session tracking active in every profile
-  OK    running sessions count with session tracking 4.0.2
+  OK    running sessions count with session tracking 4.0.3
   OK    Accounts page backend enabled in every profile
   OK    account-pool-parking.json permissions 600
   OK    balance timer active, last run 2026-10-10 18:36:09 WIB
@@ -750,7 +759,7 @@ $ hermes account anthropic doctor
   0 failure(s), 0 warning(s).
 ```
 
-Run it after installing, after a Hermes update, or when bots behave oddly. Every FAIL or WARN line includes the fix. A process loads the session tracker when it starts, so after an update the gateway, Hermes Desktop and long sessions keep the old one; doctor then warns `session tracker 4.0.2 is not loaded yet by: the gateway (...); Hermes Desktop (...)` with the restart each one needs. Tokens without a bot name in the last half hour mean an `account-pool-tracker` 1.2.0 or older is still running. For parked accounts it warns when Hermes has one in rotation again, when one left the pool, when Hermes holds an account as parked that the park list does not name, and when a park without an end time has no balance timer to renew it. For Telegram it warns when the bot has no home channel. A leftover `account-pool-tracker` from 3.x is a WARN with `Fix: hermes account <provider> setup`. A profile on another strategy is a FAIL (`Fix: hermes account <provider> strategy fill_first`); a value Hermes does not know is only a WARN, because Hermes then uses `fill_first`. Exit code 1 when there is a FAIL. For a provider with no accounts it says `not in use, nothing to check`.
+Run it after installing, after a Hermes update, or when bots behave oddly. Every FAIL or WARN line includes the fix. It warns when Hermes is older than 0.21.6: builds before 0.21.6 install and load the plugin without checking its `requires_hermes`. A process loads the session tracker when it starts, so after an update the gateway, Hermes Desktop and long sessions keep the old one; doctor then warns `session tracker 4.0.3 is not loaded yet by: the gateway (...); Hermes Desktop (...)` with the restart each one needs. Tokens without a bot name in the last half hour mean an `account-pool-tracker` 1.2.0 or older is still running. For parked accounts it warns when Hermes has one in rotation again, when one left the pool, when Hermes holds an account as parked that the park list does not name, and when a park without an end time has no balance timer to renew it. For Telegram it warns when the bot has no home channel. A leftover `account-pool-tracker` from 3.x is a WARN with `Fix: hermes account <provider> setup`. A profile on another strategy is a FAIL (`Fix: hermes account <provider> strategy fill_first`); a value Hermes does not know is only a WARN, because Hermes then uses `fill_first`. Exit code 1 when there is a FAIL. For a provider with no accounts it says `not in use, nothing to check`.
 
 ### setup
 
@@ -877,7 +886,7 @@ Unknown provider 'anthorpic'. Providers in your pool: anthropic. All providers: 
 
 ### Why every profile lists account-pool
 
-Hermes Desktop runs its backend under the profile you last used (`hermes --profile <name> serve`), and a backend loads a plugin's page routes only when the plugin is in `plugins.enabled` of **that** profile. With `account-pool` in the default profile alone, the page works while Desktop runs the default profile and shows `The account-pool backend did not answer` while it runs any other.
+Hermes Desktop runs its backend under the profile you last used (`hermes --profile <name> serve`), and a backend loads a plugin's page routes only when the plugin is in `plugins.enabled` of **that** profile. With `account-pool` in the default profile alone, the page works while Desktop runs the default profile and shows `The account-pool backend did not answer` while it runs any other. Since 4.0.3 the page lists the steps that fix it.
 
 So `setup` (and `install.sh`, which runs it) adds `account-pool` to `plugins.enabled` of every profile, and links the profile's `plugins/account-pool` to the default profile's copy. What a profile gets from it:
 
@@ -1234,7 +1243,9 @@ Sign-in (`claude.ai`, `auth.openai.com`, their token endpoints) and token refres
 | Windows: `install.ps1 cannot be loaded because running scripts is disabled` | Windows blocks downloaded scripts by default | Start it as `powershell -ExecutionPolicy Bypass -File .\install.ps1` (this run only) |
 | Windows: no desktop alert | Windows notifications are off for Windows PowerShell, or Focus / Do not disturb is on | Settings > System > Notifications, allow Windows PowerShell; `hermes account <provider> notify test` |
 | `hermes account`: unknown command | Run with `-p <profile>`; the plugin is in the default profile only | Run it without `-p` |
-| Accounts page: `The account-pool backend did not answer` | Hermes Desktop runs a profile that does not list `account-pool` (a profile created after the install, or an install older than 3.5.1), or was not restarted after the install | `hermes account <provider> setup`, then restart Hermes Desktop. `doctor` names the profiles that miss it |
+| Accounts page: `The account-pool backend did not answer` | Hermes Desktop runs a profile that does not list `account-pool` (only `hermes plugins install` was run, a profile created after the install, or an install older than 3.5.1), or was not restarted after the install | `hermes account <provider> setup` in the default profile, then close and reopen Hermes Desktop. `doctor` names the profiles that miss it |
+| Capabilities > Plugins > **Install here** stops with `No agent or desktop plugin artifacts found in this repository.` | Hermes keeps a catalog install's address without its `plugins/account-pool` folder, so the dialog looks at the root of the repository (Hermes Desktop 0.21.7 and older) | Not needed: `hermes account <provider> setup` in the default profile adds the plugin to every profile. Then close and reopen Hermes Desktop |
+| `doctor` warns `Hermes 0.21.x is older than 0.21.6` | Hermes builds before 0.21.6 install and load the plugin without checking `requires_hermes` | `hermes update`, then close and reopen Hermes Desktop |
 | `add needs a terminal` or `relogin needs a terminal` | It ran from cron, an agent's shell or another place without a terminal, where nobody can paste the sign-in code | Run it in a terminal, or use **Add account** / **Sign in again** on the Accounts page |
 | `no terminal to answer, so no` | A command that asks first ran without a terminal | Run it in a terminal, or add `--yes` |
 | `doctor`: `the retired account-pool-tracker plugin is still in: ...` | The update to 4.0 was not followed by `setup` | `hermes account <provider> setup` |

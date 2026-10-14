@@ -268,6 +268,20 @@ rc, text = run(core._cmd_balance_all)
 check(rc == 0 and CALLS == [] and TIMER.read_text() == STALE, "a manual `all balance` outside the timer touches no unit file")
 core._balance_every, core._TIMER_PROC[:] = real_every, real_proc
 TIMER.write_text(HEALED)
+# doctor warns on a Hermes release below requires_hermes (old builds load the plugin without checking it)
+check(core._hermes_too_old("0.21.4") and core._hermes_too_old("0.20.9") and not core._hermes_too_old("0.21.6")
+      and not core._hermes_too_old("0.21.7") and not core._hermes_too_old("1.0.0") and not core._hermes_too_old(""),
+      "doctor: Hermes version compare (0.21.6 is the floor, unknown is not old)")
+_real_ver = core._hermes_version
+core._hermes_version = lambda: "0.21.4"
+doc = core._doctor_checks("anthropic")
+check(any(lvl == "warn" and t.startswith("Hermes 0.21.4 is older than 0.21.6") and "Fix: hermes update" in t for lvl, t in doc),
+      "doctor: Hermes 0.21.4 is a warning with the fix")
+core._hermes_version = lambda: "0.21.7"
+check(not any(t.startswith("Hermes ") and "older than" in t for _, t in core._doctor_checks("anthropic")),
+      "doctor: no version warning on 0.21.7")
+core._hermes_version = _real_ver
+
 # doctor names the stuck state
 real_info = core._timer_info
 core._timer_info = lambda: {"active": True, "running": False, "result": "success", "last": "Tue 2026-10-13 22:08:29",

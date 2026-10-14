@@ -2,6 +2,13 @@
 
 All releases of the `account-pool` plugin. Up to 3.13 its session tracker was a separate plugin, `account-pool-tracker` (last version 1.5.1); since 4.0 it is part of `account-pool`.
 
+## 4.0.3
+
+- First install from the catalog: `hermes plugins install account-pool --enable` alone puts the plugin into one profile. While Hermes Desktop ran another profile, the Accounts page said only `The account-pool backend did not answer`, and Hermes' own **Install here** button (Capabilities > Plugins) stopped with `No agent or desktop plugin artifacts found in this repository.`, because Hermes keeps a catalog install's address without its `plugins/account-pool` folder. The page now lists the steps for a missing backend: `hermes account <provider> setup` in the default profile, with a copy button, then close and reopen Desktop; it says to skip **Install here**. Other backend errors keep their own message. Reported from a Windows install.
+- `doctor` warns when Hermes is older than 0.21.6. Builds before 0.21.6 install and load the plugin without checking `requires_hermes`; there Codex browser sign-in is missing and Desktop loads the page's backend only when it starts.
+- README and PDF: the quick start shows both install commands and why the second one is needed, and Troubleshooting has rows for **Install here** and for an old Hermes.
+- Tests: `setup_sandbox` 67 → 70 (the version compare, the warning on 0.21.4, none on 0.21.7); 509 checks in total, UI 142 → 145 (the steps and the **Install here** note on a missing backend, no steps on other errors).
+
 ## 4.0.2
 
 - The balance timer did not run at all in a session that started more than 2 minutes after the computer did (Linux). The timer file that `setup --timer` writes had `OnBootSec=2min` with `Persistent=true`: systemd took the last run from the previous session, counted the boot trigger as used, and `OnUnitActiveSec=5min` had no run in this session to count from, so `list-timers` showed no next run. The order of the accounts, timed unparks, alerts and automatic wake stayed where they were; **Balance now** ran once without restarting the timer. New timer files use `OnStartupSec=2min` (2 minutes after login) and no `Persistent=`. An existing file is repaired on the next timer run, or at once by `hermes account <provider> setup --timer`, which also starts a run. Other lines, such as a changed interval, are kept; a hand-written `OnCalendar=` timer is left alone. Windows (Task Scheduler) was not affected.

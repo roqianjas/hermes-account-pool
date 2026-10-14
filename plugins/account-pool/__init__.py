@@ -2148,6 +2148,25 @@ def _tracker_who(g: dict) -> str:
     return f"{name} ({', '.join(g['profiles'])}{pid}; tracker {g['tracker']})"
 
 
+MIN_HERMES = (0, 21, 6)                            # requires_hermes in plugin.yaml
+
+
+def _hermes_version() -> str:
+    """The running Hermes release (\"0.21.7\"), \"\" when it cannot be read."""
+    try:
+        import hermes_cli
+        return str(getattr(hermes_cli, "__version__", "") or "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _hermes_too_old(version: str) -> bool:
+    """True for a release below MIN_HERMES. Builds before 0.21.6 install and load the plugin anyway:
+    their plugin loader does not check requires_hermes."""
+    m = re.match(r"(\d+)\.(\d+)\.(\d+)", version or "")
+    return bool(m) and tuple(int(x) for x in m.groups()) < MIN_HERMES
+
+
 def _doctor_checks(provider: str) -> list:
     """[(level, text)] with level ok / warn / fail. Probes the usage endpoint once."""
     root = _root()
@@ -2157,6 +2176,12 @@ def _doctor_checks(provider: str) -> list:
         checks.append((level, text))
 
     profiles = _profile_homes()
+
+    version = _hermes_version()
+    if _hermes_too_old(version):
+        add("warn", f"Hermes {version} is older than 0.21.6, the oldest release account-pool 4.x supports: Codex "
+                    "browser sign-in is missing, and Hermes Desktop loads the Accounts page backend only when it "
+                    "starts. Fix: hermes update")
 
     # strategy per profile
     strategies = _strategies(provider)

@@ -282,6 +282,8 @@ const CSS = `
 .hap-steps{margin:0;padding-left:18px;font-size:.75rem;line-height:1.5;color:var(--ui-text-secondary);list-style:decimal}
 .hap-steps li{margin:3px 0;padding-left:2px}
 .hap-steps b{color:var(--ui-text-primary);font-weight:600}
+.hap-setup-steps{max-width:560px;display:flex;flex-direction:column;gap:8px;text-align:left}
+.hap-setup-steps code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--ui-text-primary)}
 .hap-code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:1.3rem;letter-spacing:.14em;font-weight:600;color:var(--ui-text-primary)}
 .hap-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .hap-link{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.625rem;color:var(--ui-text-tertiary);word-break:break-all;max-height:3.2em;overflow:hidden}
@@ -1381,6 +1383,24 @@ function AlertsView({ provider, data, openResult }) {
 
 // ── page ─────────────────────────────────────────────────────────────────────
 
+// Shown when the backend answers 404: account-pool is not listed in the profile Desktop runs, or Desktop
+// started before it was. Hermes' own "Install here" button cannot fix it for this plugin: the catalog
+// sidecar keeps the repository without its plugins/account-pool folder, so the install dialog finds nothing.
+function BackendSetupSteps({ provider }) {
+  const cmd = `hermes account ${provider || 'anthropic'} setup`
+  return h('div', { className: 'hap-setup-steps' },
+    h('ol', { className: 'hap-steps' },
+      h('li', null, 'In a terminal, in the default profile (no -p), run ', h('code', null, cmd), ' ',
+        h(CopyButton, { text: cmd, appearance: 'icon' }),
+        ' and answer y. It lists account-pool in every profile. Add --timer for the 5-minute balance timer.'),
+      h('li', null, 'Close Hermes Desktop and open it again.'),
+      h('li', null, 'Still this message? ', h('code', null, `hermes account ${provider || 'anthropic'} doctor`),
+        ' names the profiles that miss it. Hermes older than 0.21.6 is not supported: update it first.')),
+    h('p', { className: 'hap-muted' }, 'Skip "Install here" under Capabilities > Plugins for this plugin: Hermes drops ',
+      'the plugins/account-pool folder from the address and stops with "No agent or desktop plugin artifacts found". ',
+      'setup does that step.'))
+}
+
 function AccountsPage() {
   const invalidate = useInvalidate()
   const [provider, setProviderState] = useState(() => storage.get('provider', 'anthropic'))
@@ -1445,13 +1465,15 @@ function AccountsPage() {
   if (q.isLoading) content = h('div', { className: 'hap-empty' }, h(Loader, { type: 'lemniscate-bloom' }))
   else if (q.error) {
     const msg = errText(q.error)
+    const missing = /404|not found/i.test(msg)
     content = h('div', { className: 'hap-empty' },
       h(ErrorState, {
         title: 'The account-pool backend did not answer',
-        description: /404|not found/i.test(msg)
-          ? 'Hermes Desktop loads this backend only for profiles that list account-pool in plugins.enabled, and only when it starts. Run "hermes account anthropic setup" (it lists account-pool in every profile; the command stays in the default profile), then restart Hermes Desktop. "hermes account anthropic doctor" names the profiles that miss it.'
+        description: missing
+          ? 'Hermes Desktop serves this page from the profile it runs, and only when that profile lists account-pool in plugins.enabled. "hermes plugins install" lists it in one profile only, so the first install needs one more step.'
           : msg
-      }))
+      }),
+      missing ? h(BackendSetupSteps, { provider }) : null)
   } else if (view === 'report') content = h(ReportView, { provider })
   else if (view === 'activity') content = h(ActivityView, { provider })
   else if (view === 'health') content = h(HealthView, { provider, data, openResult })

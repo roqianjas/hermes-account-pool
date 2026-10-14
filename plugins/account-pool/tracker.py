@@ -25,7 +25,7 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-VERSION = "4.0.2"                 # account-pool's version: keep in step with plugin.yaml
+VERSION = "4.0.3"                 # account-pool's version: keep in step with plugin.yaml
 KEEP_SECONDS = 24 * 3600
 TOKEN_BUCKET = 900                 # seconds per token bucket
 TOKEN_KEEP = 8 * 24 * 3600         # token buckets older than this are dropped

@@ -16,7 +16,7 @@ from reportlab.platypus import (CondPageBreak, Image, KeepTogether, PageBreak, P
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 from reportlab.platypus.tableofcontents import TableOfContents
 
-VERSION = "4.0.2"
+VERSION = "4.0.3"
 REPO = "github.com/roqianjas/hermes-account-pool"
 FOOTER = f"Hermes plugin account-pool {VERSION} · {REPO}"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hermes-account-pool.pdf")
@@ -182,8 +182,13 @@ powershell -ExecutionPolicy Bypass -File .\\install.ps1 -SetStrategy
 hermes account anthropic add alice@example.com
 hermes account anthropic doctor
 """)
-P("Tanpa salinan git, " + C("hermes plugins install") + " melakukan hal yang sama dengan dua perintah, di Linux "
-  "maupun Windows (bagian 4.2). "
+P("Tanpa salinan git, dua perintah melakukan hal yang sama, di Linux maupun Windows:")
+code("""
+hermes plugins install account-pool --enable
+hermes account anthropic setup --timer --strategy
+""")
+P("Jalankan keduanya: " + C("hermes plugins install") + " memasang plugin di satu profil, dan " + C("setup")
+  + " menambahkannya ke profil lain (bagian 4.2). "
   "Setelah itu timer menjaga urutan pool secara otomatis. Sehari-hari yang paling sering dipakai: " + C("usage")
   + ", " + C("who") + ", " + C("park") + ", dan " + C("doctor") + ". Di Hermes Desktop, restart aplikasinya sekali "
   "lalu nyalakan halamannya di Capabilities &gt; Plugins untuk mendapat semua itu dalam satu halaman (bagian 8).")
@@ -237,7 +242,7 @@ code("""
 hermes plugins install account-pool --enable
 hermes account anthropic setup --timer --strategy
 """)
-P("Katalog memasang versi yang sudah direview pengelolanya (sekarang 4.0.1; 4.0.2 ada di GitHub sampai entri katalog dipindah), dan "
+P("Katalog memasang versi yang sudah direview pengelolanya (sekarang 4.0.1; 4.0.3 ada di GitHub sampai entri katalog dipindah), dan "
   + C("hermes plugins update account-pool") + " ikut naik setelah entri katalog dipindah ke rilis baru. Untuk "
   "mengikuti " + C("main") + " repo ini, pasang langsung dari GitHub:")
 code("""
@@ -245,6 +250,13 @@ hermes plugins install roqianjas/hermes-account-pool#plugins/account-pool --enab
 """)
 P("Jalankan di profil default (tanpa " + C("-p") + "): perintahnya ada di sana, dan " + C("setup") + " menautkan "
   "plugin dari sana ke profil lain, supaya pelacak sesinya jalan di setiap profil.")
+P("Perintah kedua adalah bagian dari instalasi. Dengan perintah pertama saja " + C("hermes account") + " sudah jalan, "
+  "tetapi halaman Accounts di Hermes Desktop menampilkan " + C("The account-pool backend did not answer") + " setiap kali "
+  "Desktop memakai profil lain, dan " + C("who") + " tidak melihat bot di profil lain. Jangan pula menambahkan plugin ke "
+  "profil lain lewat <b>Install here</b> di Capabilities &gt; Plugins: Hermes menyimpan alamat instalasi katalog tanpa "
+  "folder " + C("plugins/account-pool") + ", jadi dialog itu berhenti dengan "
+  + C("No agent or desktop plugin artifacts found in this repository.") + " (Hermes Desktop 0.21.7 ke bawah). "
+  + C("setup") + " sudah mengerjakan langkah itu.")
 P("Kedua cara mengunduh plugin dari GitHub. Hermes memindainya sebelum memasang, dan berhenti bila ada temuan. Untuk "
   + C("account-pool") + " ada 16 temuan, semuanya memang bagian dari cara kerja plugin:")
 LI(["15 panggilan " + C("subprocess") + ": " + C("notify-send") + " (notifikasi desktop di Linux), "
@@ -297,7 +309,7 @@ code("""
 $ hermes account anthropic setup --timer
 [anthropic] Setup: the default profile and 2 other profile(s) in /home/you/.hermes
   Accounts page    backend listed in 0 of 2 other profile(s)
-  Session tracking 4.0.2, active in 1 of 3 profile(s)
+  Session tracking 4.0.3, active in 1 of 3 profile(s)
   Balance timer    not installed
   Rotation         fill_first in all 3 profile(s)
 Changes:
@@ -451,7 +463,7 @@ hermes account anthropic doctor
 code("""
 [anthropic] Setup: the default profile and 2 other profile(s) in /home/you/.hermes
   Accounts page    backend listed in 2 of 2 other profile(s)
-  Session tracking 4.0.2, active in 1 of 3 profile(s)
+  Session tracking 4.0.3, active in 1 of 3 profile(s)
   Balance timer    runs every provider with accounts (now: anthropic), active
   Rotation         fill_first in all 3 profile(s)
 Changes:
@@ -968,7 +980,7 @@ $ hermes account anthropic doctor
   OK    strategy fill_first in 6 profiles
   OK    every profile uses the shared account pool
   OK    session tracking active in every profile
-  OK    running sessions count with session tracking 4.0.2
+  OK    running sessions count with session tracking 4.0.3
   OK    Accounts page backend enabled in every profile
   OK    account-pool-parking.json permissions 600
   OK    balance timer active, last run 2026-10-10 18:36:09 WIB
@@ -979,8 +991,9 @@ $ hermes account anthropic doctor
   0 failure(s), 0 warning(s).
 """)
 P("Jalankan setelah instalasi, setelah update Hermes, atau saat bot berperilaku aneh. Setiap baris FAIL atau WARN "
-  "menyertakan perbaikannya. Pelacak sesi dimuat saat proses mulai, jadi setelah update gateway, Hermes Desktop, dan sesi "
-  "panjang masih memakai pelacak lama; doctor lalu memberi WARN " + C("session tracker 4.0.2 is not loaded yet by: ...")
+  "menyertakan perbaikannya. Doctor memberi WARN bila Hermes lebih tua dari 0.21.6: build sebelum 0.21.6 memasang dan "
+  "memuat plugin tanpa memeriksa " + C("requires_hermes") + "-nya. Pelacak sesi dimuat saat proses mulai, jadi setelah update gateway, Hermes Desktop, dan sesi "
+  "panjang masih memakai pelacak lama; doctor lalu memberi WARN " + C("session tracker 4.0.3 is not loaded yet by: ...")
   + " beserta restart yang dibutuhkan masing-masing. Token tanpa nama bot dalam setengah jam terakhir berarti "
   + C("account-pool-tracker") + " 1.2.0 atau lebih lama masih berjalan. Untuk akun parkir, doctor memberi WARN bila "
   "Hermes memasukkannya lagi ke rotasi, bila akunnya keluar dari pool, bila Hermes menahan akun sebagai parkir "
@@ -1194,7 +1207,8 @@ H2("8.2 Kenapa semua profil mencantumkan account-pool")
 P("Hermes Desktop menjalankan backend-nya dengan profil yang terakhir Anda pakai (" + C("hermes --profile &lt;nama&gt; serve")
   + "). Backend itu hanya memuat route halaman sebuah plugin jika plugin itu ada di " + C("plugins.enabled")
   + " <b>profil tersebut</b>. Jika " + C("account-pool") + " hanya ada di profil default, halaman jalan saat Desktop "
-  "memakai profil default, dan menampilkan " + C("The account-pool backend did not answer") + " saat memakai profil lain.")
+  "memakai profil default, dan menampilkan " + C("The account-pool backend did not answer") + " saat memakai profil lain. "
+  "Sejak 4.0.3 halaman itu juga menampilkan langkah perbaikannya.")
 P("Karena itu " + C("setup") + " (dan " + C("install.sh") + ") menambahkan " + C("account-pool") + " ke " + C("plugins.enabled") + " semua profil, "
   "dan menautkan " + C("plugins/account-pool") + " profil itu ke salinan profil default. Yang didapat profil dari situ:")
 LI(["Agent di sebuah profil memuat plugin dari folder " + C("plugins/") + " milik profil itu sendiri. Di sana "
@@ -1755,8 +1769,18 @@ table([
      + C("hermes account &lt;provider&gt; notify test")],
     [C("hermes account") + " tidak dikenal", "Dijalankan dengan -p (plugin hanya di default)", "Jalankan tanpa -p"],
     ["Halaman: " + C("The account-pool backend did not answer"), "Desktop memakai profil yang belum mencantumkan "
-     + C("account-pool") + " (profil baru, atau instalasi sebelum 3.5.1), atau belum di-restart setelah instalasi",
-     C("hermes account &lt;provider&gt; setup") + ", lalu restart Hermes Desktop. " + C("doctor") + " menyebut profil yang belum"],
+     + C("account-pool") + " (baru " + C("hermes plugins install") + " yang dijalankan, profil baru, atau instalasi sebelum "
+     "3.5.1), atau belum di-restart setelah instalasi",
+     C("hermes account &lt;provider&gt; setup") + " di profil default, lalu tutup dan buka lagi Hermes Desktop. "
+     + C("doctor") + " menyebut profil yang belum"],
+    ["<b>Install here</b> di Capabilities &gt; Plugins berhenti dengan "
+     + C("No agent or desktop plugin artifacts found in this repository."), "Hermes menyimpan alamat instalasi katalog "
+     "tanpa folder " + C("plugins/account-pool") + ", jadi dialognya melihat akar repositori (Hermes Desktop 0.21.7 ke "
+     "bawah)", "Tidak perlu: " + C("hermes account &lt;provider&gt; setup") + " di profil default menambahkan plugin ke "
+     "semua profil. Lalu tutup dan buka lagi Hermes Desktop"],
+    [C("doctor") + " memberi WARN " + C("Hermes 0.21.x is older than 0.21.6"), "Build Hermes sebelum 0.21.6 memasang dan "
+     "memuat plugin tanpa memeriksa " + C("requires_hermes"), C("hermes update") + ", lalu tutup dan buka lagi Hermes "
+     "Desktop"],
     [C("add needs a terminal") + " / " + C("relogin needs a terminal"), "Dijalankan dari cron, shell agent, atau tempat "
      "lain tanpa terminal, jadi tidak ada yang bisa menempel kode login", "Jalankan di terminal, atau pakai <b>Add "
      "account</b> / <b>Sign in again</b> di halaman"],
@@ -1964,6 +1988,10 @@ table([
 H1("19. Riwayat versi")
 table([
     ["Versi", "Perubahan"],
+    ["4.0.3", "Instalasi pertama dari katalog: halaman Accounts yang menampilkan " + C("backend did not answer")
+     + " kini menampilkan langkah perbaikannya (" + C("setup") + " di profil default, lalu buka ulang Desktop) dan "
+     "memperingatkan tombol <b>Install here</b> milik Hermes, yang gagal untuk plugin ini. " + C("doctor")
+     + " memberi WARN bila Hermes lebih tua dari 0.21.6."],
     ["4.0.2", "Timer balance tidak jalan sepanjang sesi bila Anda login lebih dari 2 menit setelah komputer "
      "menyala (file timer " + C("OnBootSec") + " + " + C("Persistent=true") + "). File baru memakai "
      + C("OnStartupSec=2min") + " tanpa " + C("Persistent") + "; file lama diperbaiki di putaran timer berikutnya "
