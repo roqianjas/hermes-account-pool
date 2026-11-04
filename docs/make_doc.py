@@ -16,7 +16,7 @@ from reportlab.platypus import (CondPageBreak, Image, KeepTogether, PageBreak, P
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 from reportlab.platypus.tableofcontents import TableOfContents
 
-VERSION = "4.1.0"
+VERSION = "4.1.1"
 REPO = "github.com/roqianjas/hermes-account-pool"
 FOOTER = f"Hermes plugin account-pool {VERSION} · {REPO}"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hermes-account-pool.pdf")
@@ -247,7 +247,7 @@ code("""
 hermes plugins install account-pool --enable
 hermes account anthropic setup --timer --strategy
 """)
-P("Katalog memasang versi yang sudah direview pengelolanya (sekarang 4.0.1; 4.1.0 ada di GitHub sampai entri katalog dipindah), dan "
+P("Katalog memasang versi yang sudah direview pengelolanya (sekarang 4.0.1; 4.1.1 ada di GitHub sampai entri katalog dipindah), dan "
   + C("hermes plugins update account-pool") + " ikut naik setelah entri katalog dipindah ke rilis baru. Untuk "
   "mengikuti " + C("main") + " repo ini, pasang langsung dari GitHub:")
 code("""
@@ -314,7 +314,7 @@ code("""
 $ hermes account anthropic setup --timer
 [anthropic] Setup: the default profile and 2 other profile(s) in /home/you/.hermes
   Accounts page    backend listed in 0 of 2 other profile(s)
-  Session tracking 4.1.0, active in 1 of 3 profile(s)
+  Session tracking 4.1.1, active in 1 of 3 profile(s)
   Balance timer    not installed
   Rotation         fill_first in all 3 profile(s)
 Changes:
@@ -468,7 +468,7 @@ hermes account anthropic doctor
 code("""
 [anthropic] Setup: the default profile and 2 other profile(s) in /home/you/.hermes
   Accounts page    backend listed in 2 of 2 other profile(s)
-  Session tracking 4.1.0, active in 1 of 3 profile(s)
+  Session tracking 4.1.1, active in 1 of 3 profile(s)
   Balance timer    runs every provider with accounts (now: anthropic), active
   Rotation         fill_first in all 3 profile(s)
 Changes:
@@ -1006,7 +1006,7 @@ $ hermes account anthropic doctor
   OK    strategy fill_first in 6 profiles
   OK    every profile uses the shared account pool
   OK    session tracking active in every profile
-  OK    running sessions count with session tracking 4.1.0
+  OK    running sessions count with session tracking 4.1.1
   OK    Accounts page backend enabled in every profile
   OK    account-pool-parking.json permissions 600
   OK    balance timer active, last run 2026-10-10 18:36:09 WIB
@@ -1019,7 +1019,7 @@ $ hermes account anthropic doctor
 P("Jalankan setelah instalasi, setelah update Hermes, atau saat bot berperilaku aneh. Setiap baris FAIL atau WARN "
   "menyertakan perbaikannya. Doctor memberi WARN bila Hermes lebih tua dari 0.21.6: build sebelum 0.21.6 memasang dan "
   "memuat plugin tanpa memeriksa " + C("requires_hermes") + "-nya. Pelacak sesi dimuat saat proses mulai, jadi setelah update gateway, Hermes Desktop, dan sesi "
-  "panjang masih memakai pelacak lama; doctor lalu memberi WARN " + C("session tracker 4.1.0 is not loaded yet by: ...")
+  "panjang masih memakai pelacak lama; doctor lalu memberi WARN " + C("session tracker 4.1.1 is not loaded yet by: ...")
   + " beserta restart yang dibutuhkan masing-masing. Token tanpa nama bot dalam setengah jam terakhir berarti "
   + C("account-pool-tracker") + " 1.2.0 atau lebih lama masih berjalan. Untuk akun parkir, doctor memberi WARN bila "
   "Hermes memasukkannya lagi ke rotasi, bila akunnya keluar dari pool, bila Hermes menahan akun sebagai parkir "
@@ -1255,15 +1255,16 @@ table([
      "strategi, klik untuk mengubahnya); banner menyebut profil yang tidak memakai " + C("fill_first") + " beserta "
      "tombol <b>Use fill_first</b>. Lima kartu: akun dalam rotasi, akun parkir, akun tempat sesi berikutnya mulai beserta pemakaiannya, "
      "jumlah sesi 30 menit terakhir, dan token 24 jam terakhir beserta harga API-nya. Kartu keenam adalah perkiraan "
-     "(bagian 9): kapan semua akun ≥ 90% dengan laju satu jam terakhir. Lalu tabel rotasi sesuai urutan pool: status, bar "
-     "pemakaian (yang lebih penuh dari jendela 5 jam dan minggu) dengan tag " + C("week N%") + " di sebelahnya (oranye "
-     "mulai ambang peringatan mingguan, 90%; arahkan kursor untuk jendela 5 jam, minggu dan jam resetnya, serta minggu "
-     "Opus/Sonnet), garis tren 5 jam terakhir (arahkan kursor untuk rentangnya dan angka tertinggi 24 jam terakhir), jam reset limit yang lebih penuh itu (" + C("back HH:MM") + " saat diistirahatkan, " + C("not started") + " selama jendela tidak berjalan), "
+     "(bagian 9): kapan semua akun ≥ 90% dengan laju satu jam terakhir. Lalu tabel rotasi sesuai urutan pool: status, "
+     "pemakaian berupa dua bar bertumpuk, jendela 5 jam (" + C("5h") + ") di atas dan minggu (" + C("week") + ") di bawah "
+     "(persen minggu berwarna oranye mulai ambang peringatan mingguan, 90%; arahkan kursor untuk keduanya beserta jam "
+     "resetnya dan minggu Opus/Sonnet; akun tanpa bacaan mingguan tetap satu bar), garis tren jendela 5 jam selama 5 jam terakhir (arahkan kursor untuk rentangnya dan angka tertinggi 24 jam terakhir), jam reset yang sejajar dengan bar, milik jendela 5 jam di atas dan milik minggu di bawah (" + C("back ...")
+     + " di baris limit yang ditunggu saat diistirahatkan, " + C("not started") + " selama jendela tidak berjalan), "
      "token 24 jam terakhir (arahkan kursor untuk rincian input, output, cache, jumlah request, harga API, model utama, dan "
      "jendela 5 jam yang sedang berjalan), profil yang memakai akun itu "
      "(arahkan kursor untuk melihat sesi, platform, model, sejak kapan sesi itu di akun ini, dan akun asalnya bila pindah), serta tombol <b>Sign in again</b>, <b>Park</b>, "
      "<b>Park on a schedule</b>, <b>Remove</b>. Ikon kalender di sebelah akun menunjukkan jadwalnya. Di bawahnya akun "
-     "parkir dengan kolom yang sama: pemakaian, tag mingguan, garis tren, dan jam reset (timer tetap membacanya; "
+     "parkir dengan kolom yang sama: dua bar pemakaian, garis tren, dan jam reset (timer tetap membacanya; "
      + C("not started") + " bila jendelanya sudah habis), sejak kapan, kapan kembali (" + C("(schedule)") + " bila diparkir jadwal), tombol "
      "<b>Unpark</b>, <b>Park on a schedule</b>, dan <b>Remove</b>. Lalu tabel jadwal parkir beserta keadaannya "
      "sekarang, dengan tombol ubah dan hapus. Peringatan aktif tampil sebagai banner di atas; akun mati mendapat tombol <b>Sign in again</b>, peringatan bot "
@@ -1885,10 +1886,11 @@ table([
     ["Akun diistirahatkan (" + C("bench X (93% weekly)") + ") atau paling belakang padahal pemakaian 5 jamnya rendah",
      "Limit mingguannya hampir penuh", "Memang begitu: akun kembali saat minggunya reset (jamnya ada di " + C("usage")
      + ", " + C("who") + ", dan halaman). Akun lain menanggung beban sampai saat itu"],
-    ["<b>Resets</b> menampilkan hari yang masih beberapa hari lagi", "Minggu adalah limit yang lebih penuh, jadi "
-     "jam resetnya milik minggu", "Arahkan kursor ke tag " + C("week") + " (halaman) atau baca ujung baris "
-     + C("usage") + " untuk jendela 5 jam"],
-    ["Tidak ada tag atau teks " + C("week") + " untuk akun Anthropic", "Jawaban pemakaiannya tanpa angka mingguan "
+    ["Kolom <b>resets</b> di " + C("usage") + " menampilkan hari yang masih beberapa hari lagi", "Minggu adalah "
+     "limit yang lebih penuh, dan " + C("usage") + " menampilkan jam reset limit yang lebih penuh", "Baca ujung baris "
+     "untuk jendela 5 jam (" + C("5h 17%") + "). Halaman menampilkan kedua jam reset: jendela 5 jam di atas, minggu di "
+     "bawah (sejak 4.1.1)"],
+    ["Tidak ada bar atau teks " + C("week") + " untuk akun Anthropic", "Jawaban pemakaiannya tanpa angka mingguan "
      "(paket tanpa limit mingguan), atau belum ada bacaan sejak 4.1.0", "Tunggu putaran timer berikutnya atau tekan "
      "<b>Live usage</b>; tanpa angka mingguan, jendela 5 jam bekerja seperti biasa"],
     ["<b>Resets</b> menampilkan " + C("not started"), "Tidak ada jendela 5 jam yang berjalan di akun itu",
@@ -2054,6 +2056,8 @@ table([
 H1("19. Riwayat versi")
 table([
     ["Versi", "Perubahan"],
+    ["4.1.1", "Halaman Accounts: dua bar bertumpuk per akun (jendela 5 jam di atas, minggu di bawah) dan dua jam "
+     "reset yang sejajar dengannya; garis tren dan puncak 24 jam mengikuti jendela 5 jam."],
     ["4.1.0", "Limit mingguan Claude di samping jendela 5 jam: " + C("usage") + " menampilkan keduanya (plus minggu "
      "Opus/Sonnet sebagai info), angka pemakaian dan urutan " + C("balance") + " memakai yang lebih penuh (akun yang "
      "minggunya ≥ 90% diistirahatkan sampai minggunya reset), " + C("who") + " dan halaman menampilkan minggu tiap "

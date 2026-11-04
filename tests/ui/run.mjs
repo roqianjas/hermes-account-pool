@@ -74,6 +74,8 @@ fc.back_at += shift
   }
   st.rotation.find(r => r.label === 'heidi@example.com').usage.reset = weekReset
   st.alert_week_above = 55
+  // dave benched by balance until his week resets: `back ...` belongs on the week's line
+  Object.assign(st.rotation.find(r => r.label === 'dave@example.com'), { state: 'BENCHED', back_at: weekReset })
 }
 const calls = []
 let failNext = null
@@ -169,32 +171,53 @@ ok(parkedRows.length === status.parked.length, `parked table has ${parkedRows.le
   ok(col > 0 && heads.includes('5-hour + weekly usage'), `parked table has a Resets column (${heads.filter(Boolean).join(', ')})`)
   const cell = (row, i) => row.querySelectorAll('td')[i].textContent
   const [ivanRow, judyRow] = parkedRows
-  ok(/\d{2}:\d{2}/.test(cell(ivanRow, col)), `a parked account mid-window shows when it resets (${cell(ivanRow, col)})`)
-  ok(cell(judyRow, col) === 'not started', 'a parked account whose window ended reads "not started"')
+  const line = (row, which) => row.querySelectorAll('td')[col].querySelector(`[data-reset="${which}"]`)?.textContent
+  ok(/\d{2}:\d{2}/.test(line(ivanRow, '5h')), `a parked account mid-window shows when it resets (${line(ivanRow, '5h')})`)
+  ok(line(judyRow, '5h') === 'not started', 'a parked account whose window ended reads "not started"')
+  ok(/^\S+ \d{2}:\d{2}/.test(line(judyRow, 'week') || ''), `under it, when its week resets (${line(judyRow, 'week')})`)
   const tip = row => row.querySelector('.hap-spark-cell')?.getAttribute('aria-label') || ''
-  ok(tip(ivanRow).startsWith('Last 5 hours: 5% to 29%, highest 29%.'), `the parked sparkline tells the 5 hours: ${tip(ivanRow).split('\n')[0]}`)
-  ok(/Highest in the last 24 hours: 48% at [^\n]*\d{2}:\d{2}[^\n]*\.$/.test(tip(judyRow)) && judyRow.querySelector('svg.hap-spark'),
+  ok(tip(ivanRow).startsWith('5-hour window, last 5 hours: 5% to 29%, highest 29%.'), `the parked sparkline tells the 5 hours: ${tip(ivanRow).split('\n')[0]}`)
+  ok(/Highest 5-hour window in the last 24 hours: 48% at [^\n]*\d{2}:\d{2}[^\n]*\.$/.test(tip(judyRow)) && judyRow.querySelector('svg.hap-spark'),
     'a flat parked sparkline still tells the day\'s highest reading')
-  ok(tip(rows[0]).includes('Highest in the last 24 hours: 10%'), 'rotation sparklines carry the same tooltip')
+  ok(tip(rows[0]).includes('Highest 5-hour window in the last 24 hours: 10%'), 'rotation sparklines carry the same tooltip')
   ok(screen.getByText(/the balance timer still reads its usage/), 'the parked section says its usage is still read')
 }
 ok(within(rows[0]).getByText(status.rotation[0].label), 'first account label shown')
 {
-  // the weekly limit next to the usage bar; the bar shows the fuller of the two
-  const tags = [...document.querySelectorAll('.hap-table')[0].querySelectorAll('[data-week]')]
-  ok(tags.length === status.rotation.filter(r => r.week && r.week.pct != null).length, `every rotation row with a weekly reading shows it (${tags.length})`)
+  // two bars per account: the 5-hour window on top, the week below; the resets line up with them
+  const weeks = [...document.querySelectorAll('.hap-table')[0].querySelectorAll('[data-week]')]
+  ok(weeks.length === status.rotation.filter(r => r.week && r.week.pct != null).length, `every rotation row with a weekly reading has a week bar (${weeks.length})`)
   const byLabel = label => [...rows].find(r => r.textContent.includes(label))
+  const bars = label => [...byLabel(label).querySelectorAll('.hap-usage2 > .hap-line')]
+    .map(l => [l.dataset.limit, l.querySelector('.hap-ulabel').textContent, l.querySelector('.hap-pct').textContent, l.querySelectorAll('.hap-bar').length])
+  ok(JSON.stringify(bars('heidi@example.com')) === JSON.stringify([['5h', '5h', '12%', 1], ['week', 'week', '57%', 1]]),
+    `the 5-hour bar sits above the week bar (${JSON.stringify(bars('heidi@example.com'))})`)
   const heidi = byLabel('heidi@example.com').querySelector('[data-week]')
-  ok(heidi.textContent === 'week 57%' && heidi.dataset.week === 'high' && heidi.classList.contains('hap-warn'),
-    `a week at or above the alert limit reads high (${heidi.textContent}, ${heidi.dataset.week})`)
-  const tip = heidi.getAttribute('aria-label')
-  ok(tip.includes('5-hour window: 12%') && /Weekly limit: 57%, resets \S+ \d{2}:\d{2}/.test(tip)
-    && tip.includes('Opus week: 64% (caps that model only)') && tip.includes('balance orders accounts by it'),
-    `the tag's tip names the 5-hour window, the week with its weekday reset and the model limits`)
+  ok(heidi.dataset.week === 'high' && heidi.querySelector('.hap-pct').classList.contains('hap-warn')
+    && heidi.querySelector('.hap-bar').classList.contains('warn'), `a week at or above the alert limit reads high (${heidi.dataset.week})`)
+  const wtip = byLabel('heidi@example.com').querySelector('.hap-usage2').getAttribute('aria-label')
+  ok(wtip.includes('5-hour window: 12%, resets') && /Weekly limit: 57%, resets \S+ \d{2}:\d{2}/.test(wtip)
+    && wtip.includes('Opus week: 64% (caps that model only)') && wtip.includes('Balance orders accounts by the fuller of the two'),
+    `the tip names the 5-hour window, the week with its weekday reset and the model limits`)
   const carol = byLabel('carol@example.com').querySelector('[data-week]')
-  ok(carol.textContent === 'week 13%' && carol.dataset.week === 'ok', 'a week below the limit reads plain')
-  ok(!byLabel('grace@example.com').querySelector('[data-week]'), 'no weekly reading: no tag')
+  ok(carol.querySelector('.hap-pct').textContent === '13%' && carol.dataset.week === 'ok'
+    && !carol.querySelector('.hap-pct').classList.contains('hap-warn'), 'a week below the limit reads plain')
+  const erin = bars('erin@example.com')
+  ok(erin[0][2] === '0%' && erin[1][2] === '0%', `an idle window draws an empty 5-hour bar (${JSON.stringify(erin)})`)
+  const grace = byLabel('grace@example.com')
+  ok(!grace.querySelector('[data-week]') && !grace.querySelector('.hap-usage2') && grace.querySelectorAll('.hap-bar').length === 1,
+    'no weekly reading: the single bar, as before')
   ok([...parkedRows].every(r => r.querySelector('[data-week]')), 'parked rows show their week too')
+  const resets = label => [...byLabel(label).querySelectorAll('.hap-resets2 > .hap-line')].map(l => [l.dataset.reset, l.textContent])
+  const hr = resets('heidi@example.com')
+  ok(hr.length === 2 && hr[0][0] === '5h' && /\d{2}:\d{2}/.test(hr[0][1]) && hr[0][1] !== hr[1][1] && hr[1][0] === 'week' && /^\S+ \d{2}:\d{2}/.test(hr[1][1]),
+    `Resets: the 5-hour reset on top, the week's (with its weekday) below (${JSON.stringify(hr)})`)
+  const er = resets('erin@example.com')
+  ok(er[0][1] === 'not started' && /\d{2}:\d{2}/.test(er[1][1]), `an idle window reads "not started" above the week's reset (${JSON.stringify(er)})`)
+  const dr = resets('dave@example.com')
+  ok(/\d{2}:\d{2}/.test(dr[0][1]) && !dr[0][1].startsWith('back') && /^back \S+ \d{2}:\d{2}/.test(dr[1][1]),
+    `benched until the week resets: "back" on the week's line (${JSON.stringify(dr)})`)
+  ok(!byLabel('grace@example.com').querySelector('.hap-resets2'), 'no weekly reading: one reset, as before')
 }
 ok(document.querySelectorAll('.hap-bar').length >= status.rotation.filter(r => r.usage && r.usage.pct != null).length, 'usage bars drawn')
 ok(document.querySelectorAll('svg.hap-spark').length > 0, 'sparklines drawn')

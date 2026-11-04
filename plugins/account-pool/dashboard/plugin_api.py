@@ -233,13 +233,15 @@ def _status(provider: str) -> dict:
     hist = _history_tail(provider, 24) if ad.has_usage else []
     snap, spark, peak = {}, {}, {}
     for rec in hist:                                   # oldest -> newest: the last write wins
+        win = rec.get("win") or {}
         for label, pct in (rec.get("usage") or {}).items():
             snap[label] = {"pct": float(pct), "reset": (rec.get("reset") or {}).get(label), "ts": rec["ts"],
-                           "source": "timer", "win": (rec.get("win") or {}).get(label)}
+                           "source": "timer", "win": win.get(label)}
+            five = float(win[label][0]) if win.get(label) else float(pct)   # the trend is the 5-hour window's
             if rec["ts"] >= now - SPARK_HOURS * 3600:
-                spark.setdefault(label, []).append([rec["ts"], float(pct)])
-            if float(pct) > 0 and float(pct) >= peak.get(label, {}).get("pct", 0):
-                peak[label] = {"pct": float(pct), "ts": rec["ts"]}    # the highest reading of the last 24 h
+                spark.setdefault(label, []).append([rec["ts"], five])
+            if five > 0 and five >= peak.get(label, {}).get("pct", 0):
+                peak[label] = {"pct": five, "ts": rec["ts"]}    # the highest 5-hour reading of the last 24 h
     live = _LIVE.get(provider)
     if live and now - live["ts"] < 900:
         for row in live["rows"]:

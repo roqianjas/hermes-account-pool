@@ -2,6 +2,15 @@
 
 All releases of the `account-pool` plugin. Up to 3.13 its session tracker was a separate plugin, `account-pool-tracker` (last version 1.5.1); since 4.0 it is part of `account-pool`.
 
+## 4.1.1
+
+- **Accounts page: two bars per account.** An account with a weekly reading shows its usage as two stacked bars, the 5-hour window (`5h`) on top and the week (`week`) below, each with its percent; 4.1.0 drew one bar (the fuller limit) and a `week N%` tag. The week's percent turns orange from the weekly alert level, and hovering either bar still lists both with their resets and the Opus / Sonnet weeks. An account without a weekly reading (a plan without one, or another provider) keeps the single bar.
+- **Resets lines up with the bars**: the 5-hour window's reset on top (`not started` while no window runs), the week's below. A bench shows `back ...` on the line of the limit it waits for. 4.1.0 showed only the fuller limit's reset, so an account whose week was fuller showed a reset days away and hid the 5-hour one.
+- The trend line and its "highest in the last 24 hours" follow the 5-hour window, also when the week is the fuller limit (4.1.0 drew the week there, which barely moves in 5 hours). Their tips name the 5-hour window.
+- `usage`, `balance` and every number outside the page are unchanged.
+- README and PDF: the Accounts page and two Troubleshooting rows; new screenshots of the Accounts page.
+- Tests: `weekly_sandbox` 47 → 48 (the page's trend and peak follow the 5-hour window); 558 checks in total, UI 151 → 158 (the two bars and their order, the week's colour, an idle window's empty bar, one bar without a week, both resets, `back` on the week's line for a bench that waits for the week).
+
 ## 4.1.0
 
 Claude's weekly limit, next to the 5-hour window.

@@ -266,6 +266,8 @@ check(bob["week"] and bob["week"]["pct"] == 92.0 and abs(bob["week"]["reset"] - 
       and bob["week"]["models"][0][:2] == ["Sonnet week", 12.0],
       "page: the row carries the weekly limit, its reset and the model-family limits")
 check(bob["window"]["pct"] == 30.0 and not bob["window"]["idle"], "page: the 5-hour window keeps its own percent")
+check(bob["spark"] and bob["spark"][-1][1] == 30.0 and bob["peak"]["pct"] == 30.0,
+      f"page: the trend and the day's peak follow the 5-hour window, not the week ({bob['spark'][-1:]}, {bob['peak']})")
 check(row_of(st, "carol@example.com")["week"]["pct"] == 96.0, "page: parked rows carry it too")
 check(st.get("alert_week_above") == 90, "page: the alert limit is sent for the week tag colour")
 kinds = [a for a in st.get("alerts", []) if a.get("kind") == "week"]

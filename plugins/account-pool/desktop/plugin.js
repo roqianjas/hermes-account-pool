@@ -261,6 +261,10 @@ const CSS = `
 .hap-num{font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
 .hap-acc{display:flex;align-items:center;gap:7px;color:var(--ui-text-primary);white-space:nowrap}
 .hap-usage{display:flex;align-items:center;gap:8px;white-space:nowrap}
+.hap-usage2,.hap-resets2{display:flex;flex-direction:column;gap:4px}
+.hap-resets2{align-items:flex-end}
+.hap-line{height:16px;line-height:16px;display:flex;align-items:center;white-space:nowrap}
+.hap-ulabel{width:30px;flex:none;font-size:.625rem;color:var(--ui-text-tertiary)}
 .hap-bar{display:inline-block;width:96px;height:6px;border-radius:3px;background:var(--ui-bg-quaternary);overflow:hidden;flex:none}
 .hap-bar>i{display:block;height:100%;background:var(--ui-accent)}
 .hap-bar.warn>i{background:var(--ui-orange)}
@@ -332,44 +336,71 @@ function SparkCell({ points, peak, now }) {
   if (!seen && !peak) return null
   const vals = seen ? points.map(p => p[1]) : []
   const label = [
-    seen ? `Last 5 hours: ${Math.round(vals[0])}% to ${Math.round(vals[vals.length - 1])}%, highest ${Math.round(Math.max(...vals))}%.`
+    seen ? `5-hour window, last 5 hours: ${Math.round(vals[0])}% to ${Math.round(vals[vals.length - 1])}%, highest ${Math.round(Math.max(...vals))}%.`
       : 'No reading in the last 5 hours.',
-    peak ? `Highest in the last 24 hours: ${Math.round(peak.pct)}% at ${hhmm(peak.ts)}.` : 'Nothing used in the last 24 hours.'
+    peak ? `Highest 5-hour window in the last 24 hours: ${Math.round(peak.pct)}% at ${hhmm(peak.ts)}.` : 'Nothing used in the last 24 hours.'
   ].join('\n')
   return h(MTip, { label }, h('span', { className: 'hap-spark-cell', 'data-spark': seen ? 'line' : 'none', 'aria-label': label },
     seen ? h(Spark, { points, now }) : h('span', { className: 'hap-tag' }, '–')))
 }
 
-// The weekly limit next to the usage bar. The bar shows the fuller of the 5-hour window and the week.
-function WeekTag({ week, short, limit }) {
-  if (!week || week.pct == null) return null
-  const lines = []
-  if (short && short.pct != null) lines.push(`5-hour window: ${Math.round(short.pct)}%` + (short.reset ? `, resets ${hhmm(short.reset)}` : ', not running'))
-  lines.push(`Weekly limit: ${Math.round(week.pct)}%` + (week.reset ? `, resets ${hhmm(week.reset)}` : ''))
-  for (const [name, pct] of week.models || []) if (pct != null) lines.push(`${name}: ${Math.round(pct)}% (caps that model only)`)
-  lines.push('The bar shows the fuller one; balance orders accounts by it.')
-  const high = week.pct >= (limit || 90)
-  return h(MTip, { label: lines.join('\n') },
-    h('span', { className: `hap-tag${high ? ' hap-warn' : ''}`, 'data-week': high ? 'high' : 'ok', 'aria-label': lines.join(' ') },
-      `week ${Math.round(week.pct)}%`))
-}
+const usageBar = (pct, tone) => h('span', { className: `hap-bar ${tone}` }, h('i', { style: { width: `${Math.min(100, Math.max(2, pct))}%` } }))
+const usageTone = (pct, parked) => parked ? 'muted' : pct >= 90 ? 'bad' : pct >= 70 ? 'warn' : ''
+const weekOf = row => row && row.week && row.week.pct != null ? row.week : null
 
+// The usage of one account. With a weekly reading: two bars, the 5-hour window on top and the week below
+// (balance orders accounts by the fuller one). Without one: the single bar of the provider's window.
 function UsageCell({ usage, parked, week, short, limit }) {
   if (!usage) return h('span', { className: 'hap-tag' }, 'no data yet')
   if (usage.pct == null) {
     return h(MTip, { label: `The usage window reset after the last reading (${ago(usage.age)}). Live usage or the next timer run shows the new number.` },
       h('span', { className: 'hap-tag' }, 'window reset since'))
   }
-  const pct = usage.pct
-  const tone = parked ? 'muted' : pct >= 90 ? 'bad' : pct >= 70 ? 'warn' : ''
   const tag = usage.source === 'live' ? `live, ${ago(usage.age)}` : usage.age > 900 ? ago(usage.age) : ''
-  const showWeek = week && week.pct != null
-  return h('div', { className: 'hap-usage' },
-    h('span', { className: `hap-bar ${tone}` }, h('i', { style: { width: `${Math.min(100, Math.max(2, pct))}%` } })),
-    h('span', { className: 'hap-pct' }, `${Math.round(pct)}%`),
-    showWeek ? h(WeekTag, { week, short, limit }) : null,
-    !showWeek && usage.detail && !usage.detail.startsWith('last known') ? h('span', { className: 'hap-tag' }, usage.detail) : null,
-    tag ? h('span', { className: 'hap-tag' }, tag) : null)
+  if (!week || week.pct == null) {
+    const pct = usage.pct
+    return h('div', { className: 'hap-usage' },
+      usageBar(pct, usageTone(pct, parked)),
+      h('span', { className: 'hap-pct' }, `${Math.round(pct)}%`),
+      usage.detail && !usage.detail.startsWith('last known') ? h('span', { className: 'hap-tag' }, usage.detail) : null,
+      tag ? h('span', { className: 'hap-tag' }, tag) : null)
+  }
+  const five = short && short.pct != null ? (short.idle ? 0 : short.pct) : null
+  const high = week.pct >= (limit || 90)
+  const lines = [five == null ? '5-hour window: no reading'
+    : `5-hour window: ${Math.round(five)}%` + (short.idle || !short.reset ? ', not running' : `, resets ${hhmm(short.reset)}`)]
+  lines.push(`Weekly limit: ${Math.round(week.pct)}%` + (week.reset ? `, resets ${hhmm(week.reset)}` : ''))
+  for (const [name, pct] of week.models || []) if (pct != null) lines.push(`${name}: ${Math.round(pct)}% (caps that model only)`)
+  lines.push('Balance orders accounts by the fuller of the two.')
+  const weekTone = parked ? 'muted' : week.pct >= 90 ? 'bad' : high || week.pct >= 70 ? 'warn' : ''
+  return h(MTip, { label: lines.join('\n') },
+    h('div', { className: 'hap-usage2', 'aria-label': lines.join(' ') },
+      h('div', { className: 'hap-usage hap-line', 'data-limit': '5h' },
+        h('span', { className: 'hap-ulabel' }, '5h'),
+        usageBar(five || 0, usageTone(five || 0, parked)),
+        h('span', { className: 'hap-pct' }, five == null ? '–' : `${Math.round(five)}%`),
+        tag ? h('span', { className: 'hap-tag' }, tag) : null),
+      h('div', { className: 'hap-usage hap-line', 'data-limit': 'week', 'data-week': high ? 'high' : 'ok' },
+        h('span', { className: 'hap-ulabel' }, 'week'),
+        usageBar(week.pct, weekTone),
+        h('span', { className: `hap-pct${high ? ' hap-warn' : ''}` }, `${Math.round(week.pct)}%`))))
+}
+
+// When the usage resets. With a weekly reading: the 5-hour window on top and the week below, lined up with
+// the two bars; a bench shows `back ...` on the line of the limit it waits for.
+function ResetsCell({ row, parked, wake }) {
+  const idle = row.window && row.window.idle && (parked ? !row.dead : row.state === 'active')
+  const notStarted = h(MTip, { label: parked ? 'The 5-hour window is not running: it starts with the first request after the account is unparked.'
+    : `The 5-hour window is not running: it starts with the next request and resets 5 hours later.${wake ? '\nWake starts it now.' : ''}` },
+    h('span', { className: 'hap-tag', 'data-window': 'idle' }, 'not started'))
+  const back = !parked && row.back_at ? h(MTip, { label: 'Back in rotation at this time' }, h('span', null, `back ${hhmm(row.back_at)}`)) : null
+  const week = weekOf(row)
+  if (!week) return back || (idle ? notStarted : hhmm(row.usage && row.usage.pct != null ? row.usage.reset : null))
+  const weekBack = back && week.reset && Math.abs(row.back_at - week.reset) < 300
+  return h('div', { className: 'hap-resets2' },
+    h('div', { className: 'hap-line', 'data-reset': '5h' },
+      back && !weekBack ? back : idle ? notStarted : h('span', null, hhmm(row.window && row.window.reset))),
+    h('div', { className: 'hap-line', 'data-reset': 'week' }, weekBack ? back : h('span', null, hhmm(week.reset))))
 }
 
 function IconButton({ icon, label, onClick, disabled }) {
@@ -988,12 +1019,7 @@ function AccountsView({ data, provider, openDialog }) {
             h(SchedChip, { s: schedOf(r.label) }))),
           h('td', null, h(UsageCell, { usage: r.usage, now, week: r.week, short: r.window, limit: data.alert_week_above })),
           h('td', null, h(SparkCell, { points: r.spark, peak: r.peak, now })),
-          h('td', { className: 'hap-num' },
-            r.back_at ? h(MTip, { label: 'Back in rotation at this time' }, h('span', null, `back ${hhmm(r.back_at)}`))
-              : r.window && r.window.idle && r.state === 'active'
-                ? h(MTip, { label: `The 5-hour window is not running: it starts with the next request and resets 5 hours later.${data.wake && data.wake.available ? '\nWake starts it now.' : ''}` },
-                  h('span', { className: 'hap-tag', 'data-window': 'idle' }, 'not started'))
-                : hhmm(r.usage && r.usage.pct != null ? r.usage.reset : null)),
+          h('td', { className: 'hap-num' }, h(ResetsCell, { row: r, wake: data.wake && data.wake.available })),
           h('td', { className: 'hap-num' }, h(TokensCell, { tokens: r.tokens, window: data.window })),
           h('td', null, h(Sessions, { sessions: r.sessions })),
           h('td', null, h('div', { className: 'hap-actions' },
@@ -1028,11 +1054,7 @@ function AccountsView({ data, provider, openDialog }) {
               h(SchedChip, { s: schedOf(p.label) }))),
             h('td', null, h(UsageCell, { usage: p.usage, parked: true, now, week: p.week, short: p.window, limit: data.alert_week_above })),
             h('td', null, h(SparkCell, { points: p.spark, peak: p.peak, now })),
-            h('td', { className: 'hap-num' },
-              p.window && p.window.idle && !p.dead
-                ? h(MTip, { label: 'The 5-hour window is not running: it starts with the first request after the account is unparked.' },
-                  h('span', { className: 'hap-tag', 'data-window': 'idle' }, 'not started'))
-                : hhmm(p.usage && p.usage.pct != null ? p.usage.reset : null)),
+            h('td', { className: 'hap-num' }, h(ResetsCell, { row: p, parked: true })),
             h('td', { className: 'hap-num' }, hhmm(p.since)),
             h('td', { className: 'hap-num' }, h(TokensCell, { tokens: p.tokens, window: data.window })),
             h('td', { className: 'hap-num' }, p.until
