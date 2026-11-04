@@ -1,10 +1,10 @@
 # hermes-account-pool
 
-Run several accounts of one provider in [Hermes Agent](https://hermes-agent.nousresearch.com/docs) and manage them from one command, `hermes account`, or from an Accounts page in Hermes Desktop. Add accounts with a verified email, see live usage per account, spread the load before an account runs out, start an idle account's 5-hour window early, park accounts for a while or on a weekly schedule, see which bot is on which account and how many tokens each bot uses, mask the emails for a screenshot, and get an alert or a daily summary.
+Run several accounts of one provider in [Hermes Agent](https://hermes-agent.nousresearch.com/docs) and manage them from one command, `hermes account`, or from an Accounts page in Hermes Desktop. Add accounts with a verified email, see live usage per account (the 5-hour window and the weekly limit), spread the load before an account runs out, start an idle account's 5-hour window early, park accounts for a while or on a weekly schedule, see which bot is on which account and how many tokens each bot uses, mask the emails for a screenshot, and get an alert or a daily summary.
 
-Version 4.0.3 · MIT · Hermes Agent ≥ 0.21.6 · Linux or Windows 10/11 · Indonesian PDF guide in [`docs/`](docs/hermes-account-pool.pdf)
+Version 4.1.0 · MIT · Hermes Agent ≥ 0.21.6 · Linux or Windows 10/11 · Indonesian PDF guide in [`docs/`](docs/hermes-account-pool.pdf)
 
-![The Accounts page in Hermes Desktop: eight accounts in rotation with their 5-hour usage, the bots on each account, two parked accounts with their reset times, two park schedules and the forecast](docs/screenshots/accounts.png)
+![The Accounts page in Hermes Desktop: eight accounts in rotation with their usage and weekly limit, the bots on each account, two parked accounts with their reset times, two park schedules and the forecast](docs/screenshots/accounts.png)
 
 More of the page: [Report](docs/screenshots/report.png) · [tokens by session and load by hour](docs/screenshots/sessions.png) · [Activity](docs/screenshots/activity.png) · [Alerts](docs/screenshots/alerts.png) · [Add account](docs/screenshots/add-account.png) · [Add a Codex account](docs/screenshots/add-account-codex.png) · [Wake](docs/screenshots/wake.png) · [emails masked](docs/screenshots/privacy.png). All screenshots show made-up accounts from the test fixtures.
 
@@ -38,8 +38,9 @@ Hermes already keeps a pool of accounts per provider and moves a session to the 
 | You want to | Plain Hermes | With this plugin |
 |---|---|---|
 | Add an account | `hermes auth add`, no check of which account you actually signed in as | `add` verifies the real email and throws away wrong or duplicate sign-ins |
-| See how full each account is | Not shown | `usage`, live, parked accounts included |
-| Avoid sessions waiting on a nearly full account | A session waits up to 600 s on a 429, then rotates | `balance` puts the least-used account first and benches accounts at ≥ 90% |
+| See how full each account is | Not shown | `usage`, live, parked accounts included: the 5-hour window and the weekly limit |
+| Know which account is near its weekly limit | Claude's settings page, one account at a time | `usage`, `who` and the page show every account's week; an alert at 90% |
+| Avoid sessions waiting on a nearly full account | A session waits up to 600 s on a 429, then rotates | `balance` puts the least-used account first and benches accounts at ≥ 90% of the 5-hour window or the week |
 | Take an account out for a few hours | Delete it and sign in again later | `park --until 17:00`: Hermes keeps the login and skips the account until then |
 | Keep an account free at the same hours every week | Not possible | `schedule <account> --every "mon-fri 09:00-17:00"` |
 | Know which bot uses which account | Not shown | `who` |
@@ -153,7 +154,7 @@ hermes plugins install account-pool --enable
 hermes account anthropic setup --timer --strategy
 ```
 
-The catalog installs the version its maintainers reviewed (now 4.0.1; 4.0.3 is on GitHub until the catalog entry moves), and `hermes plugins update account-pool` moves on when the catalog entry moves to a newer release. To follow this repository's `main` instead, install from GitHub:
+The catalog installs the version its maintainers reviewed (now 4.0.1; 4.1.0 is on GitHub until the catalog entry moves), and `hermes plugins update account-pool` moves on when the catalog entry moves to a newer release. To follow this repository's `main` instead, install from GitHub:
 
 ```bash
 hermes plugins install roqianjas/hermes-account-pool#plugins/account-pool --enable
@@ -176,7 +177,7 @@ Each one is in the [Security and privacy disclosure](#security-and-privacy-discl
 $ hermes account anthropic setup --timer
 [anthropic] Setup: the default profile and 2 other profile(s) in /home/you/.hermes
   Accounts page    backend listed in 0 of 2 other profile(s)
-  Session tracking 4.0.3, active in 1 of 3 profile(s)
+  Session tracking 4.1.0, active in 1 of 3 profile(s)
   Balance timer    not installed
   Rotation         fill_first in all 3 profile(s)
 Changes:
@@ -285,7 +286,7 @@ hermes account anthropic doctor
 ```
 [anthropic] Setup: the default profile and 2 other profile(s) in /home/you/.hermes
   Accounts page    backend listed in 2 of 2 other profile(s)
-  Session tracking 4.0.3, active in 1 of 3 profile(s)
+  Session tracking 4.1.0, active in 1 of 3 profile(s)
   Balance timer    runs every provider with accounts (now: anthropic), active
   Rotation         fill_first in all 3 profile(s)
 Changes:
@@ -334,6 +335,8 @@ What happens to your data:
 | `PARKED` | you, with `park` | no: Hermes keeps the login and skips the account (`hermes auth list` shows it as exhausted, reason `parked`) | you run `unpark`, or the `--until` time passes |
 
 **The 5-hour window.** Claude and ChatGPT limit an account per 5-hour window. The window does not run on a clock of its own: it starts with the account's first request after the previous one ended, and resets 5 hours later. An idle account has no window running, which the page shows as `not started` under **Resets**. [`wake`](#wake) starts it with one tiny request, so it resets sooner.
+
+**The weekly limit.** On top of the 5-hour window, Claude and ChatGPT limit an account per week; claude.ai shows it as "Weekly limits". It resets at a fixed time each week, and once it is full the account cannot be used until then, however empty its 5-hour window is. The plugin reads both from the same usage request. The usage number it shows and orders by is the **fuller** of the two (`usage` lists both, for example `5h 17% · week 93%`), so `balance` never puts an account first that would lock up for days, and benches an account whose week reaches 90% until the week resets. Claude also has weekly limits for one model family (`Opus week`, `Sonnet week`): they are shown, but never counted in the usage number, because they cap one model family, not the whole account. When one is full, the provider refuses that model and Hermes moves the session to the next account, as with any limit. An answer without a weekly number (some plans have none) leaves the 5-hour window alone, as before 4.1.0.
 
 **Park, bench, remove.** Park is your decision; the login stays in Hermes' pool and Hermes keeps refreshing it. Bench is automatic and temporary. Remove deletes the login; using that account again needs a new sign-in.
 
@@ -532,19 +535,21 @@ $ hermes account anthropic check
 
 ```
 $ hermes account anthropic usage
-[anthropic] 5-hour usage
+[anthropic] 5-hour + weekly usage
   account                            state     used                          resets
   -- in rotation --
-  frank@example.com                  active      2%  [....................]  21:00
-  erin@example.com                   active      3%  [....................]  20:10
-  dave@example.com                   active      3%  [....................]  21:30
+  erin@example.com                   active      9%  [#...................]  Tue 14:21   (5h 3% · week 9%)
+  frank@example.com                  active     14%  [##..................]  Fri 23:57   (5h 2% · week 14%)
+  alice@example.com                  active     18%  [###.................]  Sat 09:33   (5h 4% · week 18%)
   ...
-  heidi@example.com                  active     17%  [###.................]  19:50
+  bob@example.com                    active     41%  [########............]  Mon 16:45   (5h 7% · week 41%)
+  heidi@example.com                  active     93%  [##################..]  Fri 11:57   (5h 17% · week 93% · Opus week 64%)
   -- parked (not used by Hermes) --
-  ivan@example.com                   PARKED     29%  [=====...............]  20:30
+  ivan@example.com                   PARKED     46%  [=========...........]  Mon 04:45   (5h 29% · week 46%)
 ```
 
-- The percentages are the same numbers claude.ai shows as "Current session". For `openai-codex` the line ends with both windows, for example `(5h 12% · week 78%)`, and the stricter one is used.
+- The percentages are the same numbers claude.ai shows as "Current session" (`5h`) and "Weekly limits" (`week`, and `Opus week` / `Sonnet week` for one model family). **used** and **resets** are those of the fuller limit (see [The weekly limit](#concepts)): here every account has used more of its week than of its 5-hour window, so the reset times are days away. `openai-codex` shows its two windows the same way, for example `(5h 12% · week 78%)`.
+- An account whose answer has no weekly number shows its 5-hour window only, with no text at the end.
 - If the usage endpoint does not answer, the line shows the value the timer recorded last, `(last known, 3 min ago)`, at most 15 minutes old and only while that window has not reset. Otherwise it shows the reason, for example `n/a (usage endpoint rate-limited, retry in a few minutes)`, `n/a (sign-in rejected (401))` or `n/a (usage endpoint unreachable ...)`. API-key entries show `API key: no account usage`.
 - An expired access token is refreshed first, by Hermes itself (`try_refresh_matching`), which saves the new token pair in its pool at once (refresh tokens are single use). Parked accounts included: a parked account stays signed in. When the provider rejects a parked account's refresh token, its line says `sign-in expired: hermes account <provider> remove <account>, then add <account>`.
 - The last line is the [forecast](#forecast): `Forecast (balance timer history): At the last hour's pace (31% of one 5-hour window per hour), every account is at 90% or more around 16:40, until about 17:20 when the first one resets.`
@@ -554,15 +559,16 @@ $ hermes account anthropic usage
 ```
 $ hermes account anthropic who
 [anthropic] sessions active in the last 30 min: 2
-  erin@example.com                   (idle)
-  frank@example.com                  (idle)
+  erin@example.com                   (idle)  week 9%, resets Tue 14:21
+  frank@example.com                          week 14%, resets Fri 23:57
+      worker-2             cli       20261103_181340_51b808 claude-sonnet-5-5    4m ago
+      worker-1             cli       20261103_181338_ad9f75 claude-sonnet-5-5    6m ago
+  alice@example.com                  (idle)  week 18%, resets Sat 09:33
   ...
-  heidi@example.com
-      worker-2             cli       20261010_181340_51b808 claude-sonnet-5-5    4m ago
-      worker-1             cli       20261010_181338_ad9f75 claude-sonnet-5-5    6m ago
+  heidi@example.com                  (idle)  week 93%, resets Fri 11:57
 ```
 
-Columns: profile, platform, session id, model, last API call. `--minutes 120` widens the window. A session that rotated shows `(moved from <account>)`. The data comes from the session tracker; a session appears after its next API call.
+Each account line ends with its weekly limit and when it resets, from the newest reading of the timer, **Live usage** or `usage` (no request of its own). Columns of a session line: profile, platform, session id, model, last API call. `--minutes 120` widens the window. A session that rotated shows `(moved from <account>)`. The data comes from the session tracker; a session appears after its next API call.
 
 ### report
 
@@ -698,11 +704,12 @@ A schedule parks an account on set days and hours, every week. Use it when you w
 
 ```
 $ hermes account anthropic balance --dry-run
-2026-10-10 18:39:48 [anthropic] balance (dry run):
-  - order: frank(2%) > erin(3%) > dave(3%) > alice(4%) > carol(5%) > bob(7%) > grace(12%) > heidi(17%)
+2026-11-04 07:09:22 [anthropic] balance (dry run):
+  - bench heidi@example.com (93% weekly) until Fri 11:57
+  - order: erin(9%) > frank(14%) > alice(18%) > dave(22%) > grace(27%) > carol(35%) > bob(41%) > heidi(93%)
 ```
 
-The timer runs `hermes account all balance` (every provider with accounts) every 5 minutes; you rarely need it by hand. `--dry-run` shows the plan without changing anything. `--threshold N` (1 to 100, default 90) sets the bench level. Other lines you may see: `unpark X (park --until ... reached)`, `recovered: X (token refresh retried)`, `bench X (93%) until 17:10`, `release X (40%)`. See [How balance works](#how-balance-works).
+The timer runs `hermes account all balance` (every provider with accounts) every 5 minutes; you rarely need it by hand. `--dry-run` shows the plan without changing anything. `--threshold N` (1 to 100, default 90) sets the bench level. Other lines you may see: `unpark X (park --until ... reached)`, `recovered: X (token refresh retried)`, `bench X (93%) until 17:10`, `bench X (93% weekly) until Fri 11:57` (its week is full: out until the week resets), `release X (40%)`. See [How balance works](#how-balance-works).
 
 ### relogin
 
@@ -748,7 +755,7 @@ $ hermes account anthropic doctor
   OK    strategy fill_first in 6 profiles
   OK    every profile uses the shared account pool
   OK    session tracking active in every profile
-  OK    running sessions count with session tracking 4.0.3
+  OK    running sessions count with session tracking 4.1.0
   OK    Accounts page backend enabled in every profile
   OK    account-pool-parking.json permissions 600
   OK    balance timer active, last run 2026-10-10 18:36:09 WIB
@@ -759,7 +766,7 @@ $ hermes account anthropic doctor
   0 failure(s), 0 warning(s).
 ```
 
-Run it after installing, after a Hermes update, or when bots behave oddly. Every FAIL or WARN line includes the fix. It warns when Hermes is older than 0.21.6: builds before 0.21.6 install and load the plugin without checking its `requires_hermes`. A process loads the session tracker when it starts, so after an update the gateway, Hermes Desktop and long sessions keep the old one; doctor then warns `session tracker 4.0.3 is not loaded yet by: the gateway (...); Hermes Desktop (...)` with the restart each one needs. Tokens without a bot name in the last half hour mean an `account-pool-tracker` 1.2.0 or older is still running. For parked accounts it warns when Hermes has one in rotation again, when one left the pool, when Hermes holds an account as parked that the park list does not name, and when a park without an end time has no balance timer to renew it. For Telegram it warns when the bot has no home channel. A leftover `account-pool-tracker` from 3.x is a WARN with `Fix: hermes account <provider> setup`. A profile on another strategy is a FAIL (`Fix: hermes account <provider> strategy fill_first`); a value Hermes does not know is only a WARN, because Hermes then uses `fill_first`. Exit code 1 when there is a FAIL. For a provider with no accounts it says `not in use, nothing to check`.
+Run it after installing, after a Hermes update, or when bots behave oddly. Every FAIL or WARN line includes the fix. It warns when Hermes is older than 0.21.6: builds before 0.21.6 install and load the plugin without checking its `requires_hermes`. A process loads the session tracker when it starts, so after an update the gateway, Hermes Desktop and long sessions keep the old one; doctor then warns `session tracker 4.1.0 is not loaded yet by: the gateway (...); Hermes Desktop (...)` with the restart each one needs. Tokens without a bot name in the last half hour mean an `account-pool-tracker` 1.2.0 or older is still running. For parked accounts it warns when Hermes has one in rotation again, when one left the pool, when Hermes holds an account as parked that the park list does not name, and when a park without an end time has no balance timer to renew it. For Telegram it warns when the bot has no home channel. A leftover `account-pool-tracker` from 3.x is a WARN with `Fix: hermes account <provider> setup`. A profile on another strategy is a FAIL (`Fix: hermes account <provider> strategy fill_first`); a value Hermes does not know is only a WARN, because Hermes then uses `fill_first`. Exit code 1 when there is a FAIL. For a provider with no accounts it says `not in use, nothing to check`.
 
 ### setup
 
@@ -901,7 +908,7 @@ The header has a provider switch (providers with accounts in the pool, plus the 
 
 | Tab | Content |
 |---|---|
-| Accounts | The header line shows Hermes' rotation strategy (hover for what each one does, click to change it); a banner names any profile that does not use `fill_first`, with a **Use fill_first** button. Five cards: accounts in rotation, parked accounts, the account the next session starts on with its usage, sessions in the last 30 minutes, tokens in the last 24 hours with their API price. A sixth card is the [forecast](#forecast): when every account will be at 90% or more at the last hour's pace (hover for the details). Then the rotation table in pool order: status, 5-hour usage bar, trend over the last 5 hours (hover for its range and the highest reading of the last 24 hours), reset time (`back HH:MM` while benched, `not started` while no window runs), tokens in the last 24 hours (hover for input, output, cache, requests, API price, the main model and the current 5-hour window), the profiles using the account (hover for session, platform, model, since when the session is on this account, and the account it moved from) and the row buttons **Sign in again**, **Park**, **Park on a schedule** and **Remove**. A calendar chip next to an account shows its schedule. Parked accounts follow with the same 5-hour usage, trend and reset time (the timer keeps reading them; `not started` once their window has ended), since when they are parked, when they return (`(schedule)` when a schedule parked them), and **Unpark**, **Park on a schedule** and **Remove**. Then the park schedules, with what each one does now (parked until, next window, or `not in the pool`) and buttons to change or remove it. Active alerts show as a banner on top, a dead account with a **Sign in again** button and a bot alert with **See sessions**. An info banner names any process that still runs an older session tracker, with its fix. |
+| Accounts | The header line shows Hermes' rotation strategy (hover for what each one does, click to change it); a banner names any profile that does not use `fill_first`, with a **Use fill_first** button. Five cards: accounts in rotation, parked accounts, the account the next session starts on with its usage, sessions in the last 30 minutes, tokens in the last 24 hours with their API price. A sixth card is the [forecast](#forecast): when every account will be at 90% or more at the last hour's pace (hover for the details). Then the rotation table in pool order: status, usage bar (the fuller of the 5-hour window and the week) with a `week N%` tag next to it (orange from the weekly alert level, 90%; hover for the 5-hour window, the week and its reset, and the Opus / Sonnet weeks), trend over the last 5 hours (hover for its range and the highest reading of the last 24 hours), reset time of that fuller limit (`back HH:MM` while benched, `not started` while no window runs), tokens in the last 24 hours (hover for input, output, cache, requests, API price, the main model and the current 5-hour window), the profiles using the account (hover for session, platform, model, since when the session is on this account, and the account it moved from) and the row buttons **Sign in again**, **Park**, **Park on a schedule** and **Remove**. A calendar chip next to an account shows its schedule. Parked accounts follow with the same usage, weekly tag, trend and reset time (the timer keeps reading them; `not started` once their window has ended), since when they are parked, when they return (`(schedule)` when a schedule parked them), and **Unpark**, **Park on a schedule** and **Remove**. Then the park schedules, with what each one does now (parked until, next window, or `not in the pool`) and buttons to change or remove it. Active alerts show as a banner on top, a dead account with a **Sign in again** button and a bot alert with **See sessions**. An info banner names any process that still runs an older session tracker, with its fix. |
 | Report | The `report` numbers for 24 hours, 3 days or 7 days: load per account, share, peak, time at 90% or more, tokens and their API price, busiest hours and the advice line. Then tokens by profile (bot), by model and by session (the `sessions` list: title, Kanban task, profile, source; hover a title for its accounts, models, times and token split), and a chart of the load per hour for the last 7 days (quota used or tokens; hover a cell for its numbers). |
 | Activity | The `log` for 24 hours, 3 days or 7 days, newest first: when, who (`timer`, `cli`, `page`) and what happened. |
 | Health | Timer state, age of the usage history, active alerts. **Run doctor** runs the `doctor` checks; **Check accounts** runs `check` and shows its output. |
@@ -968,8 +975,18 @@ The usage endpoint limits requests per account (see [Troubleshooting](#troublesh
 | Alert | When | Sent |
 |---|---|---|
 | Account needs sign-in | An account becomes `DEAD` | Once per account |
-| Every account above 80% | Every account in rotation is at or above 80% (adapter needed) | Once, plus a message when the pool recovers |
+| Every account above 80% | Every account in rotation is at or above 80% of its fuller limit (adapter needed) | Once, plus a message when the pool recovers |
+| Weekly limit high | An account in rotation reaches 90% of its weekly limit (adapter needed; `alert_week_above`) | Once per account per week; it clears quietly when the week resets |
 | A bot uses far more than usual | A profile's last hour reaches $15 at API prices or 300 requests, and 3 times its usual hour | Once per bot, at most every 6 hours |
+
+The weekly alert names the account and when its week resets:
+
+```
+Hermes: heidi@example.com used 93% of its weekly limit
+anthropic weekly limit resets Fri 11:57. Until then balance puts the other accounts first.
+```
+
+It is checked against the newest weekly reading, so a run that cannot read the account keeps it instead of sending it again. Parked accounts get no weekly alert.
 
 The bot alert catches a loop or a runaway task before it eats the pool:
 
@@ -1004,17 +1021,19 @@ Bots: worker-1 5.6M, worker-2 2.4M, default 1.9M, worker-3 1.1M.
 Share of the load: bob 27%, carol 25%, alice 24% and 1 more. Highest 5-hour usage: 60% (bob). Every account >= 90% at once: 0 min.
 Busiest hour: 08:00-09:00.
 Now: 4 in rotation, 0 parked; new sessions start on alice (59%).
+Weekly limit: heidi 93% (resets Fri 11:57), bob 41% (resets Mon 16:45), carol 35% (resets Thu 21:33) and 5 more.
 ```
 
-Accounts that need a new sign-in and the report's advice are added when there are any, plus the [forecast](#forecast) when the pool had load in the last hour and the session with the highest API price. The summary is built from the plugin's files, with no request to the provider. `notify daily-off` stops it.
+The **Weekly limit** line lists the three fullest weeks of the accounts in rotation, from their newest readings. Load, share and **Highest 5-hour usage** count the 5-hour window, whichever limit is fuller. Accounts that need a new sign-in and the report's advice are added when there are any, plus the [forecast](#forecast) when the pool had load in the last hour and the session with the highest API price. The summary is built from the plugin's files, with no request to the provider. `notify daily-off` stops it.
 
 ### Settings file
 
-Settings are stored in `$HERMES_HOME/account-pool.json`, created on the first change. You can also edit it; the alert level is `alert_all_above`, the daily summary time `notify.daily`, the bot alert `alert_bot` (`usd` per hour, `requests` per hour, `factor` over the usual hour, `cooldown_h` between two messages for the same bot), park schedules are under `schedules`, automatic wake and the wake model per provider under `wake`, and email masking is `mask_emails`:
+Settings are stored in `$HERMES_HOME/account-pool.json`, created on the first change. You can also edit it; the alert level is `alert_all_above`, the weekly alert level `alert_week_above` (default 90), the daily summary time `notify.daily`, the bot alert `alert_bot` (`usd` per hour, `requests` per hour, `factor` over the usual hour, `cooldown_h` between two messages for the same bot), park schedules are under `schedules`, automatic wake and the wake model per provider under `wake`, and email masking is `mask_emails`:
 
 ```json
 {"notify": {"desktop": true, "telegram": "auto", "telegram_via": "default", "daily": "08:00"},
  "alert_all_above": 80,
+ "alert_week_above": 90,
  "alert_bot": {"on": true, "usd": 15, "requests": 300, "factor": 3, "cooldown_h": 6},
  "schedules": {"anthropic": [{"label": "dave@example.com", "id": "a3b2c3", "days": [0, 1, 2, 3, 4], "from": "09:00", "to": "17:00"}]},
  "wake": {"anthropic": {"auto": true}, "openai-codex": {"auto": false, "model": "gpt-6-luna"}},
@@ -1029,8 +1048,8 @@ Settings are stored in `$HERMES_HOME/account-pool.json`, created on the first ch
 Forecast: At the last hour's pace (31% of one 5-hour window per hour), every account is at 90% or more around 16:40, until about 17:20 when the first one resets.
 ```
 
-- The pace is the sum of every account's usage increases in the last hour, from the timer's history. Nothing is requested from the provider.
-- The forecast spends that pace minute by minute on the least-used account below 90%, the way `balance` and `fill_first` hand out new sessions, and gives an account its headroom back when its window resets. It looks one window length ahead (5 hours for Anthropic).
+- The pace is the sum of every account's 5-hour-window increases in the last hour, from the timer's history. Nothing is requested from the provider.
+- The forecast spends that pace minute by minute on the least-used account below 90%, the way `balance` and `fill_first` hand out new sessions, and gives an account its headroom back when its window resets. An account whose week is at 90% or more stays full until the week resets. It looks one window length ahead (5 hours).
 - It assumes accounts of the same plan (the percentages add up) and a steady load; a bot that starts or stops changes it within the hour. Read it as "at this pace", not as a promise.
 - With less than 25 minutes of recent history, or no account with a known usage, there is no forecast. With no load in the last hour it says so.
 
@@ -1044,12 +1063,12 @@ Each run, for one provider:
 2. **Schedules**: parks accounts whose schedule window has started, until the window ends.
 3. **Parks kept in step with Hermes**: parks again an account Hermes put back in rotation before its time, renews the 30-day hold of a park without an end time once less than 15 days are left, forgets the park of an account that left the pool, and returns an account Hermes holds as parked that the park list does not name.
 4. **Recovery**: retries the token refresh for accounts in a refresh cooldown.
-5. **Usage** (adapter needed): reads every account's usage; Hermes refreshes an expired access token first.
-6. **Bench and release**: accounts at or above the threshold are benched until their window resets; benched accounts that dropped below it are released. Benches are marked `[account-pool]`, and limits set by the provider itself are never touched.
+5. **Usage** (adapter needed): reads every account's usage (the 5-hour window and the weekly limit, from one request); Hermes refreshes an expired access token first.
+6. **Bench and release**: accounts at or above the threshold are benched until their window resets (a full week: until the week resets); benched accounts that dropped below it are released. Benches are marked `[account-pool]`, and limits set by the provider itself are never touched.
 7. **Order**: least used first, then benched accounts, then accounts whose usage could not be read, then `DEAD` accounts.
 8. **Wake** (only with `wake auto-on`): one tiny request through each account in rotation whose 5-hour window is not running, from the usage read in step 5. See [`wake`](#wake).
-9. **History**: one snapshot per run for `report` and for the `last known` fallback. Values taken from that fallback are never written back.
-10. **Alerts** for new problems (an account that needs sign-in, every account high, a bot far above its usual use), and the daily summary when it is due.
+9. **History**: one snapshot per run for `report` and for the `last known` fallback, and each account's newest weekly reading in `account-pool-limits.json`. Values taken from that fallback are never written back.
+10. **Alerts** for new problems (an account that needs sign-in, every account high, an account near its weekly limit, a bot far above its usual use), and the daily summary when it is due.
 11. **Activity log**: every change from steps 1 to 10 goes to `account-pool-activity.jsonl` (see [`log`](#log)).
 
 Safety rules:
@@ -1109,11 +1128,13 @@ The timer uses no AI tokens unless you turn on automatic wake (`wake auto-on`): 
 |---|---|
 | `list`, `check`, `add`/`remove`, `park`/`unpark` (also `--until`), `schedule`, `who`, tokens and API price, `doctor`, sign-in alerts, daily summary, refresh-cooldown recovery | **Every provider in the credential pool** (OAuth and API-key entries) |
 | `relogin` | Every provider with OAuth sign-in. Email verification needs an identity adapter. |
-| `usage`, `report`, usage-based `balance`, `wake`, "all accounts high" alert, real-email lookup | **Providers with an adapter.** Built in: **`anthropic`** (Claude Pro / Max / Team, 5-hour window) and **`openai-codex`** (ChatGPT Plus / Pro / Team, 5-hour **and** weekly window). |
+| `usage`, `report`, usage-based `balance`, `wake`, weekly limit and its alert, "all accounts high" alert, real-email lookup | **Providers with an adapter.** Built in: **`anthropic`** (Claude Pro / Max / Team, 5-hour **and** weekly limit, plus the Opus / Sonnet weeks for display) and **`openai-codex`** (ChatGPT Plus / Pro / Team, 5-hour **and** weekly window). |
 
 Without an adapter, `usage` and `report` say so plainly, and `balance` still unparks timed parks, retries refresh cooldowns and sends sign-in alerts, but leaves the order unchanged.
 
-**Codex.** The stricter of the 5-hour and weekly limits drives `balance`, and `usage` shows both (`5h 12% · week 78%`). A Codex account that is also signed in to Codex CLI or VS Code shares its quota with them. Hermes keeps its own Codex sign-in and never reuses `~/.codex/auth.json`.
+**Weekly limits.** For both built-in providers the fuller of the 5-hour and weekly limits drives `balance`, and `usage` shows both (`5h 12% · week 78%`); see [The weekly limit](#concepts).
+
+**Codex.** A Codex account that is also signed in to Codex CLI or VS Code shares its quota with them. Hermes keeps its own Codex sign-in and never reuses `~/.codex/auth.json`.
 
 **The plugin only manages accounts inside a provider.** Whether a profile uses a provider at all (main model, fallback order) stays a normal Hermes setting, and the plugin never changes it. A provider with no accounts yet is idle: `hermes account openai-codex doctor` says "not in use".
 
@@ -1141,8 +1162,9 @@ Data files in `$HERMES_HOME` (`%LOCALAPPDATA%\hermes` on Windows), mode `600` on
 | `account-pool-sessions.json` | Sessions and their account, last 24 hours (no tokens) |
 | `account-pool-tokens.json` | Token counts per account, profile and model, and per profile, session and model, in 15-minute buckets, last 8 days. Numbers and session ids only. |
 | `account-pool-activity.jsonl` | The activity log: what the timer, the command and the page changed. Last 30 days, mode 600. |
-| `account-pool-history.jsonl` | Usage snapshots, one per timer run. Parked accounts are included and listed under `parked`, which the report, forecast, chart and daily summary leave out. Trimmed to the last 14 days once the file passes 3 MB. |
+| `account-pool-history.jsonl` | Usage snapshots, one per timer run: the usage number of each account and, when the week was the fuller limit, its 5-hour window next to it (`win`). Parked accounts are included and listed under `parked`, which the report, forecast, chart and daily summary leave out. Trimmed to the last 14 days once the file passes 3 MB. |
 | `account-pool-alerts.json` | Alerts already sent, so each incident is reported once |
+| `account-pool-limits.json` | Each account's newest weekly reading per provider: percent and reset time of the week and of the model-family weeks, and when it was read (since 4.1.0). Read by the page, `who`, the weekly alert and the daily summary between timer runs. An account not read for 14 days is dropped |
 | `account-pool-state.json` | When the daily summary was last sent, which schedule windows were already applied, each account's last wake (time, model or the reason it failed), and the last model list per provider (time and ids) |
 | `account-pool.json` | Settings: alert channels, daily summary, park schedules, wake, email masking |
 | `account-pool-timer/` | Windows only: `balance.cmd`, `balance.vbs`, `balance.log` and `last-run.json` of the timer |
@@ -1265,6 +1287,9 @@ Sign-in (`claude.ai`, `auth.openai.com`, their token endpoints) and token refres
 | `wake failed ...: model ... not accepted` | The account's plan does not offer the wake model | Pick a model from the list in the Wake dialog, or `hermes account <provider> wake models` and `wake model=<id>` with one of them, or `model=default` |
 | The Wake dialog has a text field instead of a model list | The model list could not be read (no signed-in account in rotation, or the provider did not answer); the line below says why | Type the id, or leave it empty for the default; `hermes account <provider> wake models` shows the same reason |
 | `wake failed ...: rate-limited` | The account is at a limit, so its window is running already | Nothing to fix; the next run finds the window running |
+| An account is benched (`bench X (93% weekly)`) or last in the order although its 5-hour usage is low | Its weekly limit is nearly full | Expected: it comes back when the week resets (the time is in `usage`, `who` and the page). The other accounts carry the load until then |
+| **Resets** shows a weekday days away | The week is the account's fuller limit, so the reset shown is the week's | Hover the `week` tag (page) or read the end of the `usage` line for the 5-hour window |
+| No `week` tag or text for an Anthropic account | Its usage answer has no weekly number (plan without one), or no reading since 4.1.0 yet | Wait for the next timer run or press **Live usage**; without a weekly number the 5-hour window works as before |
 | **Resets** shows `not started` | No 5-hour window is running on that account | Normal for an idle account. **Wake** starts it if you want it to reset sooner |
 | Automatic wake does nothing | The timer is off, or every window is already running | `hermes account <provider> wake status`; `doctor` |
 | Emails show as `al•••e@e•••.com` | Email masking is on | `hermes account <provider> privacy off`, or the eye button on the page |
@@ -1319,7 +1344,7 @@ At least two. `report` tells you when the whole pool was nearly full at the same
 ## Limitations
 
 - Usage comes from **undocumented endpoints**: `https://api.anthropic.com/api/oauth/usage` and `https://chatgpt.com/backend-api/wham/usage` (the one behind Codex CLI's `/status`). They can change or rate-limit without notice. The plugin sends the same client headers as Hermes' own usage fetcher.
-- Anthropic weekly quotas are not exposed for Team accounts, so `balance` uses the 5-hour window for `anthropic`.
+- Weekly limits come from the same undocumented usage answer. An Anthropic account whose answer has no weekly number (some plans) is balanced on its 5-hour window alone. The model-family weeks (`Opus week`, `Sonnet week`) are shown only and do not steer `balance`: when one is full, the provider refuses that model and Hermes moves the session to the next account, as with any limit.
 - `wake` relies on what the usage endpoints show today: Anthropic gives no reset time while no window runs, Codex shows a full untouched window that moves with every reading. If a provider changes that, `wake` cannot tell an idle window and leaves the account alone (a named account is still woken). A wake is a request made with the account like any Hermes session, so it falls under the same plan terms.
 - Email masking covers what the plugin shows. Other places that show account labels, such as `hermes auth list` or Hermes' own logs, are not masked.
 - Adapters exist for `anthropic` and `openai-codex`. The generic commands were tested for other providers with API-key entries only. Codex was verified with a real ChatGPT Business account: the browser sign-in, `check`, `usage`, `who`, `report`, `sessions`, `log`, `doctor` and `balance --dry-run`. Park, unpark, the parked-token refresh through Hermes, balance and the page's sign-ins were tested in a sandbox with fake tokens (`tests/codex_sandbox.py`, `tests/api_sandbox.py`); the page's sign-in tests run Hermes' real `hermes auth add` code with the network calls replaced (`tests/hermes_auth_add.py`).

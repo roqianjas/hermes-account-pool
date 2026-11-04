@@ -185,7 +185,8 @@ st = status()
 row = next(p for p in st["parked"] if p["label"] == "carol@example.com")
 check(row["usage"] and row["usage"]["pct"] == 41.0 and abs(row["usage"]["reset"] - CAROL_RESET) < 2,
       "page: the parked row has its usage and reset time from the timer")
-check(row["window"] == {"idle": False, "reset": row["usage"]["reset"]}, "page: its 5-hour window is running")
+check(row["window"]["idle"] is False and row["window"]["reset"] == row["usage"]["reset"]
+      and row["window"]["pct"] == 41.0, "page: its 5-hour window is running")
 check(len(row["spark"]) >= 2 and row["spark"][-1][1] == 41.0, "page: its sparkline continues while parked")
 check(row["peak"] and row["peak"]["pct"] == 97.0, "page: the day's highest reading is there for the tooltip")
 check(all("peak" in r for r in st["rotation"]) and st["rotation"][1]["peak"]["pct"] == 30.0,

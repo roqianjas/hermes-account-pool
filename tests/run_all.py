@@ -16,7 +16,8 @@ import time
 from pathlib import Path
 
 TESTS = ["features_sandbox", "tokens_sandbox", "api_sandbox", "profile_backend", "insights_sandbox",
-         "setup_sandbox", "codex_sandbox", "wake_privacy_sandbox", "parked_usage_sandbox", "windows_sandbox"]
+         "setup_sandbox", "codex_sandbox", "wake_privacy_sandbox", "parked_usage_sandbox", "weekly_sandbox",
+         "windows_sandbox"]
 HERE = Path(__file__).resolve().parent
 
 

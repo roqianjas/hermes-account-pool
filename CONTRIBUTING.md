@@ -15,7 +15,7 @@ Bug reports, fixes and adapters for more providers are welcome. This page covers
 | `plugins/account-pool/desktop/plugin.js` | The Accounts page in Hermes Desktop (one ES module, no build step) |
 | `plugins/account-pool/dashboard/plugin_api.py` | The page's backend: FastAPI routes under `/api/plugins/account-pool/` |
 | `plugins/account-pool/dashboard/manifest.json` | Tells Hermes to mount `plugin_api.py`; `dist/index.js` is a stub for the browser dashboard |
-| `tests/api_sandbox.py`, `tests/profile_backend.py`, `tests/tokens_sandbox.py`, `tests/features_sandbox.py`, `tests/insights_sandbox.py`, `tests/setup_sandbox.py`, `tests/codex_sandbox.py`, `tests/wake_privacy_sandbox.py`, `tests/parked_usage_sandbox.py`, `tests/ui/` | Backend tests in a sandbox (actions and the page's sign-ins, Codex browser and device code included, run through Hermes' real `hermes auth add` with `tests/hermes_auth_add.py`; backend launched under a profile; token counting; the tracker check, tokens per session, bot alerts, the activity log and the forecast; tokens per bot and model, API prices, the hour chart, the daily summary and park schedules; `setup`, the terminal's Codex sign-in and the refusals without a terminal; Codex identity, usage, park in Hermes' pool, the parked-token refresh through Hermes and balance; the timer's `all balance` and the daily summary of an idle provider; `wake` and automatic wake for both providers, email masking in the output, alerts and routes), and the page in jsdom |
+| `tests/api_sandbox.py`, `tests/profile_backend.py`, `tests/tokens_sandbox.py`, `tests/features_sandbox.py`, `tests/insights_sandbox.py`, `tests/setup_sandbox.py`, `tests/codex_sandbox.py`, `tests/wake_privacy_sandbox.py`, `tests/parked_usage_sandbox.py`, `tests/weekly_sandbox.py`, `tests/ui/` | Backend tests in a sandbox (actions and the page's sign-ins, Codex browser and device code included, run through Hermes' real `hermes auth add` with `tests/hermes_auth_add.py`; backend launched under a profile; token counting; the tracker check, tokens per session, bot alerts, the activity log and the forecast; tokens per bot and model, API prices, the hour chart, the daily summary and park schedules; `setup`, the terminal's Codex sign-in and the refusals without a terminal; Codex identity, usage, park in Hermes' pool, the parked-token refresh through Hermes and balance; the timer's `all balance` and the daily summary of an idle provider; `wake` and automatic wake for both providers, email masking in the output, alerts and routes; parked accounts in the history; weekly limits, their alert and the numbers that stay in 5-hour-window percent), and the page in jsdom |
 | `tests/windows_sandbox.py` | The Windows code on any system: `core.WINDOWS` switched on, `winsys.run` replaced by a stand-in Task Scheduler that keeps the task XML. With `HAP_REAL_WINDOWS=1` on Windows it uses the real Task Scheduler and waits for the task's first run |
 | `tests/run_all.py` | Runs every sandbox test, each in its own throwaway Hermes home, on Linux, macOS or Windows |
 | `.github/workflows/tests.yml` | Installs Hermes on a Windows and a Linux runner and runs the tests, `install.ps1` and `uninstall.ps1` (started by hand) |
@@ -25,7 +25,7 @@ Bug reports, fixes and adapters for more providers are welcome. This page covers
 
 ## Adding a provider adapter
 
-The core plugin already works for every provider in the Hermes credential pool. An adapter adds the parts that need the provider's own API. Built in: `anthropic` and `openai-codex`. The Codex adapter is a good template for providers with several limits: it reports the most constraining window and puts the breakdown in `detail`.
+The core plugin already works for every provider in the Hermes credential pool. An adapter adds the parts that need the provider's own API. Built in: `anthropic` and `openai-codex`. Both are good templates for providers with several limits: they report the most constraining one (the 5-hour window or the week), put the breakdown in `detail`, and set `last_window` and `last_week` so the core keeps the short window for load and wake and the week for its own alert.
 
 ```python
 class MyProvider(Adapter):
@@ -63,7 +63,12 @@ class MyProvider(Adapter):
         """The model a wake goes to when none is set; ids is the list above (default: wake_model)."""
 
     # usage() also sets self.last_window = (percent, reset_epoch, window_seconds) of the short window,
-    # None when unknown: the core uses it to tell a window that is not running.
+    # None when unknown: the core uses it to tell a window that is not running, and keeps it next to the
+    # headline in the history so load, pace and the hour chart stay in short-window percent.
+    # A weekly limit (optional): self.last_week = (percent, reset_epoch) of the account-wide week, and
+    # self.last_models = ((name, percent, reset_epoch), ...) for limits on one model family ("Opus week").
+    # Reset both at the start of usage(). The week shows in usage, who and the page, and raises the weekly
+    # alert; the model limits are shown only. Return the fuller of the window and the week as the headline.
 
 
 ADAPTERS = {a.name: a for a in (Anthropic(), OpenAICodex(), MyProvider())}
@@ -76,6 +81,7 @@ Implement only what the provider allows. Methods you leave out stay off: `has_us
 | You implement | Unlocks |
 |---|---|
 | `usage` | `usage`, `report`, usage-based `balance`, the "every account above N%" alert |
+| `last_week` / `last_models` set in `usage` | The weekly limit: the `week N%` tag on the page, `who`, the `Weekly limit` line of the daily summary and the weekly alert (`alert_week_above`), from `account-pool-limits.json` |
 | `identity` | real-email column in `check`, verification in `add` and `relogin` |
 | `signin_methods` | **Add account** and **Sign in again** on the Accounts page. The page's backend runs `hermes auth add <provider> --type oauth --label <email>` (`signin.py`) and relays the link and code it prints, so the provider needs an OAuth login in Hermes. `signin.py` recognises the link, the device page and the prompts by their text; a provider whose `hermes auth add` prints them differently needs a pattern there and a case in `tests/hermes_auth_add.py` |
 | `wake` (with `last_window` set in `usage`) | `wake`, automatic wake in `balance`, **Wake** on the page. A window counts as not running when `reset` is `None` or past, or when it is at 0% with a full `window_seconds` left (how Codex reports an untouched window) |
@@ -186,6 +192,12 @@ rm -rf "$SB"
 # the pool's numbers leave them out, Hermes' early release is parked again
 SB=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" hap-sandbox.XXXX)
 HERMES_HOME=$SB ~/.hermes/hermes-agent/venv/bin/python tests/parked_usage_sandbox.py
+rm -rf "$SB"
+
+# weekly limits: the Anthropic answer with and without a week, the headline, bench, the limits file,
+# the weekly alert, who, the summary, the page; load, pace and chart stay in 5-hour-window percent
+SB=$(mktemp -d -p "${XDG_CACHE_HOME:-$HOME/.cache}" hap-sandbox.XXXX)
+HERMES_HOME=$SB ~/.hermes/hermes-agent/venv/bin/python tests/weekly_sandbox.py
 rm -rf "$SB"
 
 # the Windows code: Task Scheduler task, balance.cmd/.vbs, notifications, junctions, doctor

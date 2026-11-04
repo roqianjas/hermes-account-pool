@@ -197,6 +197,12 @@ def _alerts(provider: str, labels: dict) -> list[dict]:
             limit = core._config().get("alert_all_above", 80)
             out.append({"key": key, "since": since, "kind": "all-high",
                         "text": f"Every account is above {limit}%. Hermes falls back to its fallback model when all are full."})
+        elif parts[1] == "week":
+            label = labels.get(parts[2], parts[2])
+            wk = core._week_of(provider, label) or {}
+            out.append({"key": key, "since": since, "kind": "week", "label": label,
+                        "text": f"{label} used {wk['pct']:.0f}% of its weekly limit; it resets {core._hhmm(wk.get('reset'))}"
+                        if wk.get("pct") is not None else f"{label} is near its weekly limit"})
     return out
 
 
@@ -260,7 +266,8 @@ def _status(provider: str) -> dict:
         if not u:
             return None
         w = u.get("win") or [u["pct"], u["reset"]]
-        return {"idle": core._window_idle((w[0], w[1], ad.short_window_seconds), ts=u["ts"]), "reset": w[1]}
+        return {"idle": core._window_idle((w[0], w[1], ad.short_window_seconds), ts=u["ts"]), "reset": w[1],
+                "pct": w[0]}
 
     who = core._who_data(provider, WHO_MINUTES)
     by_label = {a["label"]: [_session_row(r) for r in a["sessions"]] for a in who["accounts"]}
@@ -271,14 +278,21 @@ def _status(provider: str) -> dict:
 
     def tokens_for(label: str, usage):
         """Tokens of the last 24 h (with their API list price), and of the current usage window when its
-        start is known (to 15 min)."""
+        start is known (to 15 min). The window is the 5-hour one even when the weekly limit is the headline."""
         rows = by_account.get(label) or []
         day = core._token_group(provider, rows, now - 24 * 3600, by="all").get("all") or core._empty_tokens()
         win = None
-        if ad.window_seconds and usage and usage.get("pct") is not None and usage.get("reset") and usage["reset"] > now:
-            start = usage["reset"] - ad.window_seconds - core.TOKEN_BUCKET + 1
+        w = snap.get(label) or {}
+        reset = (w.get("win") or [None, w.get("reset")])[1] if w else None
+        if ad.window_seconds and usage and usage.get("pct") is not None and reset and reset > now:
+            start = reset - ad.window_seconds - core.TOKEN_BUCKET + 1
             win = core._token_group(provider, rows, start, by="all").get("all") or core._empty_tokens()
         return {"day": day, "window": win}
+    limits = core._load_json(core._limits_path(), {}) or {}
+
+    def week_for(label: str):
+        """The weekly limit from the account's newest reading (timer, live usage or `usage`), or None."""
+        return core._week_of(provider, label, limits) if ad.has_usage else None
     woke = core._wake_last(provider) if ad.has_wake else {}
     rotation = []
     for pos, e in enumerate(entries, 1):
@@ -290,6 +304,7 @@ def _status(provider: str) -> dict:
             "usage": usage_for(e.label), "spark": spark.get(e.label, []), "peak": peak.get(e.label),
             "sessions": by_label.get(e.label, []),
             "window": window_for(e.label) if ad.has_usage else None, "woke": woke.get(e.id),
+            "week": week_for(e.label),
         })
         rotation[-1]["tokens"] = tokens_for(e.label, rotation[-1]["usage"])
     parked_rows = [{
@@ -299,6 +314,7 @@ def _status(provider: str) -> dict:
         "usage": usage_for(p.get("label", "?")), "spark": spark.get(p.get("label", "?"), []),
         "peak": peak.get(p.get("label", "?")),
         "window": window_for(p.get("label", "?")) if ad.has_usage else None,
+        "week": week_for(p.get("label", "?")),
     } for p, e in parked]
     for row in parked_rows:
         row["tokens"] = tokens_for(row["label"], row["usage"])
@@ -320,7 +336,8 @@ def _status(provider: str) -> dict:
         "snapshot": {"ts": hist[-1]["ts"] if hist else None, "count": len(hist)},
         "live": {"ts": live["ts"] if live else None, "retry_after": _wait(live and live["ts"], LIVE_MIN_GAP)},
         "timer": _timer(), "alerts": _alerts(provider, {e.id: e.label for e in entries}),
-        "threshold": 90, "alert_all_above": cfg.get("alert_all_above", 80), "now": now,
+        "threshold": 90, "alert_all_above": cfg.get("alert_all_above", 80),
+        "alert_week_above": cfg.get("alert_week_above", 90), "now": now,
         "rotation_mode": _rotation_mode(provider),
         "tokens": {"since": counting,
                    "day": core._token_group(provider, token_rows, now - 24 * 3600, by="all").get("all") or core._empty_tokens()},
@@ -397,6 +414,7 @@ def notify_status(provider: str = "anthropic"):
             "telegram_home": core._telegram_home_set(cfg) if tgt == "telegram" else None,
             "via": cfg["notify"].get("telegram_via") or "default", "profiles": profiles,
             "alert_all_above": cfg.get("alert_all_above", 80),
+            "alert_week_above": cfg.get("alert_week_above", 90),
             "daily": f"{at[0]:02d}:{at[1]:02d}" if at else None,
             "daily_last": (core._load_json(core._state_path(), {}) or {}).get(f"daily:{p}"),
             "bots": cfg["alert_bot"],

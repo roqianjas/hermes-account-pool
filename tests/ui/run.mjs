@@ -63,6 +63,18 @@ const fc = fx['/status?provider=anthropic'].forecast
 const shift = Math.floor(Date.now() / 1000) + 2 * 3600 - fc.full_at
 fc.full_at += shift
 fc.back_at += shift
+// weekly limits 2.6 days from now, whenever the test runs; a limit of 55% makes heidi's week (57%) read high
+{
+  const st = fx['/status?provider=anthropic']
+  const weekReset = Math.floor(Date.now() / 1000) + Math.round(2.6 * 86400)
+  for (const r of [...st.rotation, ...st.parked]) {
+    if (!r.week) continue
+    r.week.reset = weekReset
+    for (const m of r.week.models) m[2] = weekReset
+  }
+  st.rotation.find(r => r.label === 'heidi@example.com').usage.reset = weekReset
+  st.alert_week_above = 55
+}
 const calls = []
 let failNext = null
 const store = {}
@@ -154,7 +166,7 @@ ok(parkedRows.length === status.parked.length, `parked table has ${parkedRows.le
   const ptable = document.querySelectorAll('.hap-table')[1]
   const heads = [...ptable.querySelectorAll('thead th')].map(t => t.textContent)
   const col = heads.indexOf('Resets')
-  ok(col > 0 && heads.includes('5-hour usage'), `parked table has a Resets column (${heads.filter(Boolean).join(', ')})`)
+  ok(col > 0 && heads.includes('5-hour + weekly usage'), `parked table has a Resets column (${heads.filter(Boolean).join(', ')})`)
   const cell = (row, i) => row.querySelectorAll('td')[i].textContent
   const [ivanRow, judyRow] = parkedRows
   ok(/\d{2}:\d{2}/.test(cell(ivanRow, col)), `a parked account mid-window shows when it resets (${cell(ivanRow, col)})`)
@@ -167,6 +179,23 @@ ok(parkedRows.length === status.parked.length, `parked table has ${parkedRows.le
   ok(screen.getByText(/the balance timer still reads its usage/), 'the parked section says its usage is still read')
 }
 ok(within(rows[0]).getByText(status.rotation[0].label), 'first account label shown')
+{
+  // the weekly limit next to the usage bar; the bar shows the fuller of the two
+  const tags = [...document.querySelectorAll('.hap-table')[0].querySelectorAll('[data-week]')]
+  ok(tags.length === status.rotation.filter(r => r.week && r.week.pct != null).length, `every rotation row with a weekly reading shows it (${tags.length})`)
+  const byLabel = label => [...rows].find(r => r.textContent.includes(label))
+  const heidi = byLabel('heidi@example.com').querySelector('[data-week]')
+  ok(heidi.textContent === 'week 57%' && heidi.dataset.week === 'high' && heidi.classList.contains('hap-warn'),
+    `a week at or above the alert limit reads high (${heidi.textContent}, ${heidi.dataset.week})`)
+  const tip = heidi.getAttribute('aria-label')
+  ok(tip.includes('5-hour window: 12%') && /Weekly limit: 57%, resets \S+ \d{2}:\d{2}/.test(tip)
+    && tip.includes('Opus week: 64% (caps that model only)') && tip.includes('balance orders accounts by it'),
+    `the tag's tip names the 5-hour window, the week with its weekday reset and the model limits`)
+  const carol = byLabel('carol@example.com').querySelector('[data-week]')
+  ok(carol.textContent === 'week 13%' && carol.dataset.week === 'ok', 'a week below the limit reads plain')
+  ok(!byLabel('grace@example.com').querySelector('[data-week]'), 'no weekly reading: no tag')
+  ok([...parkedRows].every(r => r.querySelector('[data-week]')), 'parked rows show their week too')
+}
 ok(document.querySelectorAll('.hap-bar').length >= status.rotation.filter(r => r.usage && r.usage.pct != null).length, 'usage bars drawn')
 ok(document.querySelectorAll('svg.hap-spark').length > 0, 'sparklines drawn')
 ok(screen.getByText('Tokens, last 24 h') && screen.getByText('Tokens, 24 h', { selector: 'span' }), 'tokens card and column shown')

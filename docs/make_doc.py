@@ -16,7 +16,7 @@ from reportlab.platypus import (CondPageBreak, Image, KeepTogether, PageBreak, P
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 from reportlab.platypus.tableofcontents import TableOfContents
 
-VERSION = "4.0.3"
+VERSION = "4.1.0"
 REPO = "github.com/roqianjas/hermes-account-pool"
 FOOTER = f"Hermes plugin account-pool {VERSION} · {REPO}"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hermes-account-pool.pdf")
@@ -121,7 +121,8 @@ class Doc(SimpleDocTemplate):
 st += [Paragraph("Plugin account-pool untuk Hermes Agent", s_title),
        Paragraph("Panduan lengkap perintah <font name='Mono'>hermes account</font> dan halaman Accounts di Hermes "
                  "Desktop: jalankan beberapa akun dari satu provider, tambah akun dengan email terverifikasi, pantau "
-                 "pemakaian, bagi beban sebelum akun habis, mulai jendela 5 jam akun yang menganggur lebih awal, parkir "
+                 "pemakaian (jendela 5 jam dan limit mingguan), bagi beban sebelum akun habis, mulai jendela 5 jam akun yang "
+                 "menganggur lebih awal, parkir "
                  "akun sementara, lihat bot mana memakai akun apa, sensor email untuk screenshot, dan terima peringatan.", s_sub)]
 table([["Versi", "Repo", "Butuh", "Lisensi"],
        [VERSION, REPO, "Hermes Agent ≥ 0.21.6, Linux atau Windows 10/11", "MIT"]], [0.12, 0.46, 0.30, 0.12])
@@ -138,9 +139,13 @@ table([
     ["Kebutuhan", "Hermes biasa", "Dengan plugin"],
     ["Menambah akun", C("hermes auth add") + ", tanpa cek akun mana yang sebenarnya login",
      C("add") + " mengecek email asli, membuang login yang salah akun atau duplikat"],
-    ["Melihat seberapa penuh tiap akun", "Tidak ada", C("usage") + ", live, termasuk akun yang diparkir"],
+    ["Melihat seberapa penuh tiap akun", "Tidak ada", C("usage") + ", live, termasuk akun yang diparkir: jendela 5 "
+     "jam dan limit mingguan"],
+    ["Tahu akun mana yang mendekati limit mingguan", "Halaman pengaturan Claude, satu akun per kali",
+     C("usage") + ", " + C("who") + ", dan halaman menampilkan minggu setiap akun; peringatan di 90%"],
     ["Sesi tidak macet di akun yang hampir penuh", "Sesi menunggu sampai 600 detik saat 429, baru pindah",
-     C("balance") + " menaruh akun paling longgar di depan dan mengistirahatkan akun ≥ 90%"],
+     C("balance") + " menaruh akun paling longgar di depan dan mengistirahatkan akun ≥ 90% dari jendela 5 jam atau "
+     "minggunya"],
     ["Mengeluarkan akun beberapa jam", "Hapus akun, login lagi nanti", C("park --until 17:00") + ": Hermes tetap menyimpan login dan melewati akun itu sampai jam tersebut"],
     ["Menyisakan akun di jam yang sama tiap minggu", "Tidak bisa", C("schedule &lt;akun&gt; --every \"mon-fri 09:00-17:00\"")],
     ["Tahu bot mana memakai akun apa", "Tidak ada", C("who")],
@@ -242,7 +247,7 @@ code("""
 hermes plugins install account-pool --enable
 hermes account anthropic setup --timer --strategy
 """)
-P("Katalog memasang versi yang sudah direview pengelolanya (sekarang 4.0.1; 4.0.3 ada di GitHub sampai entri katalog dipindah), dan "
+P("Katalog memasang versi yang sudah direview pengelolanya (sekarang 4.0.1; 4.1.0 ada di GitHub sampai entri katalog dipindah), dan "
   + C("hermes plugins update account-pool") + " ikut naik setelah entri katalog dipindah ke rilis baru. Untuk "
   "mengikuti " + C("main") + " repo ini, pasang langsung dari GitHub:")
 code("""
@@ -309,7 +314,7 @@ code("""
 $ hermes account anthropic setup --timer
 [anthropic] Setup: the default profile and 2 other profile(s) in /home/you/.hermes
   Accounts page    backend listed in 0 of 2 other profile(s)
-  Session tracking 4.0.3, active in 1 of 3 profile(s)
+  Session tracking 4.1.0, active in 1 of 3 profile(s)
   Balance timer    not installed
   Rotation         fill_first in all 3 profile(s)
 Changes:
@@ -463,7 +468,7 @@ hermes account anthropic doctor
 code("""
 [anthropic] Setup: the default profile and 2 other profile(s) in /home/you/.hermes
   Accounts page    backend listed in 2 of 2 other profile(s)
-  Session tracking 4.0.3, active in 1 of 3 profile(s)
+  Session tracking 4.1.0, active in 1 of 3 profile(s)
   Balance timer    runs every provider with accounts (now: anthropic), active
   Rotation         fill_first in all 3 profile(s)
 Changes:
@@ -540,6 +545,18 @@ P("Claude dan ChatGPT membatasi akun per jendela 5 jam. Jendela itu tidak berjal
   "request pertama akun itu setelah jendela sebelumnya selesai, lalu reset 5 jam kemudian. Akun yang menganggur tidak "
   "punya jendela yang berjalan; halaman menampilkannya sebagai " + C("not started") + " di kolom <b>Resets</b>. "
   + C("wake") + " memulainya dengan satu request kecil, sehingga reset datang lebih cepat (bagian 7.16).")
+H2("Limit mingguan")
+P("Selain jendela 5 jam, Claude dan ChatGPT juga membatasi akun per minggu; claude.ai menampilkannya sebagai "
+  "\"Weekly limits\". Limit ini reset pada jam yang tetap setiap minggu, dan begitu penuh, akun tidak bisa dipakai "
+  "sampai saat itu, sekosong apa pun jendela 5 jamnya. Plugin membaca keduanya dari request pemakaian yang sama. "
+  "Angka pemakaian yang ditampilkan dan dipakai untuk mengurutkan adalah yang <b>lebih penuh</b> dari keduanya ("
+  + C("usage") + " menampilkan keduanya, misalnya " + C("5h 17% · week 93%") + "). Jadi " + C("balance")
+  + " tidak pernah menaruh di depan akun yang akan terkunci berhari-hari, dan mengistirahatkan akun yang minggunya "
+  "mencapai 90% sampai minggunya reset. Claude juga punya limit mingguan untuk satu keluarga model ("
+  + C("Opus week") + ", " + C("Sonnet week") + "): ditampilkan, tetapi tidak dihitung ke angka pemakaian, karena "
+  "hanya membatasi satu keluarga model, bukan seluruh akun. Saat salah satunya penuh, provider menolak model itu dan "
+  "Hermes memindahkan sesi ke akun berikutnya, seperti limit lain. Jawaban tanpa angka mingguan (ada paket yang tidak "
+  "punya) membuat akun itu memakai jendela 5 jam saja, seperti sebelum 4.1.0.")
 H2("Park, bench, remove")
 P("<b>Park</b> adalah keputusan Anda dan login tetap disimpan. <b>Bench</b> otomatis dan sementara. <b>Remove</b> "
   "menghapus login; untuk memakai akun itu lagi harus login baru.")
@@ -751,19 +768,25 @@ table([
 H2("7.3 usage")
 code("""
 $ hermes account anthropic usage
-[anthropic] 5-hour usage
-  account                            state     used                          resets
+[anthropic] 5-hour + weekly usage
+  account            state     used                          resets
   -- in rotation --
-  frank@example.com                  active      2%  [....................]  21:00
-  erin@example.com                   active      3%  [....................]  20:10
-  dave@example.com                   active      3%  [....................]  21:30
+  erin@example.com   active      9%  [#...................]  Tue 14:21   (5h 3% · week 9%)
+  frank@example.com  active     14%  [##..................]  Fri 23:57   (5h 2% · week 14%)
   ...
-  heidi@example.com                  active     17%  [###.................]  19:50
+  bob@example.com    active     41%  [########............]  Mon 16:45   (5h 7% · week 41%)
+  heidi@example.com  active     93%  [##################..]  Fri 11:57   (5h 17% · week 93% ·
+                                                                          Opus week 64%)
   -- parked (not used by Hermes) --
-  ivan@example.com                   PARKED     29%  [=====...............]  20:30
+  ivan@example.com   PARKED     46%  [=========...........]  Mon 04:45   (5h 29% · week 46%)
 """)
-LI(["Angkanya sama dengan \"Current session\" di pengaturan pemakaian claude.ai. Untuk " + C("openai-codex")
-    + ", baris diakhiri kedua jendela, misalnya " + C("(5h 12% · week 78%)") + ", dan yang lebih ketat yang dipakai.",
+LI(["Angkanya sama dengan \"Current session\" (" + C("5h") + ") dan \"Weekly limits\" (" + C("week") + ", serta "
+    + C("Opus week") + "/" + C("Sonnet week") + " untuk satu keluarga model) di pengaturan pemakaian claude.ai. "
+    "<b>used</b> dan <b>resets</b> milik limit yang lebih penuh (bagian 5, Limit mingguan): di contoh ini minggu setiap "
+    "akun lebih penuh daripada jendela 5 jamnya, jadi jam resetnya beberapa hari lagi. " + C("openai-codex")
+    + " menampilkan kedua jendelanya dengan cara yang sama, misalnya " + C("(5h 12% · week 78%)") + ". Akun yang "
+    "jawabannya tanpa angka mingguan hanya menampilkan jendela 5 jam, tanpa teks di ujung baris. (Kolom akun di "
+    "contoh ini dipersempit agar muat di halaman.)",
     "Kolom state: " + C("active") + ", " + C("BENCHED") + " (diistirahatkan balance), " + C("LIMITED")
     + " (limit dari provider), " + C("PARKED") + " (bar " + C("=") + "), " + C("DEAD") + ".",
     "Jika endpoint usage tidak menjawab, baris menampilkan nilai terakhir yang dicatat timer, misalnya "
@@ -779,15 +802,17 @@ H2("7.4 who")
 code("""
 $ hermes account anthropic who
 [anthropic] sessions active in the last 30 min: 2
-  erin@example.com                   (idle)
-  frank@example.com                  (idle)
+  erin@example.com                   (idle)  week 9%, resets Tue 14:21
+  frank@example.com                          week 14%, resets Fri 23:57
+      worker-2             cli       20261103_181340_51b808 claude-sonnet-5-5    4m ago
+      worker-1             cli       20261103_181338_ad9f75 claude-sonnet-5-5    6m ago
   ...
-  heidi@example.com
-      worker-2             cli       20261010_181340_51b808 claude-sonnet-5-5    4m ago
-      worker-1             cli       20261010_181338_ad9f75 claude-sonnet-5-5    6m ago
+  heidi@example.com                  (idle)  week 93%, resets Fri 11:57
 $ hermes account anthropic who --minutes 120     # jendela waktu lain
 """)
-LI(["Kolom: profil, platform, id sesi, model, panggilan API terakhir.",
+LI(["Baris akun diakhiri limit mingguannya dan kapan reset, dari bacaan terbaru timer, <b>Live usage</b>, atau "
+    + C("usage") + " (tanpa request sendiri).",
+    "Kolom baris sesi: profil, platform, id sesi, model, panggilan API terakhir.",
     "Data berasal dari pelacak sesi, yang mencatat sesi setelah setiap panggilan API ke model.",
     "Jika sesi pindah akun karena limit, muncul keterangan " + C("(moved from ...)") + ".",
     "Sesi yang sudah berjalan sebelum plugin dipasang baru muncul setelah " + C("/reset") + ", atau setelah "
@@ -820,7 +845,7 @@ $ hermes account anthropic report --hours 24
   last beyond the next 5 hours.
   Load by hour for the last 7 days: hermes account anthropic report --chart
 """)
-LI([C("used") + ": total kenaikan pemakaian. 100 berarti setara satu jendela 5 jam penuh. " + C("peak")
+LI([C("used") + ": total kenaikan pemakaian jendela 5 jam, juga saat minggu adalah limit yang lebih penuh. 100 berarti setara satu jendela 5 jam penuh. " + C("peak")
     + ": nilai tertinggi. " + C("time >= 90%") + ": berapa lama akun hampir habis.",
     C("tokens") + ": jumlah token yang dikirim dan diterima Hermes lewat akun itu selama periode laporan (input, output, "
     "cache read, dan cache write dijumlahkan). Baris di bawah tabel merinci totalnya. Pelacak sesi menghitungnya di "
@@ -918,14 +943,15 @@ H2("7.8 balance")
 code("""
 $ hermes account anthropic balance --dry-run       # rencana saja
 $ hermes account anthropic balance                 # jalankan (otomatis tiap 5 menit)
-2026-10-10 18:39:48 [anthropic] balance (dry run):
-  - order: frank(2%) > erin(3%) > dave(3%) > alice(4%) > carol(5%) > bob(7%) > ...
+2026-11-04 07:09:22 [anthropic] balance (dry run):
+  - bench heidi@example.com (93% weekly) until Fri 11:57
+  - order: erin(9%) > frank(14%) > alice(18%) > dave(22%) > grace(27%) > carol(35%) > ...
 """)
 P("Timer menjalankan " + C("hermes account all balance") + ": semua provider yang punya akun (di rotasi atau "
   "parkir), satu per satu. Provider yang gagal tidak menghentikan yang lain; exit code menandai kegagalannya. "
   + C("--threshold N") + " (1 sampai 100, default 90) mengatur ambang istirahat. Baris lain yang bisa muncul: "
   + C("unpark X (park --until ... reached)") + ", " + C("recovered: X (token refresh retried)") + ", "
-  + C("bench X (93%) until 17:10") + ", " + C("release X (40%)") + ". Cara kerjanya di bagian 10.")
+  + C("bench X (93%) until 17:10") + ", " + C("bench X (93% weekly) until Fri 11:57") + " (minggunya penuh: keluar sampai minggunya reset), " + C("release X (40%)") + ". Cara kerjanya di bagian 10.")
 H2("7.9 relogin")
 code("""
 $ hermes account anthropic relogin alice@example.com
@@ -980,7 +1006,7 @@ $ hermes account anthropic doctor
   OK    strategy fill_first in 6 profiles
   OK    every profile uses the shared account pool
   OK    session tracking active in every profile
-  OK    running sessions count with session tracking 4.0.3
+  OK    running sessions count with session tracking 4.1.0
   OK    Accounts page backend enabled in every profile
   OK    account-pool-parking.json permissions 600
   OK    balance timer active, last run 2026-10-10 18:36:09 WIB
@@ -993,7 +1019,7 @@ $ hermes account anthropic doctor
 P("Jalankan setelah instalasi, setelah update Hermes, atau saat bot berperilaku aneh. Setiap baris FAIL atau WARN "
   "menyertakan perbaikannya. Doctor memberi WARN bila Hermes lebih tua dari 0.21.6: build sebelum 0.21.6 memasang dan "
   "memuat plugin tanpa memeriksa " + C("requires_hermes") + "-nya. Pelacak sesi dimuat saat proses mulai, jadi setelah update gateway, Hermes Desktop, dan sesi "
-  "panjang masih memakai pelacak lama; doctor lalu memberi WARN " + C("session tracker 4.0.3 is not loaded yet by: ...")
+  "panjang masih memakai pelacak lama; doctor lalu memberi WARN " + C("session tracker 4.1.0 is not loaded yet by: ...")
   + " beserta restart yang dibutuhkan masing-masing. Token tanpa nama bot dalam setengah jam terakhir berarti "
   + C("account-pool-tracker") + " 1.2.0 atau lebih lama masih berjalan. Untuk akun parkir, doctor memberi WARN bila "
   "Hermes memasukkannya lagi ke rotasi, bila akunnya keluar dari pool, bila Hermes menahan akun sebagai parkir "
@@ -1219,7 +1245,7 @@ LI(["Agent di sebuah profil memuat plugin dari folder " + C("plugins/") + " mili
 P(C("doctor") + " memeriksa hal ini jika Hermes Desktop punya halamannya: " + C("Accounts page backend enabled in every profile")
   + ", atau peringatan berisi nama profil yang belum mencantumkannya.")
 H2("8.3 Isi halaman", need=120)
-shot("accounts", "Tab Accounts: delapan akun dalam rotasi beserta pemakaian 5 jam dan bot di tiap akun, dua akun "
+shot("accounts", "Tab Accounts: delapan akun dalam rotasi beserta pemakaian, limit mingguan, dan bot di tiap akun, dua akun "
      "parkir beserta jam resetnya, dua jadwal parkir, dan perkiraan. Semua akun di gambar adalah data contoh dari tes.")
 P("Header berisi pilihan provider, tombol mata untuk sensor email, tombol <b>Live usage</b>, <b>Wake</b>, <b>Balance now</b>, dan <b>Add account</b>. Baris di "
   "bawahnya menunjukkan umur angka pemakaian dan kapan timer jalan berikutnya.")
@@ -1230,12 +1256,14 @@ table([
      "tombol <b>Use fill_first</b>. Lima kartu: akun dalam rotasi, akun parkir, akun tempat sesi berikutnya mulai beserta pemakaiannya, "
      "jumlah sesi 30 menit terakhir, dan token 24 jam terakhir beserta harga API-nya. Kartu keenam adalah perkiraan "
      "(bagian 9): kapan semua akun ≥ 90% dengan laju satu jam terakhir. Lalu tabel rotasi sesuai urutan pool: status, bar "
-     "pemakaian 5 jam, garis tren 5 jam terakhir (arahkan kursor untuk rentangnya dan angka tertinggi 24 jam terakhir), jam reset (" + C("back HH:MM") + " saat diistirahatkan, " + C("not started") + " selama jendela tidak berjalan), "
+     "pemakaian (yang lebih penuh dari jendela 5 jam dan minggu) dengan tag " + C("week N%") + " di sebelahnya (oranye "
+     "mulai ambang peringatan mingguan, 90%; arahkan kursor untuk jendela 5 jam, minggu dan jam resetnya, serta minggu "
+     "Opus/Sonnet), garis tren 5 jam terakhir (arahkan kursor untuk rentangnya dan angka tertinggi 24 jam terakhir), jam reset limit yang lebih penuh itu (" + C("back HH:MM") + " saat diistirahatkan, " + C("not started") + " selama jendela tidak berjalan), "
      "token 24 jam terakhir (arahkan kursor untuk rincian input, output, cache, jumlah request, harga API, model utama, dan "
      "jendela 5 jam yang sedang berjalan), profil yang memakai akun itu "
      "(arahkan kursor untuk melihat sesi, platform, model, sejak kapan sesi itu di akun ini, dan akun asalnya bila pindah), serta tombol <b>Sign in again</b>, <b>Park</b>, "
      "<b>Park on a schedule</b>, <b>Remove</b>. Ikon kalender di sebelah akun menunjukkan jadwalnya. Di bawahnya akun "
-     "parkir dengan kolom yang sama: pemakaian 5 jam, garis tren, dan jam reset (timer tetap membacanya; "
+     "parkir dengan kolom yang sama: pemakaian, tag mingguan, garis tren, dan jam reset (timer tetap membacanya; "
      + C("not started") + " bila jendelanya sudah habis), sejak kapan, kapan kembali (" + C("(schedule)") + " bila diparkir jadwal), tombol "
      "<b>Unpark</b>, <b>Park on a schedule</b>, dan <b>Remove</b>. Lalu tabel jadwal parkir beserta keadaannya "
      "sekarang, dengan tombol ubah dan hapus. Peringatan aktif tampil sebagai banner di atas; akun mati mendapat tombol <b>Sign in again</b>, peringatan bot "
@@ -1365,7 +1393,10 @@ H1("9. Peringatan")
 table([
     ["Peringatan", "Kapan", "Dikirim"],
     ["<b>Akun perlu login ulang</b>", "Sebuah akun berstatus DEAD", "Sekali per akun"],
-    ["<b>Semua akun di atas 80%</b>", "Setiap akun dalam rotasi ≥ 80% (butuh adapter)", "Sekali, lalu kabar saat pulih"],
+    ["<b>Semua akun di atas 80%</b>", "Setiap akun dalam rotasi ≥ 80% dari limitnya yang lebih penuh (butuh adapter)",
+     "Sekali, lalu kabar saat pulih"],
+    ["<b>Limit mingguan tinggi</b>", "Sebuah akun dalam rotasi mencapai 90% limit mingguannya (butuh adapter; "
+     + C("alert_week_above") + ")", "Sekali per akun per minggu; hilang sendiri saat minggunya reset"],
     ["<b>Bot jauh di atas biasanya</b>", "Satu jam terakhir sebuah profil ≥ $15 harga API atau ≥ 300 request, dan "
      "3 kali jam biasanya", "Sekali per bot, paling sering tiap 6 jam"],
 ], [0.30, 0.44, 0.26])
@@ -1379,6 +1410,13 @@ LI(["Peringatan dikirim oleh " + C("balance") + ", jadi butuh timer.",
     + C("doctor") + ", " + C("notify") + " dan tab Alerts memberi tahu, karena tidak ada yang sampai. Plugin tidak "
     "membaca " + C(".env") + " atau pengaturan Telegram sendiri.",
     "Jalankan " + C("notify test") + " setelah mengatur."])
+P("Peringatan mingguan menyebut akunnya dan kapan minggunya reset:")
+code("""
+Hermes: heidi@example.com used 93% of its weekly limit
+anthropic weekly limit resets Fri 11:57. Until then balance puts the other accounts first.
+""")
+P("Peringatan ini dicek terhadap bacaan mingguan terbaru, jadi putaran yang gagal membaca akun itu tidak mengirimnya "
+  "lagi. Akun parkir tidak mendapat peringatan mingguan.")
 H2("Peringatan bot boros", need=80)
 P("Peringatan ini menangkap loop atau tugas yang lepas kendali sebelum menghabiskan pool:")
 code("""
@@ -1413,13 +1451,18 @@ Share of the load: bob 27%, carol 25%, alice 24% and 1 more. Highest 5-hour
 usage: 60% (bob). Every account >= 90% at once: 0 min.
 Busiest hour: 08:00-09:00.
 Now: 4 in rotation, 0 parked; new sessions start on alice (59%).
+Weekly limit: heidi 93% (resets Fri 11:57), bob 41% (resets Mon 16:45), carol 35% (resets
+Thu 21:33) and 5 more.
 """)
+P("Baris <b>Weekly limit</b> menyebut tiga minggu terpenuh dari akun dalam rotasi, dari bacaan terbarunya. Beban, "
+  "porsi, dan <b>Highest 5-hour usage</b> menghitung jendela 5 jam, limit mana pun yang lebih penuh.")
 P("Akun yang perlu login ulang dan saran dari " + C("report") + " ikut ditambahkan bila ada, juga perkiraan (jika "
   "pool punya beban dalam satu jam terakhir) dan sesi dengan harga API tertinggi. Ringkasan dibuat dari "
   "file plugin sendiri, tanpa permintaan ke provider. " + C("notify daily-off") + " mematikannya.")
 H2("File pengaturan", need=50)
 P("Pengaturan disimpan di " + C("$HERMES_HOME/account-pool.json") + " (dibuat saat perubahan pertama). File ini "
-  "juga boleh diedit; ambang peringatan ada di " + C("alert_all_above") + ", jam ringkasan harian di "
+  "juga boleh diedit; ambang peringatan ada di " + C("alert_all_above") + ", ambang peringatan mingguan di "
+  + C("alert_week_above") + " (default 90), jam ringkasan harian di "
   + C("notify.daily") + ", peringatan bot di " + C("alert_bot") + " (" + C("usd") + " dan " + C("requests")
   + " per jam, " + C("factor") + " terhadap jam biasanya, " + C("cooldown_h") + " jeda antarpesan untuk bot yang sama), "
   "jadwal parkir di " + C("schedules") + ", wake otomatis dan modelnya per provider di " + C("wake")
@@ -1427,6 +1470,7 @@ P("Pengaturan disimpan di " + C("$HERMES_HOME/account-pool.json") + " (dibuat sa
 code("""
 {"notify": {"desktop": true, "telegram": "auto", "telegram_via": "default", "daily": "08:00"},
  "alert_all_above": 80,
+ "alert_week_above": 90,
  "alert_bot": {"on": true, "usd": 15, "requests": 300, "factor": 3, "cooldown_h": 6},
  "schedules": {"anthropic": [{"label": "dave@example.com", "id": "a3b2c3",
                               "days": [0, 1, 2, 3, 4], "from": "09:00", "to": "17:00"}]},
@@ -1440,11 +1484,11 @@ code("""
 Forecast: At the last hour's pace (31% of one 5-hour window per hour), every account is at
 90% or more around 16:40, until about 17:20 when the first one resets.
 """)
-LI(["Lajunya adalah jumlah kenaikan pemakaian semua akun dalam satu jam terakhir, dari riwayat timer. Tidak ada "
+LI(["Lajunya adalah jumlah kenaikan jendela 5 jam semua akun dalam satu jam terakhir, dari riwayat timer. Tidak ada "
     "permintaan ke provider.",
     "Perkiraan membagikan laju itu menit demi menit ke akun paling longgar di bawah 90%, seperti " + C("balance")
-    + " dan " + C("fill_first") + " membagi sesi baru, dan mengembalikan ruang akun saat jendelanya reset. Jangkauannya "
-    "satu panjang jendela (5 jam untuk Anthropic).",
+    + " dan " + C("fill_first") + " membagi sesi baru, dan mengembalikan ruang akun saat jendelanya reset. Akun yang "
+    "minggunya ≥ 90% tetap penuh sampai minggunya reset. Jangkauannya satu panjang jendela (5 jam).",
     "Asumsinya akun berpaket sama (persennya bisa dijumlah) dan beban stabil; bot yang mulai atau berhenti mengubahnya "
     "dalam satu jam. Baca sebagai \"dengan laju ini\", bukan janji.",
     "Dengan riwayat baru kurang dari 25 menit, atau tanpa akun yang pemakaiannya diketahui, tidak ada perkiraan. Tanpa "
@@ -1459,17 +1503,20 @@ OL(["<b>Park bertanggal</b>: mengaktifkan lagi akun yang waktu " + C("--until") 
     "waktunya, memperpanjang tahanan 30 hari parkir tanpa jam selesai begitu sisanya kurang dari 15 hari, melupakan parkir akun yang sudah keluar "
     "dari pool, dan mengembalikan akun yang ditahan Hermes sebagai parkir padahal tidak ada di daftar parkir.",
     "<b>Pemulihan</b>: mencoba ulang refresh token akun yang COOLING DOWN.",
-    "<b>Pemakaian</b> (butuh adapter): membaca pemakaian semua akun; Hermes me-refresh access token yang "
-    "kedaluwarsa dulu.",
-    "<b>Istirahat dan lepas</b>: akun ≥ ambang diistirahatkan sampai jendelanya reset (ditandai "
+    "<b>Pemakaian</b> (butuh adapter): membaca pemakaian semua akun (jendela 5 jam dan limit mingguan, dari satu "
+    "request); Hermes me-refresh access token yang kedaluwarsa dulu.",
+    "<b>Istirahat dan lepas</b>: akun ≥ ambang diistirahatkan sampai jendelanya reset (minggu yang penuh: sampai "
+    "minggunya reset; ditandai "
     + C("[account-pool]") + "); akun yang sudah turun dilepas. Limit asli dari provider tidak pernah disentuh.",
     "<b>Urutan</b>: pemakaian terendah dulu, lalu akun yang diistirahatkan, lalu akun yang pemakaiannya tidak "
     "terbaca, lalu akun DEAD.",
     "<b>Wake</b> (hanya dengan " + C("wake auto-on") + "): satu request kecil lewat setiap akun dalam rotasi yang "
     "jendela 5 jamnya tidak berjalan, dari pemakaian yang dibaca di langkah 5 (bagian 7.16).",
-    "<b>Riwayat</b>: satu snapshot per putaran untuk " + C("report") + " dan cadangan \"last known\". Nilai yang "
-    "berasal dari cadangan itu tidak pernah ditulis ulang.",
-    "<b>Peringatan</b> untuk masalah baru (akun perlu login ulang, semua akun tinggi, bot jauh di atas biasanya), "
+    "<b>Riwayat</b>: satu snapshot per putaran untuk " + C("report") + " dan cadangan \"last known\", serta "
+    "bacaan mingguan terbaru tiap akun di " + C("account-pool-limits.json") + ". Nilai yang berasal dari cadangan itu "
+    "tidak pernah ditulis ulang.",
+    "<b>Peringatan</b> untuk masalah baru (akun perlu login ulang, semua akun tinggi, akun mendekati limit "
+    "mingguan, bot jauh di atas biasanya), "
     "dan ringkasan harian bila sudah waktunya.",
     "<b>Log aktivitas</b>: setiap perubahan dari langkah 1 sampai 10 dicatat di " + C("account-pool-activity.jsonl")
     + " (lihat " + C("log") + ", 7.14)."])
@@ -1564,13 +1611,16 @@ table([
      + ", peringatan login, ringkasan harian, pemulihan cooling down",
      "<b>Semua provider</b> di credential pool (OAuth dan API key)"],
     [C("relogin"), "Provider dengan login OAuth. Verifikasi email butuh adapter identity."],
-    [C("usage") + ", " + C("report") + ", urutan " + C("balance") + ", " + C("wake") + ", peringatan \"semua akun tinggi\", email asli",
-     "Provider yang punya <b>adapter</b>. Bawaan: <b>anthropic</b> (5 jam) dan <b>openai-codex</b> (5 jam + mingguan)."],
+    [C("usage") + ", " + C("report") + ", urutan " + C("balance") + ", " + C("wake") + ", limit mingguan dan "
+     "peringatannya, peringatan \"semua akun tinggi\", email asli",
+     "Provider yang punya <b>adapter</b>. Bawaan: <b>anthropic</b> (5 jam + mingguan, plus minggu Opus/Sonnet untuk "
+     "ditampilkan) dan <b>openai-codex</b> (5 jam + mingguan)."],
 ], [0.55, 0.45])
 LI(["Tanpa adapter, " + C("usage") + " dan " + C("report") + " menampilkan pesan jelas, dan " + C("balance")
     + " tetap menjalankan unpark terjadwal, pemulihan, dan peringatan login, tetapi urutan akun tidak diubah.",
-    "<b>Codex</b>: balance memakai limit yang paling ketat di antara 5 jam dan mingguan, dan " + C("usage")
-    + " menampilkan keduanya, misalnya " + C("5h 12% · week 78%") + ". Akun Codex yang juga login di Codex CLI atau "
+    "<b>Limit mingguan</b>: untuk kedua provider bawaan, balance memakai limit yang lebih penuh di antara 5 jam dan "
+    "mingguan, dan " + C("usage") + " menampilkan keduanya, misalnya " + C("5h 12% · week 78%") + " (bagian 5).",
+    "<b>Codex</b>: akun Codex yang juga login di Codex CLI atau "
     "VS Code berbagi kuota dengan aplikasi itu. Hermes memakai login Codex-nya sendiri dan tidak mengambil "
     + C("~/.codex/auth.json") + ".",
     "Provider lain bisa ditambahkan dengan menulis satu adapter (lihat CONTRIBUTING.md di repo)."])
@@ -1597,10 +1647,14 @@ table([
      "model, dalam blok 15 menit, 8 hari terakhir. Hanya angka dan id sesi."],
     [C("~/.hermes/account-pool-activity.jsonl"), "Log aktivitas: apa yang diubah timer, perintah, dan halaman. 30 hari "
      "terakhir, izin 600."],
-    [C("~/.hermes/account-pool-history.jsonl"), "Riwayat pemakaian, satu snapshot per putaran timer. Akun parkir "
+    [C("~/.hermes/account-pool-history.jsonl"), "Riwayat pemakaian, satu snapshot per putaran timer: angka pemakaian tiap akun dan, bila minggu adalah limit "
+     "yang lebih penuh, jendela 5 jamnya di sebelahnya (" + C("win") + "). Akun parkir "
      "ikut dicatat dan ditandai " + C("parked") + "; laporan, perkiraan, grafik, dan ringkasan harian tidak "
      "menghitungnya. Dipangkas ke 14 hari terakhir saat file melewati 3 MB."],
     [C("~/.hermes/account-pool-alerts.json"), "Peringatan yang sudah terkirim (satu pesan per kejadian)"],
+    [C("~/.hermes/account-pool-limits.json"), "Bacaan mingguan terbaru tiap akun per provider: persen dan jam reset "
+     "minggu dan minggu per keluarga model, serta kapan dibaca (sejak 4.1.0). Dibaca halaman, " + C("who") + ", "
+     "peringatan mingguan, dan ringkasan harian di antara putaran timer. Akun yang 14 hari tidak terbaca dihapus."],
     [C("~/.hermes/account-pool-state.json"), "Kapan ringkasan harian terakhir dikirim, jendela jadwal yang sudah "
      "dijalankan, wake terakhir tiap akun (waktu, model, atau alasan gagal), dan daftar model terakhir per "
      "provider (waktu dan id)"],
@@ -1828,6 +1882,15 @@ table([
      "default; " + C("wake models") + " menampilkan alasan yang sama"],
     [C("wake failed ...: rate-limited"), "Akun sedang kena limit, jadi jendelanya memang sudah berjalan",
      "Tidak perlu diperbaiki; putaran berikutnya melihat jendelanya berjalan"],
+    ["Akun diistirahatkan (" + C("bench X (93% weekly)") + ") atau paling belakang padahal pemakaian 5 jamnya rendah",
+     "Limit mingguannya hampir penuh", "Memang begitu: akun kembali saat minggunya reset (jamnya ada di " + C("usage")
+     + ", " + C("who") + ", dan halaman). Akun lain menanggung beban sampai saat itu"],
+    ["<b>Resets</b> menampilkan hari yang masih beberapa hari lagi", "Minggu adalah limit yang lebih penuh, jadi "
+     "jam resetnya milik minggu", "Arahkan kursor ke tag " + C("week") + " (halaman) atau baca ujung baris "
+     + C("usage") + " untuk jendela 5 jam"],
+    ["Tidak ada tag atau teks " + C("week") + " untuk akun Anthropic", "Jawaban pemakaiannya tanpa angka mingguan "
+     "(paket tanpa limit mingguan), atau belum ada bacaan sejak 4.1.0", "Tunggu putaran timer berikutnya atau tekan "
+     "<b>Live usage</b>; tanpa angka mingguan, jendela 5 jam bekerja seperti biasa"],
     ["<b>Resets</b> menampilkan " + C("not started"), "Tidak ada jendela 5 jam yang berjalan di akun itu",
      "Normal untuk akun yang menganggur. <b>Wake</b> memulainya bila Anda ingin reset lebih cepat"],
     ["Wake otomatis tidak melakukan apa-apa", "Timer mati, atau semua jendela sudah berjalan",
@@ -1902,7 +1965,10 @@ LI(["Pemakaian berasal dari <b>endpoint yang tidak didokumentasikan resmi</b>: "
     + " dan " + C("chatgpt.com/backend-api/wham/usage") + " (yang dipakai " + C("/status") + " di Codex CLI). "
     "Endpoint ini bisa berubah atau membatasi permintaan tanpa pemberitahuan. Plugin mengirim header klien yang sama "
     "dengan pembaca pemakaian milik Hermes.",
-    "Kuota mingguan Anthropic tidak tersedia untuk akun Team, jadi balance untuk " + C("anthropic") + " memakai jendela 5 jam.",
+    "Limit mingguan berasal dari jawaban pemakaian yang sama, yang juga tidak didokumentasikan. Akun Anthropic yang "
+    "jawabannya tanpa angka mingguan (sebagian paket) diatur dengan jendela 5 jamnya saja. Minggu per keluarga model ("
+    + C("Opus week") + ", " + C("Sonnet week") + ") hanya ditampilkan dan tidak mengatur " + C("balance") + ": saat "
+    "salah satunya penuh, provider menolak model itu dan Hermes memindahkan sesi ke akun berikutnya, seperti limit lain.",
     C("wake") + " bergantung pada yang ditampilkan endpoint pemakaian saat ini: Anthropic tidak memberi jam reset "
     "selama tidak ada jendela berjalan, Codex menampilkan jendela utuh yang bergeser setiap dibaca. Jika provider "
     "mengubahnya, wake tidak bisa mengenali jendela yang menganggur dan membiarkan akunnya (akun yang disebut namanya "
@@ -1988,6 +2054,11 @@ table([
 H1("19. Riwayat versi")
 table([
     ["Versi", "Perubahan"],
+    ["4.1.0", "Limit mingguan Claude di samping jendela 5 jam: " + C("usage") + " menampilkan keduanya (plus minggu "
+     "Opus/Sonnet sebagai info), angka pemakaian dan urutan " + C("balance") + " memakai yang lebih penuh (akun yang "
+     "minggunya ≥ 90% diistirahatkan sampai minggunya reset), " + C("who") + " dan halaman menampilkan minggu tiap "
+     "akun, peringatan per akun saat minggunya mencapai 90%, baris " + C("Weekly limit") + " di ringkasan harian, file "
+     "baru " + C("account-pool-limits.json") + ". Beban, laju, dan grafik tetap dalam persen jendela 5 jam."],
     ["4.0.3", "Instalasi pertama dari katalog: halaman Accounts yang menampilkan " + C("backend did not answer")
      + " kini menampilkan langkah perbaikannya (" + C("setup") + " di profil default, lalu buka ulang Desktop) dan "
      "memperingatkan tombol <b>Install here</b> milik Hermes, yang gagal untuk plugin ini. " + C("doctor")

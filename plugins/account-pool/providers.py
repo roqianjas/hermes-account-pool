@@ -9,7 +9,11 @@ Hermes credential pool. Anything that needs a provider's own API lives here:
                               `usage`, `balance`, `report` and the "all accounts
                               high" alert. With several limits (e.g. 5-hour and
                               weekly) return the most constraining one and put the
-                              breakdown in `detail`, a short text shown by `usage`
+                              breakdown in `detail`, a short text shown by `usage`.
+                              Also set `last_week` = (percent, reset) of an
+                              account-wide weekly limit, and `last_models` =
+                              ((name, percent, reset), ...) of limits that cap one
+                              model family only (shown, never in the percent)
     wake(entry, model)     -> send one tiny request through the account so its
                               short (5-hour) window starts now; returns the model
                               used, raises with a readable message. Needs
@@ -54,6 +58,8 @@ class Adapter:
     short_window_seconds = None   # length of the window `wake` starts (5 h)
     wake_model = ""               # model `wake` uses when none is set
     last_window = None            # (percent, reset, seconds) of the short window, set by usage()
+    last_week = None              # (percent, reset) of the account-wide weekly limit, set by usage()
+    last_models = ()              # ((name, percent, reset), ...) of model-family limits, set by usage()
 
     def identity(self, entry):
         return None
@@ -107,6 +113,14 @@ class Adapter:
         return type(self).identity is not Adapter.identity
 
 
+def _iso_ts(text):
+    """An ISO time from a usage answer as epoch seconds, None when missing or unreadable."""
+    try:
+        return datetime.fromisoformat(text).timestamp() if text else None
+    except Exception:
+        return None
+
+
 def jwt_claims(token) -> dict:
     """Unverified JWT payload (only used to read exp/email, never to trust a token)."""
     try:
@@ -134,13 +148,16 @@ def token_expired(entry) -> bool:
 
 class Anthropic(Adapter):
     name = "anthropic"
-    window = "5-hour"
+    window = "5-hour + weekly"
     window_short = "5h"
     window_seconds = 5 * 3600
     short_window_seconds = 5 * 3600
     wake_model = "claude-haiku-4-5"
     base = "https://api.anthropic.com"
     signin_methods = ("code",)
+    # Model-family weekly limits in the usage answer: shown, never in the headline percent (Hermes'
+    # own reader marks them model-scoped: a full Opus week does not stop the account's other models).
+    model_limits = (("seven_day_opus", "Opus week"), ("seven_day_sonnet", "Sonnet week"))
 
     def _get(self, entry, path: str) -> dict:
         # Same headers as Hermes' own usage fetcher (agent/account_usage.py). Without a client
@@ -169,24 +186,37 @@ class Anthropic(Adapter):
 
     def usage(self, entry):
         # Undocumented endpoint used by Claude Code's /usage. None on any change.
+        # The headline is the fuller of the 5-hour and the weekly limit (as for Codex), so balance never
+        # puts an account first that is locked for days; `detail` names both.
         self.last_error = ""
         self.last_window = None
+        self.last_week = None
+        self.last_models = ()
         try:
-            five = self._get(entry, "/api/oauth/usage").get("five_hour") or {}
+            data = self._get(entry, "/api/oauth/usage") or {}
         except Exception as x:
             self.last_error = self.explain(x, entry)
             return None
+        five = data.get("five_hour") or {}
         util = five.get("utilization")
         if util is None:
             self.last_error = "no 5-hour data in the answer"
             return None
-        reset = five.get("resets_at")
-        try:
-            reset = datetime.fromisoformat(reset).timestamp() if reset else None
-        except Exception:
-            reset = None
+        reset = _iso_ts(five.get("resets_at"))
         self.last_window = (float(util), reset, self.short_window_seconds)    # no window running: reset is None
-        return float(util), reset
+        windows = [("5h", float(util), reset)]
+        week = data.get("seven_day") or {}
+        if week.get("utilization") is not None:
+            self.last_week = (float(week["utilization"]), _iso_ts(week.get("resets_at")))
+            windows.append(("week",) + self.last_week)
+        self.last_models = tuple((name, float(w["utilization"]), _iso_ts(w.get("resets_at")))
+                                 for key, name in self.model_limits
+                                 for w in [data.get(key) or {}] if w.get("utilization") is not None)
+        if len(windows) == 1 and not self.last_models:
+            return float(util), reset
+        _, pct, when = max(windows, key=lambda w: w[1])       # a tie keeps the 5-hour window
+        detail = " · ".join(f"{n} {p:.0f}%" for n, p, _ in windows + list(self.last_models))
+        return pct, when, detail
 
     def wake(self, entry, model=None):
         # Through Hermes' own Anthropic client: the same headers and Claude Code identity as a Hermes session.
@@ -256,6 +286,8 @@ class OpenAICodex(Adapter):
         # Undocumented endpoint used by Codex CLI's /status. None on any change.
         self.last_error = ""
         self.last_window = None
+        self.last_week = None
+        self.last_models = ()
         try:
             req = urllib.request.Request(self.url, headers=self._headers(entry))
             with urllib.request.urlopen(req, timeout=20) as r:
@@ -275,6 +307,8 @@ class OpenAICodex(Adapter):
             if reset is None and w.get("reset_after_seconds") is not None:
                 reset = time.time() + float(w["reset_after_seconds"])
             windows.append((short, float(w["used_percent"]), float(reset) if reset else None))
+            if secs == 604800 or (not secs and key == "secondary_window"):
+                self.last_week = (float(w["used_percent"]), float(reset) if reset else None)
             if key == "primary_window":
                 # An idle window reads as a full one that resets `secs` from now, moving with every read.
                 self.last_window = (float(w["used_percent"]), float(reset) if reset else None,

@@ -75,7 +75,7 @@ Write-Host ""
 Write-Host "Kept (delete by hand if you no longer need them):"
 foreach ($f in @("account-pool-parking.json", "account-pool-parked.json", "account-pool-sessions.json", "account-pool-tokens.json",
                  "account-pool-history.jsonl", "account-pool-activity.jsonl", "account-pool-alerts.json",
-                 "account-pool-state.json", "account-pool.json")) {
+                 "account-pool-state.json", "account-pool-limits.json", "account-pool.json")) {
     $p = Join-Path $Root $f
     if (Test-Path $p) { Write-Host "  $p" }
 }

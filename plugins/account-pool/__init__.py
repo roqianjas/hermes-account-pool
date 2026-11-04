@@ -479,6 +479,8 @@ def _load_json(path: Path, default):
 
 CONFIG_DEFAULTS = {"notify": {"desktop": True, "telegram": "auto", "telegram_via": "default"},
                    "alert_all_above": 80,
+                   # one alert per account when its weekly limit reaches this percent (again after it resets)
+                   "alert_week_above": 90,
                    # a bot that uses far more than usual in the last hour (a loop, a runaway task)
                    "alert_bot": {"on": True, "usd": 15, "requests": 300, "factor": 3, "cooldown_h": 6}}
 
@@ -543,6 +545,14 @@ def _pool_usage(rec: dict) -> dict:
     usage = rec.get("usage") or {}
     skip = rec.get("parked")
     return {k: v for k, v in usage.items() if k not in skip} if skip else usage
+
+
+def _window_usage(rec: dict) -> dict:
+    """A snapshot's short-window (5-hour) percent of the accounts in rotation: the headline, or the window
+    kept apart in `win` when another limit (the week) was the fuller one. Load, pace, the hourly chart and
+    the day's peak add these up, so 100 stays one full 5-hour window whichever limit is the headline."""
+    win = rec.get("win") or {}
+    return {k: float(win[k][0]) if k in win and win[k] else float(v) for k, v in _pool_usage(rec).items()}
 
 
 def _load_line_ts(line: str) -> float:
@@ -857,6 +867,17 @@ def _run_alerts(provider: str, pool, known) -> list[str]:
             f"Hermes: every {provider} account is above {limit:.0f}%",
             f"Lowest: {lo_e.label} at {lo_u[0]:.0f}% (resets {_hhmm(lo_u[1])}). "
             f"When all are full, Hermes switches to its fallback model.")
+    # Weekly limit per account: from the newest reading, so a run that cannot read the account keeps the
+    # alert instead of clearing it (and sending it again). It clears once the week resets.
+    week_limit = float(cfg.get("alert_week_above", 90))
+    limits = _load_json(_limits_path(), {}) or {}
+    for e in _rotation(provider, pool):
+        wk = _week_of(provider, e.label, limits)
+        if wk and wk["pct"] is not None and wk["pct"] >= week_limit:
+            current[f"{provider}:week:{e.id}"] = (
+                f"Hermes: {e.label} used {wk['pct']:.0f}% of its weekly limit",
+                f"{provider} weekly limit resets {_hhmm(wk['reset'])}. Until then balance puts the other "
+                f"accounts first.")
     state = _load_json(_alerts_path(), {})
     mine = {k: v for k, v in state.items() if k.startswith(provider + ":")}
     other = {k: v for k, v in state.items() if not k.startswith(provider + ":")}
@@ -934,6 +955,14 @@ def _summary(provider: str, hours: float = 24) -> tuple:
         pct = last.get(nxt.label)
         now += f"; new sessions start on {_short(nxt.label)}" + (f" ({pct:.0f}%)" if pct is not None else "")
     lines.append(now + ".")
+    limits = _load_json(_limits_path(), {}) or {}
+    weeks = [(e.label, w) for e in entries for w in [_week_of(provider, e.label, limits)]
+             if w and w["pct"] is not None]
+    if weeks:
+        weeks.sort(key=lambda x: -x[1]["pct"])
+        lines.append("Weekly limit: " + ", ".join(
+            f"{_short(lab)} {w['pct']:.0f}% (resets {_hhmm(w['reset'])})" for lab, w in weeks[:3])
+            + (f" and {len(weeks) - 3} more" if len(weeks) > 3 else "") + ".")
     if _has_usage(provider):
         fc = _forecast(provider)
         if fc["status"] == "ok":
@@ -966,8 +995,9 @@ def _quiet_day(provider: str, hours: float = 24) -> bool:
     if any(getattr(e, "last_status", None) == "dead" for e in _entries(provider)):
         return False
     since = time.time() - hours * 3600
+    # 5-hour window percents: a week above 0% only says the account was used some day this week
     if _has_usage(provider) and any((v or 0) > 0 for h in _read_history(provider, since)
-                                    for v in _pool_usage(h).values()):
+                                    for v in _window_usage(h).values()):
         return False
     return not _report_data(provider, hours)["tokens_total"]["requests"]
 
@@ -1143,6 +1173,7 @@ def _usage_full(provider, entry):
     label = getattr(entry, "label", None)
     if not u:
         _WINDOW.pop((provider, label), None)
+        _LIMITS.pop((provider, label), None)
         transient = ad.last_error.startswith(("usage endpoint rate-limited", "usage endpoint unreachable",
                                               "usage endpoint HTTP 5"))
         return (_cached_usage(provider, label) if transient and label else None)
@@ -1153,12 +1184,61 @@ def _usage_full(provider, entry):
             _WINDOW[(provider, label)] = tuple(win)
         else:
             _WINDOW.pop((provider, label), None)
+        week, models = getattr(ad, "last_week", None), tuple(getattr(ad, "last_models", ()) or ())
+        if week or models:
+            _LIMITS[(provider, label)] = {"week": tuple(week) if week else None, "models": models}
+        else:
+            _LIMITS.pop((provider, label), None)
     return float(u[0]), u[1], (u[2] if len(u) > 2 else "")
 
 
 _CACHED: set = set()          # labels whose usage came from history this run (never re-recorded)
 _SNAP: dict = {}
 _WINDOW: dict = {}            # (provider, label) -> (percent, reset, seconds) of the 5-hour window, read this run
+_LIMITS: dict = {}            # (provider, label) -> {"week": (percent, reset) | None, "models": ((name, pct, reset),)}
+
+
+def _limits_path() -> Path:
+    return _root() / "account-pool-limits.json"
+
+
+def _record_limits(provider: str) -> None:
+    """Keep the newest weekly readings of the accounts read this run (the page, alerts and summary read
+    them between runs). One small file, newest reading per account, not a history."""
+    read = {label: v for (p, label), v in _LIMITS.items() if p == provider and label not in _CACHED}
+    if not read:
+        return
+    data = _load_json(_limits_path(), {}) or {}
+    mine = data.setdefault(provider, {})
+    now = round(time.time())
+    for label, v in read.items():
+        mine[label] = {"ts": now, "week": list(v["week"]) if v.get("week") else None,
+                       "models": {n: [p, r] for n, p, r in v.get("models") or ()}}
+    for label in [k for k, v in mine.items() if now - float(v.get("ts") or 0) > 14 * 86400]:
+        del mine[label]                      # an account gone for two weeks
+    _atomic_json(_limits_path(), data)
+
+
+def _week_of(provider: str, label: str, data=None):
+    """{"pct", "reset", "ts", "models": [[name, pct, reset]]} of the account's weekly limit from its newest
+    reading, or None. A limit that has reset since reads pct None (the old number is void)."""
+    rec = ((data if data is not None else _load_json(_limits_path(), {}) or {}).get(provider) or {}).get(label)
+    if not rec or not (rec.get("week") or rec.get("models")):
+        return None
+    now = time.time()
+    pct, reset = (rec.get("week") or [None, None])[:2]
+    if reset and reset <= now:
+        pct = None
+    models = [[n, (None if r and r <= now else p), r] for n, (p, r) in (rec.get("models") or {}).items()]
+    return {"pct": pct, "reset": reset, "ts": rec.get("ts"), "models": models}
+
+
+def _limit_name(provider: str, label: str, util: float) -> str:
+    """Which limit a headline percent read this run comes from: "weekly", or the adapter's short window name."""
+    week, win = (_LIMITS.get((provider, label)) or {}).get("week"), _WINDOW.get((provider, label))
+    if week and abs(week[0] - util) < 0.01 and not (win and abs(win[0] - util) < 0.01):
+        return "weekly"
+    return providers.get(provider).window_short
 
 
 def _recent_snapshots(provider: str) -> list:
@@ -1210,6 +1290,7 @@ def _reset_run_state() -> None:
     _CACHED.clear()
     _SNAP.clear()
     _WINDOW.clear()
+    _LIMITS.clear()
 
 
 def _usage_reason(provider) -> str:
@@ -1228,6 +1309,11 @@ def _has_usage(provider) -> bool:
 
 def _window(provider) -> str:
     return providers.get(provider).window
+
+
+def _load_window(provider) -> str:
+    """The window load and pace are counted in ("5-hour" of "5-hour + weekly")."""
+    return _window(provider).split(" + ")[0]
 
 
 def _no_usage_text(provider) -> str:
@@ -1442,6 +1528,10 @@ def _usage_rows(provider: str) -> list:
         elif e is not None and getattr(_find_entry(pool, e.id), "last_status", None) != "dead":
             row["note"] = _usage_reason(provider)
         rows.append(row)
+    try:
+        _record_limits(provider)
+    except Exception:  # noqa: BLE001  (a read-only command must not fail on the weekly file)
+        pass
     return rows
 
 
@@ -1727,6 +1817,7 @@ def _cmd_balance(args) -> int:
     if not known:
         if not dry:
             try:
+                _record_limits(provider)
                 _record_history(provider, [], parked_known)
             except Exception as x:
                 actions.append(f"history not written: {x}")
@@ -1752,11 +1843,12 @@ def _cmd_balance(args) -> int:
 
     full_ids = {e.id for e, _ in full}
     for e, (util, reset) in full:
-        msg = f"{MARK} {providers.get(provider).window_short} usage {util:.0f}% >= {threshold:.0f}%"
+        which = _limit_name(provider, e.label, util)
+        msg = f"{MARK} {which} usage {util:.0f}% >= {threshold:.0f}%"
         prev = getattr(e, "last_error_reset_at", None)
         if getattr(e, "last_status", None) == "exhausted" and prev and reset and abs(prev - reset) < 300:
             continue
-        actions.append(f"bench {e.label} ({util:.0f}%) until {_hhmm(reset)}")
+        actions.append(f"bench {e.label} ({util:.0f}%{' weekly' if which == 'weekly' else ''}) until {_hhmm(reset)}")
         if not dry:
             pool.mark_exhausted_and_rotate(status_code=429, credential_id=e.id, error_context={
                 "reason": "rate_limit_error", "message": msg, "reset_at": reset or time.time() + 3600})
@@ -1796,6 +1888,7 @@ def _cmd_balance(args) -> int:
 
     if not dry:
         try:
+            _record_limits(provider)
             _record_history(provider, known, parked_known)
         except Exception as x:
             actions.append(f"history not written: {x}")
@@ -2725,16 +2818,19 @@ def _report_data(provider: str, hours: float) -> dict:
     def ranked(by):
         return [dict(t, name=k) for k, t in sorted(_token_group(provider, rows, since_ts, by=by).items(),
                                                      key=lambda kv: -kv[1]["total"])]
-    out = {"hours": hours, "snapshots": len(hist), "window": _window(provider), "accounts": [], "total": 0.0,
+    out = {"hours": hours, "snapshots": len(hist), "window": _load_window(provider), "accounts": [], "total": 0.0,
            "busiest": [], "full_min": 0.0, "span_h": 0.0, "start": None, "advice": "",
            "tokens_total": tokens_total, "tokens_since": counting,
            "by_profile": ranked("profile"), "by_model": ranked("model")}
     if len(hist) < 2:
         return out
-    series = defaultdict(list)
+    series = defaultdict(list)                    # the 5-hour window: load and peak
+    head = defaultdict(list)                      # the headline (the fuller limit): time without headroom
     for rec in hist:
-        for label, util in _pool_usage(rec).items():
+        for label, util in _window_usage(rec).items():
             series[label].append((rec["ts"], util))
+        for label, util in _pool_usage(rec).items():
+            head[label].append((rec["ts"], float(util)))
     burn = defaultdict(float)
     hot = defaultdict(float)                      # minutes at/above 90%
     peak = defaultdict(float)
@@ -2747,9 +2843,11 @@ def _report_data(provider: str, hours: float) -> dict:
             if u2 > u1:
                 burn[label] += u2 - u1
                 hourly[time.localtime(t2).tm_hour] += u2 - u1
-            if u1 >= 90:
-                hot[label] += gap / 60
         peak[label] = max(u for _, u in pts)
+    for label, pts in head.items():
+        for (t1, u1), (t2, _u2) in zip(pts, pts[1:]):
+            if t2 - t1 <= 1200 and u1 >= 90:
+                hot[label] += (t2 - t1) / 60
     full_min = 0.0
     for r1, r2 in zip(hist, hist[1:]):
         if r2["ts"] - r1["ts"] <= 1200 and _pool_usage(r1) and all(u >= 90 for u in _pool_usage(r1).values()):
@@ -2798,7 +2896,7 @@ def _forecast(provider: str, now: float = None, threshold: float = 90) -> dict:
         return out
     series = defaultdict(list)
     for rec in hist:
-        for label, util in _pool_usage(rec).items():
+        for label, util in _window_usage(rec).items():
             series[label].append((rec["ts"], float(util)))
     burn = 0.0
     for pts in series.values():
@@ -2813,11 +2911,14 @@ def _forecast(provider: str, now: float = None, threshold: float = 90) -> dict:
         if getattr(e, "last_status", None) == "dead" or e.label not in (last.get("usage") or {}):
             continue
         u, reset = float(last["usage"][e.label]), (last.get("reset") or {}).get(e.label)
+        w = (last.get("win") or {}).get(e.label)
+        if w and u < threshold:          # the fuller limit (the week) still has room: the 5-hour window fills
+            u, reset = float(w[0]), w[1]
         if reset and reset <= now:
             u, reset = 0.0, reset + win_s
         accs.append([u, reset or now + win_s])
     out.update(status="idle" if rate <= 0 else "ok", pace=round(rate * 60, 1), accounts=len(accs))
-    w = _window(provider)
+    w = _load_window(provider)
     if not accs:
         out.update(status="no-data", text="No account in rotation with a known usage.")
         return out
@@ -2859,7 +2960,7 @@ def _chart_data(provider: str, days: int = 7) -> dict:
 
     series = defaultdict(list)
     for rec in _read_history(provider, starts[0] - 1200):
-        for label, util in _pool_usage(rec).items():
+        for label, util in _window_usage(rec).items():
             series[label].append((rec["ts"], float(util)))
     for pts in series.values():
         for (t1, u1), (t2, u2) in zip(pts, pts[1:]):
@@ -2873,7 +2974,7 @@ def _chart_data(provider: str, days: int = 7) -> dict:
         if i is not None:
             tok[i][hr] += sum(v[:4])
             req[i][hr] += v[4]
-    return {"window": _window(provider), "has_usage": _has_usage(provider), "days": [
+    return {"window": _load_window(provider), "has_usage": _has_usage(provider), "days": [
         {"start": st, "date": time.strftime("%m-%d", time.localtime(st)), "dow": time.strftime("%a", time.localtime(st)),
          "used": [round(x, 1) for x in used[i]], "tokens": tok[i], "requests": req[i]}
         for i, st in enumerate(starts)]}
@@ -3124,9 +3225,14 @@ def _cmd_who(args) -> int:
     if not data["recorded"]:
         _p("No sessions recorded yet. The tracker records a session after its next API call.")
     _p(f"[{provider}] sessions active in the last {minutes:.0f} min: {data['count']}")
+    limits = _load_json(_limits_path(), {}) or {}
     for acc in data["accounts"]:
         sess = acc["sessions"]
-        _p(f"  {acc['label']:34s}" + ("" if sess else " (idle)"))
+        wk = _week_of(provider, acc["label"], limits)
+        mark = "" if sess else " (idle)"
+        if wk and wk["pct"] is not None:
+            mark = f"{mark:7s}  week {wk['pct']:.0f}%, resets {_hhmm(wk['reset'])}"
+        _p(f"  {acc['label']:34s}" + mark)
         for r in sess:
             ago = (time.time() - r["last_seen"]) / 60
             moved = f"  (moved from {r['previous_account']})" if r.get("previous_account") else ""
@@ -3148,6 +3254,7 @@ def _cmd_notify(args) -> int:
         _p(f"  telegram : {where.replace('<provider>', _norm(args.provider))}"
               + (f", sent with the bot of profile '{via}'" if tgt else ""))
         _p(f"  alert when every account is above {cfg.get('alert_all_above', 80)}%, "
+              f"when an account's weekly limit reaches {cfg.get('alert_week_above', 90)}%, "
               f"and when an account needs sign-in (DEAD).")
         ab = cfg["alert_bot"]
         _p(f"  bot alerts: {'on' if ab.get('on') else 'off'}"

@@ -13,7 +13,7 @@
     "in_use": false
    }
   ],
-  "window": "5-hour",
+  "window": "5-hour + weekly",
   "has_usage": true,
   "has_identity": true,
   "web_signin": true,
@@ -246,7 +246,8 @@
     },
     "window": {
      "idle": false,
-     "reset": 1791644400.48521
+     "reset": 1791644400.48521,
+     "pct": 10.0
     },
     "woke": {
      "ts": 1791635637,
@@ -256,6 +257,12 @@
     "peak": {
      "pct": 10.0,
      "ts": 1791639076
+    },
+    "week": {
+     "pct": 8.0,
+     "reset": 1791863877.289,
+     "ts": 1791639117.289,
+     "models": []
     }
    },
    {
@@ -472,7 +479,8 @@
     },
     "window": {
      "idle": false,
-     "reset": 1791646199.915058
+     "reset": 1791646199.915058,
+     "pct": 10.0
     },
     "woke": {
      "ts": 1791637437,
@@ -482,6 +490,12 @@
     "peak": {
      "pct": 10.0,
      "ts": 1791639076
+    },
+    "week": {
+     "pct": 9.0,
+     "reset": 1791863877.289,
+     "ts": 1791639117.289,
+     "models": []
     }
    },
    {
@@ -704,12 +718,19 @@
     },
     "window": {
      "idle": false,
-     "reset": 1791646800.3928
+     "reset": 1791646800.3928,
+     "pct": 15.0
     },
     "woke": null,
     "peak": {
      "pct": 15.0,
      "ts": 1791639076
+    },
+    "week": {
+     "pct": 13.0,
+     "reset": 1791863877.289,
+     "ts": 1791639117.289,
+     "models": []
     }
    },
    {
@@ -870,12 +891,19 @@
     },
     "window": {
      "idle": false,
-     "reset": 1791648600.205103
+     "reset": 1791648600.205103,
+     "pct": 17.0
     },
     "woke": null,
     "peak": {
      "pct": 17.0,
      "ts": 1791639076
+    },
+    "week": {
+     "pct": 15.0,
+     "reset": 1791863877.289,
+     "ts": 1791639117.289,
+     "models": []
     }
    },
    {
@@ -1088,12 +1116,19 @@
     },
     "window": {
      "idle": true,
-     "reset": null
+     "reset": null,
+     "pct": 0.0
     },
     "woke": null,
     "peak": {
      "pct": 20.0,
      "ts": 1791639076
+    },
+    "week": {
+     "pct": 0.0,
+     "reset": 1791863877.289,
+     "ts": 1791639117.289,
+     "models": []
     }
    },
    {
@@ -1321,12 +1356,19 @@
     },
     "window": {
      "idle": false,
-     "reset": 1791644399.637406
+     "reset": 1791644399.637406,
+     "pct": 21.0
     },
     "woke": null,
     "peak": {
      "pct": 21.0,
      "ts": 1791639076
+    },
+    "week": {
+     "pct": 18.0,
+     "reset": 1791863877.289,
+     "ts": 1791639117.289,
+     "models": []
     }
    },
    {
@@ -1553,13 +1595,15 @@
     },
     "window": {
      "idle": true,
-     "reset": null
+     "reset": null,
+     "pct": 0.0
     },
     "woke": null,
     "peak": {
      "pct": 24.0,
      "ts": 1791639076
-    }
+    },
+    "week": null
    },
    {
     "pos": 8,
@@ -1571,7 +1615,7 @@
     "back_at": null,
     "usage": {
      "pct": 57.0,
-     "reset": 1791650999.551559,
+     "reset": 1791863877.289,
      "ts": 1791639076,
      "source": "timer",
      "age": 161
@@ -1723,12 +1767,25 @@
     },
     "window": {
      "idle": false,
-     "reset": 1791650999.551559
+     "reset": 1791650999.551559,
+     "pct": 12.0
     },
     "woke": null,
     "peak": {
      "pct": 57.0,
      "ts": 1791639076
+    },
+    "week": {
+     "pct": 57.0,
+     "reset": 1791863877.289,
+     "ts": 1791639117.289,
+     "models": [
+      [
+       "Opus week",
+       64.0,
+       1791863877.289
+      ]
+     ]
     }
    }
   ],
@@ -2011,7 +2068,14 @@
     },
     "window": {
      "idle": false,
-     "reset": 1791645357.42
+     "reset": 1791645357.42,
+     "pct": 29.0
+    },
+    "week": {
+     "pct": 26.0,
+     "reset": 1791863877.289,
+     "ts": 1791639117.289,
+     "models": []
     }
    },
    {
@@ -2276,7 +2340,8 @@
     },
     "window": {
      "idle": true,
-     "reset": null
+     "reset": null,
+     "pct": 0.0
     },
     "tokens": {
      "day": {
@@ -2293,7 +2358,13 @@
      },
      "window": null
     },
-    "by": null
+    "by": null,
+    "week": {
+     "pct": 0.0,
+     "reset": 1791863877.289,
+     "ts": 1791639117.289,
+     "models": []
+    }
    }
   ],
   "other_sessions": [],
@@ -2434,7 +2505,8 @@
    "model_text": "claude-haiku-4-5 (default)",
    "model_name": "claude-haiku-4-5"
   },
-  "privacy": false
+  "privacy": false,
+  "alert_week_above": 90
  },
  "/status?provider=openai-codex": {
   "provider": "openai-codex",
@@ -2569,7 +2641,7 @@
  "/report?provider=anthropic&hours=24": {
   "hours": 24.0,
   "snapshots": 67,
-  "window": "5-hour",
+  "window": "5-hour + weekly",
   "accounts": [
    {
     "label": "heidi@example.com",
@@ -2960,7 +3032,7 @@
  "/report?provider=anthropic&hours=72": {
   "hours": 72.0,
   "snapshots": 67,
-  "window": "5-hour",
+  "window": "5-hour + weekly",
   "accounts": [
    {
     "label": "heidi@example.com",
@@ -3351,7 +3423,7 @@
  "/report?provider=anthropic&hours=168": {
   "hours": 168.0,
   "snapshots": 67,
-  "window": "5-hour",
+  "window": "5-hour + weekly",
   "accounts": [
    {
     "label": "heidi@example.com",
@@ -3804,7 +3876,8 @@
    "factor": 3
   },
   "telegram_chat": null,
-  "telegram_home": true
+  "telegram_home": true,
+  "alert_week_above": 90
  },
  "/activity?provider=anthropic&hours=24": {
   "hours": 24,

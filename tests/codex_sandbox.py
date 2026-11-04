@@ -152,6 +152,9 @@ check(rc == 0 and "60%" in line["ann@example.com"] and "5h 30% · week 60%" in l
       "usage: the fuller window counts, both shown")
 check("100%" in line["ben@example.com"], "usage: limit reached reads as 100%")
 check("n/a" in line["cy@example.com"] and "no limit data" in line["cy@example.com"], "usage: no limit data, said why")
+wk = (core._load_json(core._limits_path(), {}) or {}).get(P) or {}
+check(wk.get("ann@example.com", {}).get("week", [None])[0] == 60.0 and core._week_of(P, "ann@example.com")["pct"] == 60.0
+      and "cy@example.com" not in wk, "usage: the weekly window is kept per account (page, who, weekly alert)")
 h = next(hd for url, hd in SEEN if url.endswith("/wham/usage"))
 check(h.get("chatgpt-account-id") == "acct-1" and h.get("originator") == "codex_cli_rs"
       and h.get("authorization", "").startswith("Bearer "), "usage: Codex CLI headers with the ChatGPT account id")

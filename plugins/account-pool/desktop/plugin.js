@@ -190,7 +190,7 @@ function TokensCell({ tokens, window }) {
   if (!tokens || !tokens.day || !tokens.day.requests) return h('span', { className: 'hap-muted' }, '–')
   const lines = [`Last 24 h through Hermes: ${fmtTok(tokens.day.total)}`, ...tokLines(tokens.day)]
   if (tokens.window && tokens.window.requests) {
-    lines.push('', `This ${window} window: ${fmtTok(tokens.window.total)} (${tokens.window.requests} requests)`)
+    lines.push('', `This ${String(window).split(' + ')[0]} window: ${fmtTok(tokens.window.total)} (${tokens.window.requests} requests)`)
   }
   return h(MTip, { label: lines.join('\n') }, h('span', null, fmtTok(tokens.day.total)))
 }
@@ -340,7 +340,21 @@ function SparkCell({ points, peak, now }) {
     seen ? h(Spark, { points, now }) : h('span', { className: 'hap-tag' }, '–')))
 }
 
-function UsageCell({ usage, parked, now }) {
+// The weekly limit next to the usage bar. The bar shows the fuller of the 5-hour window and the week.
+function WeekTag({ week, short, limit }) {
+  if (!week || week.pct == null) return null
+  const lines = []
+  if (short && short.pct != null) lines.push(`5-hour window: ${Math.round(short.pct)}%` + (short.reset ? `, resets ${hhmm(short.reset)}` : ', not running'))
+  lines.push(`Weekly limit: ${Math.round(week.pct)}%` + (week.reset ? `, resets ${hhmm(week.reset)}` : ''))
+  for (const [name, pct] of week.models || []) if (pct != null) lines.push(`${name}: ${Math.round(pct)}% (caps that model only)`)
+  lines.push('The bar shows the fuller one; balance orders accounts by it.')
+  const high = week.pct >= (limit || 90)
+  return h(MTip, { label: lines.join('\n') },
+    h('span', { className: `hap-tag${high ? ' hap-warn' : ''}`, 'data-week': high ? 'high' : 'ok', 'aria-label': lines.join(' ') },
+      `week ${Math.round(week.pct)}%`))
+}
+
+function UsageCell({ usage, parked, week, short, limit }) {
   if (!usage) return h('span', { className: 'hap-tag' }, 'no data yet')
   if (usage.pct == null) {
     return h(MTip, { label: `The usage window reset after the last reading (${ago(usage.age)}). Live usage or the next timer run shows the new number.` },
@@ -349,10 +363,12 @@ function UsageCell({ usage, parked, now }) {
   const pct = usage.pct
   const tone = parked ? 'muted' : pct >= 90 ? 'bad' : pct >= 70 ? 'warn' : ''
   const tag = usage.source === 'live' ? `live, ${ago(usage.age)}` : usage.age > 900 ? ago(usage.age) : ''
+  const showWeek = week && week.pct != null
   return h('div', { className: 'hap-usage' },
     h('span', { className: `hap-bar ${tone}` }, h('i', { style: { width: `${Math.min(100, Math.max(2, pct))}%` } })),
     h('span', { className: 'hap-pct' }, `${Math.round(pct)}%`),
-    usage.detail && !usage.detail.startsWith('last known') ? h('span', { className: 'hap-tag' }, usage.detail) : null,
+    showWeek ? h(WeekTag, { week, short, limit }) : null,
+    !showWeek && usage.detail && !usage.detail.startsWith('last known') ? h('span', { className: 'hap-tag' }, usage.detail) : null,
     tag ? h('span', { className: 'hap-tag' }, tag) : null)
 }
 
@@ -970,7 +986,7 @@ function AccountsView({ data, provider, openDialog }) {
             st.text ? h(MTip, { label: (r.problems || []).join('\n') || st.text },
               h(Badge, { variant: r.state === 'DEAD' ? 'destructive' : 'warn' }, st.text)) : null,
             h(SchedChip, { s: schedOf(r.label) }))),
-          h('td', null, h(UsageCell, { usage: r.usage, now })),
+          h('td', null, h(UsageCell, { usage: r.usage, now, week: r.week, short: r.window, limit: data.alert_week_above })),
           h('td', null, h(SparkCell, { points: r.spark, peak: r.peak, now })),
           h('td', { className: 'hap-num' },
             r.back_at ? h(MTip, { label: 'Back in rotation at this time' }, h('span', null, `back ${hhmm(r.back_at)}`))
@@ -1010,7 +1026,7 @@ function AccountsView({ data, provider, openDialog }) {
               p.gone ? h(MTip, { label: 'Removed from the pool outside account-pool. The next balance run forgets this park.' },
                 h(Badge, { variant: 'destructive' }, 'not in the pool')) : null,
               h(SchedChip, { s: schedOf(p.label) }))),
-            h('td', null, h(UsageCell, { usage: p.usage, parked: true, now })),
+            h('td', null, h(UsageCell, { usage: p.usage, parked: true, now, week: p.week, short: p.window, limit: data.alert_week_above })),
             h('td', null, h(SparkCell, { points: p.spark, peak: p.peak, now })),
             h('td', { className: 'hap-num' },
               p.window && p.window.idle && !p.dead
@@ -1172,7 +1188,7 @@ function ReportView({ provider }) {
         : !d.available ? h('p', { className: 'hap-muted hap-small' }, d.message)
           : h(Fragment, null,
             h('div', { className: 'hap-cards' },
-              usage ? h(Card, { k: 'Load', v: `${Math.round(d.total)}`, s: `100 = one full ${d.window} window` }) : null,
+              usage ? h(Card, { k: 'Load', v: `${Math.round(d.total)}`, s: `100 = one full ${String(d.window).split(' + ')[0]} window` }) : null,
               usage ? h(Card, { k: 'Covered', v: `${d.span_h.toFixed(1)} h`, s: `${d.snapshots} snapshots` }) : null,
               usage ? h(Card, { k: 'Every account ≥ 90%', v: `${Math.round(d.full_min)} min`, s: d.full_min ? 'the pool ran out of headroom' : 'never' }) : null,
               usage ? h(Card, {
@@ -1323,7 +1339,7 @@ function AlertsView({ provider, data, openResult }) {
   if (q.error) return h(ErrorState, { title: errText(q.error) })
   return h(Fragment, null,
     h('p', { className: 'hap-small hap-muted', style: { margin: '4px 0 6px' } },
-      `The balance timer alerts once when every account is above ${n.alert_all_above}%, once when an account needs to sign in again, once when it is fixed, and once when a bot uses far more than usual.`),
+      `The balance timer alerts once when every account is above ${n.alert_all_above}%, once per week when an account's weekly limit reaches ${n.alert_week_above || 90}%, once when an account needs to sign in again, once when it is fixed, and once when a bot uses far more than usual.`),
     h('div', { className: 'hap-setting' },
       h('div', { className: 'hap-grow' },
         h('div', { className: 'hap-setting-t' }, 'Desktop notifications'),
