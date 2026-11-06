@@ -168,7 +168,13 @@ def _timer() -> dict:
     return _TIMER["data"]
 
 
-def _alerts(provider: str, labels: dict) -> list[dict]:
+def _alerts(provider: str, entries: list) -> list[dict]:
+    """The timer's open alerts, checked against the pool as it is now. The timer rewrites the alerts file on
+    its next run (up to 5 minutes later); until then an account signed in again from the page (new pool id)
+    or parked would still show its banner, under a bare id. So a sign-in alert shows only while that entry
+    is in rotation and still rejected, a weekly alert only while the account is in rotation."""
+    by_id = {e.id: e for e in entries}
+    by_label = {e.label: e for e in entries}
     out = []
     state = core._load_json(core._alerts_path(), {}) or {}
     spikes = {}
@@ -180,11 +186,13 @@ def _alerts(provider: str, labels: dict) -> list[dict]:
     for key, since in state.items():
         if not key.startswith(provider + ":"):
             continue
-        parts = key.split(":")
+        parts = key.split(":", 2)
         if parts[1] == "dead":
-            label = labels.get(parts[2], parts[2])
-            out.append({"key": key, "since": since, "kind": "dead", "label": label,
-                        "text": f"{label} needs to sign in again"})
+            e = by_id.get(parts[2])
+            if e is None or getattr(e, "last_status", None) != "dead":
+                continue                                   # signed in again, removed or parked since
+            out.append({"key": key, "since": since, "kind": "dead", "label": e.label,
+                        "text": f"{e.label} needs to sign in again"})
         elif parts[1] == "bot":
             spike = spikes.get(parts[2])
             text = (f"{parts[2]} is using far more than usual: ${spike['cost']:.2f} and {spike['requests']} requests "
@@ -198,7 +206,10 @@ def _alerts(provider: str, labels: dict) -> list[dict]:
             out.append({"key": key, "since": since, "kind": "all-high",
                         "text": f"Every account is above {limit}%. Hermes falls back to its fallback model when all are full."})
         elif parts[1] == "week":
-            label = labels.get(parts[2], parts[2])
+            e = by_label.get(parts[2]) or by_id.get(parts[2])     # keyed by label since 4.1.2, by id before
+            if e is None:
+                continue                                   # parked or gone: the timer keeps it quietly
+            label = e.label
             wk = core._week_of(provider, label) or {}
             out.append({"key": key, "since": since, "kind": "week", "label": label,
                         "text": f"{label} used {wk['pct']:.0f}% of its weekly limit; it resets {core._hhmm(wk.get('reset'))}"
@@ -337,7 +348,7 @@ def _status(provider: str) -> dict:
         "sessions_active": who["count"], "who_minutes": WHO_MINUTES,
         "snapshot": {"ts": hist[-1]["ts"] if hist else None, "count": len(hist)},
         "live": {"ts": live["ts"] if live else None, "retry_after": _wait(live and live["ts"], LIVE_MIN_GAP)},
-        "timer": _timer(), "alerts": _alerts(provider, {e.id: e.label for e in entries}),
+        "timer": _timer(), "alerts": _alerts(provider, entries),
         "threshold": 90, "alert_all_above": cfg.get("alert_all_above", 80),
         "alert_week_above": cfg.get("alert_week_above", 90), "now": now,
         "rotation_mode": _rotation_mode(provider),

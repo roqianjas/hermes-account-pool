@@ -867,20 +867,34 @@ def _run_alerts(provider: str, pool, known) -> list[str]:
             f"Hermes: every {provider} account is above {limit:.0f}%",
             f"Lowest: {lo_e.label} at {lo_u[0]:.0f}% (resets {_hhmm(lo_u[1])}). "
             f"When all are full, Hermes switches to its fallback model.")
+    state = _load_json(_alerts_path(), {})
+    mine = {k: v for k, v in state.items() if k.startswith(provider + ":")}
+    other = {k: v for k, v in state.items() if not k.startswith(provider + ":")}
     # Weekly limit per account: from the newest reading, so a run that cannot read the account keeps the
-    # alert instead of clearing it (and sending it again). It clears once the week resets.
+    # alert instead of clearing it (and sending it again). It clears once the week resets. Keyed by the
+    # account's label, not its pool id: signing in again gives the account a new id, and the same week must
+    # not be alerted twice (up to 4.1.1 the key held the id; such a key is carried over).
     week_limit = float(cfg.get("alert_week_above", 90))
     limits = _load_json(_limits_path(), {}) or {}
     for e in _rotation(provider, pool):
         wk = _week_of(provider, e.label, limits)
         if wk and wk["pct"] is not None and wk["pct"] >= week_limit:
-            current[f"{provider}:week:{e.id}"] = (
+            key, old = f"{provider}:week:{e.label}", f"{provider}:week:{e.id}"
+            if key not in mine and old in mine:
+                mine[key] = mine[old]
+            current[key] = (
                 f"Hermes: {e.label} used {wk['pct']:.0f}% of its weekly limit",
                 f"{provider} weekly limit resets {_hhmm(wk['reset'])}. Until then balance puts the other "
                 f"accounts first.")
-    state = _load_json(_alerts_path(), {})
-    mine = {k: v for k, v in state.items() if k.startswith(provider + ":")}
-    other = {k: v for k, v in state.items() if not k.startswith(provider + ":")}
+    # A parked account is never alerted, but an alert it already had stays on record while its week is
+    # still full, so parking and unparking it does not send the same alert again that week.
+    quiet = {}
+    for item, _e in _parked_entries(provider, pool):
+        label = item.get("label") or ""
+        key = f"{provider}:week:{label}"
+        wk = _week_of(provider, label, limits)
+        if key in mine and wk and wk["pct"] is not None and wk["pct"] >= week_limit:
+            quiet[key] = mine[key]
     actions = []
     now = time.time()
     bot_state = _load_json(_state_path(), {}) or {}
@@ -904,6 +918,7 @@ def _run_alerts(provider: str, pool, known) -> list[str]:
         sent = _notify(f"Hermes: {provider} accounts available again", body)
         actions.append(f"alert cleared: all-high -> {', '.join(sent) or 'no channel delivered'}")
     other.update({k: mine.get(k, now) for k in current})
+    other.update(quiet)
     _atomic_json(_alerts_path(), other)
     return actions
 

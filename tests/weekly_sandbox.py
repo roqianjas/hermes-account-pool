@@ -209,22 +209,32 @@ wk_alerts = [t for t, _ in SENT if "weekly limit" in t]
 check(wk_alerts == ["Hermes: alice@example.com used 95% of its weekly limit"],
       f"one weekly alert for the account ({wk_alerts})")
 check(any("resets" in b and "weekly limit" in b for t, b in SENT if "weekly" in t), "it says when the week resets")
-check("anthropic:week:wk0000" in alerts(), "the alert is remembered")
+check("anthropic:week:alice@example.com" in alerts(), "the alert is remembered, by the account's label")
 SENT.clear()
 run("balance", threshold=90.0)
 check(not [t for t, _ in SENT if "weekly" in t], "the next run does not repeat it")
 
+# up to 4.1.1 the key held the pool id: such a record is carried over, not sent again
+state = alerts()
+since = state.pop("anthropic:week:alice@example.com")
+state["anthropic:week:wk0000"] = since
+ALERTS.write_text(json.dumps(state))
+SENT.clear()
+run("balance", threshold=90.0)
+check(not [t for t, _ in SENT if "weekly" in t] and alerts().get("anthropic:week:alice@example.com") == since
+      and "anthropic:week:wk0000" not in alerts(), "an alert keyed by the old pool id is carried over quietly")
+
 ANSWER["alice@example.com"] = 500                    # unreadable for a run: cached 5-hour value, alert kept
 SENT.clear()
 run("balance", threshold=90.0)
-check(not SENT and "anthropic:week:wk0000" in alerts(), "a run that cannot read the account keeps the alert, sends nothing")
+check(not SENT and "anthropic:week:alice@example.com" in alerts(), "a run that cannot read the account keeps the alert, sends nothing")
 
 cfg = core._config()
 cfg["alert_week_above"] = 97
 core._atomic_json(core._config_path(), cfg)
 ANSWER["alice@example.com"] = answer(10.0, week=95.0)
 run("balance", threshold=90.0)
-check("anthropic:week:wk0000" not in alerts(), "alert_week_above is honoured (95% < 97%: cleared)")
+check("anthropic:week:alice@example.com" not in alerts(), "alert_week_above is honoured (95% < 97%: cleared)")
 cfg["alert_week_above"] = 90
 core._atomic_json(core._config_path(), cfg)
 SENT.clear()
@@ -232,12 +242,24 @@ run("balance", threshold=90.0)
 check([t for t, _ in SENT if "weekly" in t] == ["Hermes: alice@example.com used 95% of its weekly limit"],
       "back above the limit: alerted again")
 
+# parked and unparked in the same week: the alert is kept quietly, not sent twice
+run("park", "alice@example.com")
+SENT.clear()
+run("balance", threshold=90.0)
+check(not SENT and "anthropic:week:alice@example.com" in alerts(), "parked: the open weekly alert stays on record, nothing sent")
+check(not [a for a in status()["alerts"] if a["kind"] == "week"], "parked: the page shows no weekly banner for it")
+run("unpark", "alice@example.com")
+SENT.clear()
+run("balance", threshold=90.0)
+check(not [t for t, _ in SENT if "weekly" in t] and "anthropic:week:alice@example.com" in alerts(),
+      "unparked in the same week: not alerted again")
+
 # the week resets: the old reading is void, the alert clears, the account comes back
 NEW_WEEK = now + 7 * 86400
 ANSWER["alice@example.com"] = answer(10.0, week=0.0, week_reset=NEW_WEEK)
 SENT.clear()
 rc, out = run("balance", threshold=90.0)
-check("anthropic:week:wk0000" not in alerts() and not SENT, "after the reset the alert clears quietly")
+check("anthropic:week:alice@example.com" not in alerts() and not SENT, "after the reset the alert clears quietly")
 check("release alice@example.com (10%)" in out and entry("alice@example.com").last_status != "exhausted",
       "and balance releases the account")
 check(core._week_of(P, "alice@example.com")["pct"] == 0.0, "the new week reads 0%")
@@ -254,7 +276,7 @@ rc, out = run("park", "carol@example.com")
 SENT.clear()
 run("balance", threshold=90.0)
 check(limits()["carol@example.com"]["week"][0] == 96.0 and not [t for t, _ in SENT if "carol" in t]
-      and not any(k.startswith("anthropic:week:wk2") for k in alerts()),
+      and not any(k.startswith("anthropic:week:carol") for k in alerts()),
       "a parked account's week is recorded but never alerted on")
 
 # ── page, who, notify, summary ────────────────────────────────────────────────
@@ -274,6 +296,26 @@ kinds = [a for a in st.get("alerts", []) if a.get("kind") == "week"]
 check(kinds and kinds[0]["label"] == "bob@example.com" and "92% of its weekly limit" in kinds[0]["text"],
       f"page: the open weekly alert is listed ({kinds})")
 check(bob["tokens"] is not None, "page: tokens still computed")
+
+# banners follow the pool at once, not only after the next timer run
+saved = ALERTS.read_text()
+state = alerts()
+state.update({"anthropic:dead:gone00": now, "anthropic:dead:wk1000": now, "anthropic:week:carol@example.com": now})
+ALERTS.write_text(json.dumps(state))
+shown = status()["alerts"]
+check([a["label"] for a in shown if a["kind"] == "week"] == ["bob@example.com"] and not [a for a in shown if a["kind"] == "dead"],
+      f"page: no banner for an account signed in again (old id gone), one that signs in fine, or a parked one ({[a['text'] for a in shown]})")
+check(not any("gone00" in a["text"] or "wk1000" in a["text"] for a in shown), "page: never a bare pool id in a banner")
+AUTH = ROOT / "auth.json"
+auth_saved = AUTH.read_text()
+auth = json.loads(auth_saved)
+next(x for x in auth["credential_pool"][P] if x["id"] == "wk1000")["last_status"] = "dead"
+AUTH.write_text(json.dumps(auth))
+shown = status()["alerts"]
+check([a["text"] for a in shown if a["kind"] == "dead"] == ["bob@example.com needs to sign in again"],
+      "page: a rejected account in rotation shows its banner, by label")
+AUTH.write_text(auth_saved)
+ALERTS.write_text(saved)
 
 rc, out = run("who")
 line = next((x for x in out.splitlines() if "bob@example.com" in x), "")

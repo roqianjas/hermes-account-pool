@@ -2,6 +2,13 @@
 
 All releases of the `account-pool` plugin. Up to 3.13 its session tracker was a separate plugin, `account-pool-tracker` (last version 1.5.1); since 4.0 it is part of `account-pool`.
 
+## 4.1.2
+
+- **Banners follow the pool at once.** The page reads its banners from the alerts the balance timer keeps, and the timer rewrites them every 5 minutes. After an account was signed in again from the page (Hermes gives it a new pool id) or parked, its banner stayed until the next run and showed the bare pool id (`a1b2c3 needs to sign in again`, `d4e5f6 is near its weekly limit`), because the page looked the name up only among the accounts in rotation. A sign-in banner now shows only while that entry is in rotation and still rejected, a weekly banner only while the account is in rotation, always with the account's name.
+- **One weekly alert per account per week, whatever happens to it that week.** The weekly alert was keyed by pool id and dropped when the account was parked, so signing in again or parking and unparking an account whose week was still full sent the same alert again. It is now keyed by the account's name and kept quietly while the account is parked; an alert written by 4.1.1 is carried over without being sent again. A parked account still never gets a new one.
+- README and PDF: the Accounts page and the alerts table say so; a Troubleshooting row for a banner with a short code.
+- Tests: `weekly_sandbox` 48 → 55 (an old id-keyed alert carried over, park and unpark in the same week, no banner for a signed-in-again, healthy or parked account, never a bare id, a rejected account's banner by name); 565 checks in total.
+
 ## 4.1.1
 
 - **Accounts page: two bars per account.** An account with a weekly reading shows its usage as two stacked bars, the 5-hour window (`5h`) on top and the week (`week`) below, each with its percent; 4.1.0 drew one bar (the fuller limit) and a `week N%` tag. The week's percent turns orange from the weekly alert level, and hovering either bar still lists both with their resets and the Opus / Sonnet weeks. An account without a weekly reading (a plan without one, or another provider) keeps the single bar.

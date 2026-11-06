@@ -16,7 +16,7 @@ from reportlab.platypus import (CondPageBreak, Image, KeepTogether, PageBreak, P
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 from reportlab.platypus.tableofcontents import TableOfContents
 
-VERSION = "4.1.1"
+VERSION = "4.1.2"
 REPO = "github.com/roqianjas/hermes-account-pool"
 FOOTER = f"Hermes plugin account-pool {VERSION} · {REPO}"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hermes-account-pool.pdf")
@@ -247,7 +247,7 @@ code("""
 hermes plugins install account-pool --enable
 hermes account anthropic setup --timer --strategy
 """)
-P("Katalog memasang versi yang sudah direview pengelolanya (sekarang 4.0.1; 4.1.1 ada di GitHub sampai entri katalog dipindah), dan "
+P("Katalog memasang versi yang sudah direview pengelolanya (sekarang 4.0.1; 4.1.2 ada di GitHub sampai entri katalog dipindah), dan "
   + C("hermes plugins update account-pool") + " ikut naik setelah entri katalog dipindah ke rilis baru. Untuk "
   "mengikuti " + C("main") + " repo ini, pasang langsung dari GitHub:")
 code("""
@@ -314,7 +314,7 @@ code("""
 $ hermes account anthropic setup --timer
 [anthropic] Setup: the default profile and 2 other profile(s) in /home/you/.hermes
   Accounts page    backend listed in 0 of 2 other profile(s)
-  Session tracking 4.1.1, active in 1 of 3 profile(s)
+  Session tracking 4.1.2, active in 1 of 3 profile(s)
   Balance timer    not installed
   Rotation         fill_first in all 3 profile(s)
 Changes:
@@ -468,7 +468,7 @@ hermes account anthropic doctor
 code("""
 [anthropic] Setup: the default profile and 2 other profile(s) in /home/you/.hermes
   Accounts page    backend listed in 2 of 2 other profile(s)
-  Session tracking 4.1.1, active in 1 of 3 profile(s)
+  Session tracking 4.1.2, active in 1 of 3 profile(s)
   Balance timer    runs every provider with accounts (now: anthropic), active
   Rotation         fill_first in all 3 profile(s)
 Changes:
@@ -615,7 +615,7 @@ note("Akun baru langsung dipakai semua profil, tetapi sesi bot yang sedang berja
 H2("6.2 Menghapus akun")
 code("""
 $ hermes account anthropic remove bob@example.com
-Remove bob@example.com (id=9f2a02) from anthropic.
+Remove bob@example.com (id=a1b2c3) from anthropic.
 Its login is deleted; to use it again you must sign in again (add).
 To take it out of rotation for a while instead: hermes account anthropic park bob@example.com
 Delete it? [y/N] y
@@ -1006,7 +1006,7 @@ $ hermes account anthropic doctor
   OK    strategy fill_first in 6 profiles
   OK    every profile uses the shared account pool
   OK    session tracking active in every profile
-  OK    running sessions count with session tracking 4.1.1
+  OK    running sessions count with session tracking 4.1.2
   OK    Accounts page backend enabled in every profile
   OK    account-pool-parking.json permissions 600
   OK    balance timer active, last run 2026-10-10 18:36:09 WIB
@@ -1019,7 +1019,7 @@ $ hermes account anthropic doctor
 P("Jalankan setelah instalasi, setelah update Hermes, atau saat bot berperilaku aneh. Setiap baris FAIL atau WARN "
   "menyertakan perbaikannya. Doctor memberi WARN bila Hermes lebih tua dari 0.21.6: build sebelum 0.21.6 memasang dan "
   "memuat plugin tanpa memeriksa " + C("requires_hermes") + "-nya. Pelacak sesi dimuat saat proses mulai, jadi setelah update gateway, Hermes Desktop, dan sesi "
-  "panjang masih memakai pelacak lama; doctor lalu memberi WARN " + C("session tracker 4.1.1 is not loaded yet by: ...")
+  "panjang masih memakai pelacak lama; doctor lalu memberi WARN " + C("session tracker 4.1.2 is not loaded yet by: ...")
   + " beserta restart yang dibutuhkan masing-masing. Token tanpa nama bot dalam setengah jam terakhir berarti "
   + C("account-pool-tracker") + " 1.2.0 atau lebih lama masih berjalan. Untuk akun parkir, doctor memberi WARN bila "
   "Hermes memasukkannya lagi ke rotasi, bila akunnya keluar dari pool, bila Hermes menahan akun sebagai parkir "
@@ -1268,7 +1268,8 @@ table([
      + C("not started") + " bila jendelanya sudah habis), sejak kapan, kapan kembali (" + C("(schedule)") + " bila diparkir jadwal), tombol "
      "<b>Unpark</b>, <b>Park on a schedule</b>, dan <b>Remove</b>. Lalu tabel jadwal parkir beserta keadaannya "
      "sekarang, dengan tombol ubah dan hapus. Peringatan aktif tampil sebagai banner di atas; akun mati mendapat tombol <b>Sign in again</b>, peringatan bot "
-     "mendapat tombol <b>See sessions</b>. Banner info "
+     "mendapat tombol <b>See sessions</b>. Banner langsung mengikuti pool: akun yang di-sign-in ulang atau diparkir "
+     "dari halaman kehilangan bannernya tanpa menunggu putaran timer berikutnya. Banner info "
      "menyebut proses yang masih memakai pelacak lama beserta perbaikannya."],
     ["Report", "Angka " + C("report") + " untuk 24 jam, 3 hari, atau 7 hari: beban per akun, porsi, puncak, waktu "
      "≥ 90%, token dan harga API-nya, jam tersibuk, dan saran. Lalu token per profil (bot), per model, dan per sesi "
@@ -1397,7 +1398,8 @@ table([
     ["<b>Semua akun di atas 80%</b>", "Setiap akun dalam rotasi ≥ 80% dari limitnya yang lebih penuh (butuh adapter)",
      "Sekali, lalu kabar saat pulih"],
     ["<b>Limit mingguan tinggi</b>", "Sebuah akun dalam rotasi mencapai 90% limit mingguannya (butuh adapter; "
-     + C("alert_week_above") + ")", "Sekali per akun per minggu; hilang sendiri saat minggunya reset"],
+     + C("alert_week_above") + ")", "Sekali per akun per minggu, juga bila akun diparkir lalu dikembalikan atau di-sign-in ulang di minggu "
+     "yang sama; hilang sendiri saat minggunya reset"],
     ["<b>Bot jauh di atas biasanya</b>", "Satu jam terakhir sebuah profil ≥ $15 harga API atau ≥ 300 request, dan "
      "3 kali jam biasanya", "Sekali per bot, paling sering tiap 6 jam"],
 ], [0.30, 0.44, 0.26])
@@ -1893,6 +1895,10 @@ table([
     ["Tidak ada bar atau teks " + C("week") + " untuk akun Anthropic", "Jawaban pemakaiannya tanpa angka mingguan "
      "(paket tanpa limit mingguan), atau belum ada bacaan sejak 4.1.0", "Tunggu putaran timer berikutnya atau tekan "
      "<b>Live usage</b>; tanpa angka mingguan, jendela 5 jam bekerja seperti biasa"],
+    ["Banner menyebut kode pendek, bukan email (" + C("a1b2c3 needs to sign in again") + ")", "Sampai 4.1.1 banner "
+     "bertahan sampai putaran timer berikutnya setelah akun di-sign-in ulang (id pool baru) atau diparkir dari halaman, "
+     "dan menampilkan id pool karena akun itu tidak lagi ada di rotasi dengan id tersebut", "Diperbaiki di 4.1.2. Di "
+     "versi lama, putaran timer berikutnya (paling lama 5 menit) menghapusnya"],
     ["<b>Resets</b> menampilkan " + C("not started"), "Tidak ada jendela 5 jam yang berjalan di akun itu",
      "Normal untuk akun yang menganggur. <b>Wake</b> memulainya bila Anda ingin reset lebih cepat"],
     ["Wake otomatis tidak melakukan apa-apa", "Timer mati, atau semua jendela sudah berjalan",
@@ -2056,6 +2062,9 @@ table([
 H1("19. Riwayat versi")
 table([
     ["Versi", "Perubahan"],
+    ["4.1.2", "Banner peringatan langsung mengikuti pool: akun yang di-sign-in ulang atau diparkir tidak lagi "
+     "tampil sebagai kode pendek sampai putaran timer berikutnya. Peringatan mingguan dicatat per akun (email), jadi "
+     "parkir, kembali, atau sign-in ulang di minggu yang sama tidak mengirimnya dua kali."],
     ["4.1.1", "Halaman Accounts: dua bar bertumpuk per akun (jendela 5 jam di atas, minggu di bawah) dan dua jam "
      "reset yang sejajar dengannya; garis tren dan puncak 24 jam mengikuti jendela 5 jam."],
     ["4.1.0", "Limit mingguan Claude di samping jendela 5 jam: " + C("usage") + " menampilkan keduanya (plus minggu "
