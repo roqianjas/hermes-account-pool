@@ -151,6 +151,8 @@ function mount(id) {
   return render(h(QueryClientProvider, { client: qc }, reg.render()))
 }
 const lastPost = path => [...calls].reverse().find(c => c.method === 'POST' && c.path === path)
+// a time more than 20 hours away names its weekday and date: `Wed, Nov 11, 08:59 AM` (en-US), `Wed 11 Nov, 08:59` (en-GB)
+const FAR = '[A-Z][a-z]{2},? (?:\\d{1,2} [A-Z][a-z]{2}|[A-Z][a-z]{2} \\d{1,2}),? \\d{2}:\\d{2}'
 const ok = (cond, msg) => { if (!cond) throw new Error('FAILED: ' + msg); console.log('ok -', msg) }
 const click = el => act(async () => { fireEvent.click(el) })
 
@@ -174,7 +176,7 @@ ok(parkedRows.length === status.parked.length, `parked table has ${parkedRows.le
   const line = (row, which) => row.querySelectorAll('td')[col].querySelector(`[data-reset="${which}"]`)?.textContent
   ok(/\d{2}:\d{2}/.test(line(ivanRow, '5h')), `a parked account mid-window shows when it resets (${line(ivanRow, '5h')})`)
   ok(line(judyRow, '5h') === 'not started', 'a parked account whose window ended reads "not started"')
-  ok(/^\S+ \d{2}:\d{2}/.test(line(judyRow, 'week') || ''), `under it, when its week resets (${line(judyRow, 'week')})`)
+  ok(new RegExp(`^${FAR}`).test(line(judyRow, 'week') || ''), `under it, when its week resets, with its date (${line(judyRow, 'week')})`)
   const tip = row => row.querySelector('.hap-spark-cell')?.getAttribute('aria-label') || ''
   ok(tip(ivanRow).startsWith('5-hour window, last 5 hours: 5% to 29%, highest 29%.'), `the parked sparkline tells the 5 hours: ${tip(ivanRow).split('\n')[0]}`)
   ok(/Highest 5-hour window in the last 24 hours: 48% at [^\n]*\d{2}:\d{2}[^\n]*\.$/.test(tip(judyRow)) && judyRow.querySelector('svg.hap-spark'),
@@ -196,9 +198,9 @@ ok(within(rows[0]).getByText(status.rotation[0].label), 'first account label sho
   ok(heidi.dataset.week === 'high' && heidi.querySelector('.hap-pct').classList.contains('hap-warn')
     && heidi.querySelector('.hap-bar').classList.contains('warn'), `a week at or above the alert limit reads high (${heidi.dataset.week})`)
   const wtip = byLabel('heidi@example.com').querySelector('.hap-usage2').getAttribute('aria-label')
-  ok(wtip.includes('5-hour window: 12%, resets') && /Weekly limit: 57%, resets \S+ \d{2}:\d{2}/.test(wtip)
+  ok(wtip.includes('5-hour window: 12%, resets') && new RegExp(`Weekly limit: 57%, resets ${FAR}`).test(wtip)
     && wtip.includes('Opus week: 64% (caps that model only)') && wtip.includes('Balance orders accounts by the fuller of the two'),
-    `the tip names the 5-hour window, the week with its weekday reset and the model limits`)
+    `the tip names the 5-hour window, the week with its reset day and date, and the model limits`)
   const carol = byLabel('carol@example.com').querySelector('[data-week]')
   ok(carol.querySelector('.hap-pct').textContent === '13%' && carol.dataset.week === 'ok'
     && !carol.querySelector('.hap-pct').classList.contains('hap-warn'), 'a week below the limit reads plain')
@@ -210,12 +212,12 @@ ok(within(rows[0]).getByText(status.rotation[0].label), 'first account label sho
   ok([...parkedRows].every(r => r.querySelector('[data-week]')), 'parked rows show their week too')
   const resets = label => [...byLabel(label).querySelectorAll('.hap-resets2 > .hap-line')].map(l => [l.dataset.reset, l.textContent])
   const hr = resets('heidi@example.com')
-  ok(hr.length === 2 && hr[0][0] === '5h' && /\d{2}:\d{2}/.test(hr[0][1]) && hr[0][1] !== hr[1][1] && hr[1][0] === 'week' && /^\S+ \d{2}:\d{2}/.test(hr[1][1]),
-    `Resets: the 5-hour reset on top, the week's (with its weekday) below (${JSON.stringify(hr)})`)
+  ok(hr.length === 2 && hr[0][0] === '5h' && /\d{2}:\d{2}/.test(hr[0][1]) && hr[0][1] !== hr[1][1] && hr[1][0] === 'week' && new RegExp(`^${FAR}`).test(hr[1][1]),
+    `Resets: the 5-hour reset on top, the week's (with its day and date) below (${JSON.stringify(hr)})`)
   const er = resets('erin@example.com')
   ok(er[0][1] === 'not started' && /\d{2}:\d{2}/.test(er[1][1]), `an idle window reads "not started" above the week's reset (${JSON.stringify(er)})`)
   const dr = resets('dave@example.com')
-  ok(/\d{2}:\d{2}/.test(dr[0][1]) && !dr[0][1].startsWith('back') && /^back \S+ \d{2}:\d{2}/.test(dr[1][1]),
+  ok(/\d{2}:\d{2}/.test(dr[0][1]) && !dr[0][1].startsWith('back') && new RegExp(`^back ${FAR}`).test(dr[1][1]),
     `benched until the week resets: "back" on the week's line (${JSON.stringify(dr)})`)
   ok(!byLabel('grace@example.com').querySelector('.hap-resets2'), 'no weekly reading: one reset, as before')
 }

@@ -2,6 +2,13 @@
 
 All releases of the `account-pool` plugin. Up to 3.13 its session tracker was a separate plugin, `account-pool-tracker` (last version 1.5.1); since 4.0 it is part of `account-pool`.
 
+## 4.1.3
+
+- **A reset days away names its date.** A time more than 20 hours away showed only its weekday (`Wed 08:59 AM`), so a weekly reset could read as this week's or next week's Wednesday. It now shows the day and the date: `Wed, Nov 11, 08:59 AM` on the Accounts page (in Desktop's locale, `Wed 11 Nov, 08:59` in en-GB), `Wed 11 Nov 08:59` in `usage`, `who`, `balance`, the alerts and the daily summary. Times within 20 hours are unchanged.
+- `usage`: the reset column is padded, so the `(5h ... · week ...)` details line up now that resets differ in length.
+- README and PDF: the examples show the dates; the PDF prints the wide `usage` table in a smaller code font.
+- Tests: the page tests expect the date on every weekly reset (en-US and en-GB forms); 567 checks in total, UI 158.
+
 ## 4.1.2
 
 - **Banners follow the pool at once.** The page reads its banners from the alerts the balance timer keeps, and the timer rewrites them every 5 minutes. After an account was signed in again from the page (Hermes gives it a new pool id) or parked, its banner stayed until the next run and showed the bare pool id (`a1b2c3 needs to sign in again`, `d4e5f6 is near its weekly limit`), because the page looked the name up only among the accounts in rotation. A sign-in banner now shows only while that entry is in rotation and still rejected, a weekly banner only while the account is in rotation, always with the account's name.

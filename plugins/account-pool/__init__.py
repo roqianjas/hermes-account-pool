@@ -398,9 +398,10 @@ def _entries(provider: str):
 def _hhmm(ts) -> str:
     if not ts:
         return "?"
-    if abs(ts - time.time()) > 20 * 3600:        # weekly windows: show the day
-        return time.strftime("%a %H:%M", time.localtime(ts))
-    return time.strftime("%H:%M", time.localtime(ts))
+    lt = time.localtime(ts)
+    if abs(ts - time.time()) > 20 * 3600:        # weekly windows: the day and its date (Wed 11 Nov 08:59)
+        return f"{time.strftime('%a', lt)} {lt.tm_mday} {time.strftime('%b %H:%M', lt)}"
+    return time.strftime("%H:%M", lt)
 
 
 def _root() -> Path:
@@ -1622,7 +1623,8 @@ def _cmd_usage(args) -> int:
             ch = "=" if state == "PARKED" else "#"
             bar = ch * fill + "." * (20 - fill)
             extra = f"   ({detail})" if detail else ""
-            _p(f"  {label:34s} {state:8s} {util:4.0f}%  [{bar}]  {_hhmm(reset)}{extra}")
+            when = f"{_hhmm(reset):<16s}" if extra else _hhmm(reset)    # 16 = "Wed 11 Nov 08:59": details line up
+            _p(f"  {label:34s} {state:8s} {util:4.0f}%  [{bar}]  {when}{extra}")
     fc = _forecast(provider)
     if fc["status"] != "no-data":
         _p(f"  Forecast (balance timer history): {fc['text']}")

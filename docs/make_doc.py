@@ -16,7 +16,7 @@ from reportlab.platypus import (CondPageBreak, Image, KeepTogether, PageBreak, P
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 from reportlab.platypus.tableofcontents import TableOfContents
 
-VERSION = "4.1.2"
+VERSION = "4.1.3"
 REPO = "github.com/roqianjas/hermes-account-pool"
 FOOTER = f"Hermes plugin account-pool {VERSION} · {REPO}"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hermes-account-pool.pdf")
@@ -42,9 +42,11 @@ s_li = ParagraphStyle("li", parent=s_p, leftIndent=12, bulletIndent=2, spaceAfte
 s_cell = ParagraphStyle("c", fontName="Sans", fontSize=8.6, leading=11.5, textColor=INK)
 s_cellb = ParagraphStyle("cb", parent=s_cell, fontName="Sans-Bold")
 s_code = ParagraphStyle("code", fontName="Mono", fontSize=8.1, leading=11.2, textColor=INK)
+s_code_wide = ParagraphStyle("code_wide", fontName="Mono", fontSize=6.9, leading=9.8, textColor=INK)
 s_toc = ParagraphStyle("toc", fontName="Sans", fontSize=9.5, leading=15, textColor=INK, leftIndent=4)
 W = A4[0] - 36 * mm
 MAX_CODE = 95                      # Preformatted never wraps: longer lines run out of the box
+MAX_CODE_WIDE = 111                # the same box in the smaller code font (wide tables such as usage)
 st = []
 
 
@@ -56,11 +58,12 @@ def OL(items): st.extend(Paragraph(t, s_li, bulletText=f"{i}.") for i, t in enum
 def LI(items): st.extend(Paragraph(i, s_li, bulletText="•") for i in items)
 
 
-def code(text):
+def code(text, wide=False):
     text = text.strip("\n")
-    long = [l for l in text.splitlines() if len(l) > MAX_CODE]
-    assert not long, f"code line over {MAX_CODE} chars: {long[0]!r}"
-    t = Table([[Preformatted(text, s_code)]], colWidths=[W])
+    limit = MAX_CODE_WIDE if wide else MAX_CODE
+    long = [l for l in text.splitlines() if len(l) > limit]
+    assert not long, f"code line over {limit} chars: {long[0]!r}"
+    t = Table([[Preformatted(text, s_code_wide if wide else s_code)]], colWidths=[W])
     t.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), CODEBG), ("BOX", (0, 0), (-1, -1), 0.5, LINE),
                            ("LEFTPADDING", (0, 0), (-1, -1), 8), ("RIGHTPADDING", (0, 0), (-1, -1), 8),
                            ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6)]))
@@ -247,7 +250,7 @@ code("""
 hermes plugins install account-pool --enable
 hermes account anthropic setup --timer --strategy
 """)
-P("Katalog memasang versi yang sudah direview pengelolanya (sekarang 4.0.1; 4.1.2 ada di GitHub sampai entri katalog dipindah), dan "
+P("Katalog memasang versi yang sudah direview pengelolanya (sekarang 4.0.1; 4.1.3 ada di GitHub sampai entri katalog dipindah), dan "
   + C("hermes plugins update account-pool") + " ikut naik setelah entri katalog dipindah ke rilis baru. Untuk "
   "mengikuti " + C("main") + " repo ini, pasang langsung dari GitHub:")
 code("""
@@ -314,7 +317,7 @@ code("""
 $ hermes account anthropic setup --timer
 [anthropic] Setup: the default profile and 2 other profile(s) in /home/you/.hermes
   Accounts page    backend listed in 0 of 2 other profile(s)
-  Session tracking 4.1.2, active in 1 of 3 profile(s)
+  Session tracking 4.1.3, active in 1 of 3 profile(s)
   Balance timer    not installed
   Rotation         fill_first in all 3 profile(s)
 Changes:
@@ -468,7 +471,7 @@ hermes account anthropic doctor
 code("""
 [anthropic] Setup: the default profile and 2 other profile(s) in /home/you/.hermes
   Accounts page    backend listed in 2 of 2 other profile(s)
-  Session tracking 4.1.2, active in 1 of 3 profile(s)
+  Session tracking 4.1.3, active in 1 of 3 profile(s)
   Balance timer    runs every provider with accounts (now: anthropic), active
   Rotation         fill_first in all 3 profile(s)
 Changes:
@@ -771,15 +774,15 @@ $ hermes account anthropic usage
 [anthropic] 5-hour + weekly usage
   account            state     used                          resets
   -- in rotation --
-  erin@example.com   active      9%  [#...................]  Tue 14:21   (5h 3% · week 9%)
-  frank@example.com  active     14%  [##..................]  Fri 23:57   (5h 2% · week 14%)
+  erin@example.com   active      9%  [#...................]  Tue 10 Nov 14:21   (5h 3% · week 9%)
+  frank@example.com  active     14%  [##..................]  Fri 6 Nov 23:57    (5h 2% · week 14%)
   ...
-  bob@example.com    active     41%  [########............]  Mon 16:45   (5h 7% · week 41%)
-  heidi@example.com  active     93%  [##################..]  Fri 11:57   (5h 17% · week 93% ·
-                                                                          Opus week 64%)
+  bob@example.com    active     41%  [########............]  Mon 9 Nov 16:45    (5h 7% · week 41%)
+  heidi@example.com  active     93%  [##################..]  Fri 6 Nov 11:57    (5h 17% · week 93% ·
+                                                                                 Opus week 64%)
   -- parked (not used by Hermes) --
-  ivan@example.com   PARKED     46%  [=========...........]  Mon 04:45   (5h 29% · week 46%)
-""")
+  ivan@example.com   PARKED     46%  [=========...........]  Mon 9 Nov 04:45    (5h 29% · week 46%)
+""", wide=True)
 LI(["Angkanya sama dengan \"Current session\" (" + C("5h") + ") dan \"Weekly limits\" (" + C("week") + ", serta "
     + C("Opus week") + "/" + C("Sonnet week") + " untuk satu keluarga model) di pengaturan pemakaian claude.ai. "
     "<b>used</b> dan <b>resets</b> milik limit yang lebih penuh (bagian 5, Limit mingguan): di contoh ini minggu setiap "
@@ -787,6 +790,9 @@ LI(["Angkanya sama dengan \"Current session\" (" + C("5h") + ") dan \"Weekly lim
     + " menampilkan kedua jendelanya dengan cara yang sama, misalnya " + C("(5h 12% · week 78%)") + ". Akun yang "
     "jawabannya tanpa angka mingguan hanya menampilkan jendela 5 jam, tanpa teks di ujung baris. (Kolom akun di "
     "contoh ini dipersempit agar muat di halaman.)",
+    "Waktu yang lebih dari 20 jam lagi menampilkan hari dan tanggalnya (" + C("Tue 10 Nov 14:21") + "), di sini dan di "
+    + C("who") + ", " + C("balance") + ", peringatan, serta ringkasan harian, jadi jam reset mingguan tidak terbaca "
+    "sebagai Selasa minggu ini atau minggu depan.",
     "Kolom state: " + C("active") + ", " + C("BENCHED") + " (diistirahatkan balance), " + C("LIMITED")
     + " (limit dari provider), " + C("PARKED") + " (bar " + C("=") + "), " + C("DEAD") + ".",
     "Jika endpoint usage tidak menjawab, baris menampilkan nilai terakhir yang dicatat timer, misalnya "
@@ -802,12 +808,12 @@ H2("7.4 who")
 code("""
 $ hermes account anthropic who
 [anthropic] sessions active in the last 30 min: 2
-  erin@example.com                   (idle)  week 9%, resets Tue 14:21
-  frank@example.com                          week 14%, resets Fri 23:57
+  erin@example.com                   (idle)  week 9%, resets Tue 10 Nov 14:21
+  frank@example.com                          week 14%, resets Fri 6 Nov 23:57
       worker-2             cli       20261103_181340_51b808 claude-sonnet-5-5    4m ago
       worker-1             cli       20261103_181338_ad9f75 claude-sonnet-5-5    6m ago
   ...
-  heidi@example.com                  (idle)  week 93%, resets Fri 11:57
+  heidi@example.com                  (idle)  week 93%, resets Fri 6 Nov 11:57
 $ hermes account anthropic who --minutes 120     # jendela waktu lain
 """)
 LI(["Baris akun diakhiri limit mingguannya dan kapan reset, dari bacaan terbaru timer, <b>Live usage</b>, atau "
@@ -944,14 +950,14 @@ code("""
 $ hermes account anthropic balance --dry-run       # rencana saja
 $ hermes account anthropic balance                 # jalankan (otomatis tiap 5 menit)
 2026-11-04 07:09:22 [anthropic] balance (dry run):
-  - bench heidi@example.com (93% weekly) until Fri 11:57
+  - bench heidi@example.com (93% weekly) until Fri 6 Nov 11:57
   - order: erin(9%) > frank(14%) > alice(18%) > dave(22%) > grace(27%) > carol(35%) > ...
 """)
 P("Timer menjalankan " + C("hermes account all balance") + ": semua provider yang punya akun (di rotasi atau "
   "parkir), satu per satu. Provider yang gagal tidak menghentikan yang lain; exit code menandai kegagalannya. "
   + C("--threshold N") + " (1 sampai 100, default 90) mengatur ambang istirahat. Baris lain yang bisa muncul: "
   + C("unpark X (park --until ... reached)") + ", " + C("recovered: X (token refresh retried)") + ", "
-  + C("bench X (93%) until 17:10") + ", " + C("bench X (93% weekly) until Fri 11:57") + " (minggunya penuh: keluar sampai minggunya reset), " + C("release X (40%)") + ". Cara kerjanya di bagian 10.")
+  + C("bench X (93%) until 17:10") + ", " + C("bench X (93% weekly) until Fri 6 Nov 11:57") + " (minggunya penuh: keluar sampai minggunya reset), " + C("release X (40%)") + ". Cara kerjanya di bagian 10.")
 H2("7.9 relogin")
 code("""
 $ hermes account anthropic relogin alice@example.com
@@ -1006,7 +1012,7 @@ $ hermes account anthropic doctor
   OK    strategy fill_first in 6 profiles
   OK    every profile uses the shared account pool
   OK    session tracking active in every profile
-  OK    running sessions count with session tracking 4.1.2
+  OK    running sessions count with session tracking 4.1.3
   OK    Accounts page backend enabled in every profile
   OK    account-pool-parking.json permissions 600
   OK    balance timer active, last run 2026-10-10 18:36:09 WIB
@@ -1019,7 +1025,7 @@ $ hermes account anthropic doctor
 P("Jalankan setelah instalasi, setelah update Hermes, atau saat bot berperilaku aneh. Setiap baris FAIL atau WARN "
   "menyertakan perbaikannya. Doctor memberi WARN bila Hermes lebih tua dari 0.21.6: build sebelum 0.21.6 memasang dan "
   "memuat plugin tanpa memeriksa " + C("requires_hermes") + "-nya. Pelacak sesi dimuat saat proses mulai, jadi setelah update gateway, Hermes Desktop, dan sesi "
-  "panjang masih memakai pelacak lama; doctor lalu memberi WARN " + C("session tracker 4.1.2 is not loaded yet by: ...")
+  "panjang masih memakai pelacak lama; doctor lalu memberi WARN " + C("session tracker 4.1.3 is not loaded yet by: ...")
   + " beserta restart yang dibutuhkan masing-masing. Token tanpa nama bot dalam setengah jam terakhir berarti "
   + C("account-pool-tracker") + " 1.2.0 atau lebih lama masih berjalan. Untuk akun parkir, doctor memberi WARN bila "
   "Hermes memasukkannya lagi ke rotasi, bila akunnya keluar dari pool, bila Hermes menahan akun sebagai parkir "
@@ -1258,7 +1264,8 @@ table([
      "(bagian 9): kapan semua akun ≥ 90% dengan laju satu jam terakhir. Lalu tabel rotasi sesuai urutan pool: status, "
      "pemakaian berupa dua bar bertumpuk, jendela 5 jam (" + C("5h") + ") di atas dan minggu (" + C("week") + ") di bawah "
      "(persen minggu berwarna oranye mulai ambang peringatan mingguan, 90%; arahkan kursor untuk keduanya beserta jam "
-     "resetnya dan minggu Opus/Sonnet; akun tanpa bacaan mingguan tetap satu bar), garis tren jendela 5 jam selama 5 jam terakhir (arahkan kursor untuk rentangnya dan angka tertinggi 24 jam terakhir), jam reset yang sejajar dengan bar, milik jendela 5 jam di atas dan milik minggu di bawah (" + C("back ...")
+     "resetnya dan minggu Opus/Sonnet; akun tanpa bacaan mingguan tetap satu bar), garis tren jendela 5 jam selama 5 jam terakhir (arahkan kursor untuk rentangnya dan angka tertinggi 24 jam terakhir), jam reset yang sejajar dengan bar, milik jendela 5 jam di atas dan milik minggu di bawah (waktu yang lebih dari "
+     "20 jam lagi menampilkan hari dan tanggalnya, misalnya " + C("Wed, Nov 11, 08:59 AM") + "; " + C("back ...")
      + " di baris limit yang ditunggu saat diistirahatkan, " + C("not started") + " selama jendela tidak berjalan), "
      "token 24 jam terakhir (arahkan kursor untuk rincian input, output, cache, jumlah request, harga API, model utama, dan "
      "jendela 5 jam yang sedang berjalan), profil yang memakai akun itu "
@@ -1416,7 +1423,8 @@ LI(["Peringatan dikirim oleh " + C("balance") + ", jadi butuh timer.",
 P("Peringatan mingguan menyebut akunnya dan kapan minggunya reset:")
 code("""
 Hermes: heidi@example.com used 93% of its weekly limit
-anthropic weekly limit resets Fri 11:57. Until then balance puts the other accounts first.
+anthropic weekly limit resets Fri 6 Nov 11:57.
+Until then balance puts the other accounts first.
 """)
 P("Peringatan ini dicek terhadap bacaan mingguan terbaru, jadi putaran yang gagal membaca akun itu tidak mengirimnya "
   "lagi. Akun parkir tidak mendapat peringatan mingguan.")
@@ -1454,8 +1462,8 @@ Share of the load: bob 27%, carol 25%, alice 24% and 1 more. Highest 5-hour
 usage: 60% (bob). Every account >= 90% at once: 0 min.
 Busiest hour: 08:00-09:00.
 Now: 4 in rotation, 0 parked; new sessions start on alice (59%).
-Weekly limit: heidi 93% (resets Fri 11:57), bob 41% (resets Mon 16:45), carol 35% (resets
-Thu 21:33) and 5 more.
+Weekly limit: heidi 93% (resets Fri 6 Nov 11:57), bob 41% (resets Mon 9 Nov 16:45),
+carol 35% (resets Thu 5 Nov 21:33) and 5 more.
 """)
 P("Baris <b>Weekly limit</b> menyebut tiga minggu terpenuh dari akun dalam rotasi, dari bacaan terbarunya. Beban, "
   "porsi, dan <b>Highest 5-hour usage</b> menghitung jendela 5 jam, limit mana pun yang lebih penuh.")
@@ -1888,7 +1896,7 @@ table([
     ["Akun diistirahatkan (" + C("bench X (93% weekly)") + ") atau paling belakang padahal pemakaian 5 jamnya rendah",
      "Limit mingguannya hampir penuh", "Memang begitu: akun kembali saat minggunya reset (jamnya ada di " + C("usage")
      + ", " + C("who") + ", dan halaman). Akun lain menanggung beban sampai saat itu"],
-    ["Kolom <b>resets</b> di " + C("usage") + " menampilkan hari yang masih beberapa hari lagi", "Minggu adalah "
+    ["Kolom <b>resets</b> di " + C("usage") + " menampilkan tanggal yang masih beberapa hari lagi", "Minggu adalah "
      "limit yang lebih penuh, dan " + C("usage") + " menampilkan jam reset limit yang lebih penuh", "Baca ujung baris "
      "untuk jendela 5 jam (" + C("5h 17%") + "). Halaman menampilkan kedua jam reset: jendela 5 jam di atas, minggu di "
      "bawah (sejak 4.1.1)"],
@@ -2062,6 +2070,8 @@ table([
 H1("19. Riwayat versi")
 table([
     ["Versi", "Perubahan"],
+    ["4.1.3", "Jam reset yang lebih dari 20 jam lagi menampilkan hari dan tanggalnya (" + C("Tue 10 Nov 14:21")
+     + "), di halaman, " + C("usage") + ", " + C("who") + ", " + C("balance") + ", peringatan dan ringkasan harian."],
     ["4.1.2", "Banner peringatan langsung mengikuti pool: akun yang di-sign-in ulang atau diparkir tidak lagi "
      "tampil sebagai kode pendek sampai putaran timer berikutnya. Peringatan mingguan dicatat per akun (email), jadi "
      "parkir, kembali, atau sign-in ulang di minggu yang sama tidak mengirimnya dua kali."],

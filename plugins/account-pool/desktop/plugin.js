@@ -120,12 +120,15 @@ function firstLine(text) {
   return String(text || '').split('\n').find(Boolean) || ''
 }
 
+// A time more than 20 hours away (a weekly reset, a bench or park into next week) also names its day and
+// date, so "Wed" never reads as this Wednesday or next. Never prepend a day to it.
 function hhmm(ts) {
   if (!ts) return '–'
   const d = new Date(ts * 1000)
-  const opts = { hour: '2-digit', minute: '2-digit' }
-  if (Math.abs(ts - Date.now() / 1000) > 20 * 3600) opts.weekday = 'short'
-  return d.toLocaleTimeString([], opts)
+  if (Math.abs(ts - Date.now() / 1000) > 20 * 3600) {
+    return d.toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+  }
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
 function ago(seconds) {

@@ -17,6 +17,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -320,6 +321,11 @@ ALERTS.write_text(saved)
 rc, out = run("who")
 line = next((x for x in out.splitlines() if "bob@example.com" in x), "")
 check("week 92%, resets" in line, f"who shows the weekly limit per account ({line.strip()!r})")
+check(re.search(r"week 92%, resets [A-Z][a-z]{2} \d{1,2} [A-Z][a-z]{2} \d{2}:\d{2}", line),
+      "a reset days away names its day and date (Wed 11 Nov 08:59)")
+check(re.fullmatch(r"\d{2}:\d{2}", core._hhmm(time.time() + 3600))
+      and re.fullmatch(r"[A-Z][a-z]{2} \d{1,2} [A-Z][a-z]{2} \d{2}:\d{2}", core._hhmm(time.time() + 3 * 86400)),
+      "within 20 hours: the time only; further: day, date and time")
 
 rc, out = run("notify")
 check("when an account's weekly limit reaches 90%" in out, "notify status names the weekly alert")
